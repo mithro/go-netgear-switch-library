@@ -441,7 +441,10 @@ func TestGoldenVectorWriteRequestWithPassword(t *testing.T) {
 		ServerMAC: []byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff},
 		Sequence:  0x12345678,
 	}
-	pw := nsdp.EncodePasswordV1("admin")
+	pw, err := nsdp.EncodePasswordV1("admin")
+	if err != nil {
+		t.Fatalf("EncodePasswordV1: %v", err)
+	}
 	pkt.AddTLV(nsdp.TagPassword, pw)
 	pkt.AddTLV(nsdp.TagHostname, []byte("switch01"))
 
@@ -482,7 +485,10 @@ func TestV1KeyIsTheDocumentedString(t *testing.T) {
 
 func TestV1XORIsItsOwnInverse(t *testing.T) {
 	pw := "s3cr3t-admin"
-	enc := nsdp.EncodePasswordV1(pw)
+	enc, err := nsdp.EncodePasswordV1(pw)
+	if err != nil {
+		t.Fatalf("EncodePasswordV1: %v", err)
+	}
 	if string(enc) == pw {
 		t.Fatal("EncodePasswordV1 did not transform the password")
 	}
@@ -501,7 +507,10 @@ func TestV1KnownVectorFromAlgorithm(t *testing.T) {
 	// Derived from the algorithm itself (repeating XOR), NOT captured
 	// hardware.
 	pw := "AAAA"
-	enc := nsdp.EncodePasswordV1(pw)
+	enc, err := nsdp.EncodePasswordV1(pw)
+	if err != nil {
+		t.Fatalf("EncodePasswordV1: %v", err)
+	}
 	want := make([]byte, 4)
 	for i := range want {
 		want[i] = 'A' ^ nsdp.V1Key[i]
@@ -519,10 +528,23 @@ func TestV1KnownVectorFromAlgorithm(t *testing.T) {
 func TestEncodePasswordV1AdminMatchesPython(t *testing.T) {
 	// Cross-checked against the pinned Python source directly:
 	// encode_password_v1("admin").hex() == "2f100a1b3d".
-	got := nsdp.EncodePasswordV1("admin")
+	got, err := nsdp.EncodePasswordV1("admin")
+	if err != nil {
+		t.Fatalf("EncodePasswordV1: %v", err)
+	}
 	want := mustHex(t, "2f100a1b3d")
 	if string(got) != string(want) {
 		t.Errorf("EncodePasswordV1(admin) = % x, want % x", got, want)
+	}
+}
+
+func TestEncodePasswordV1RejectsNonASCII(t *testing.T) {
+	_, err := nsdp.EncodePasswordV1("café")
+	if err == nil {
+		t.Fatal("EncodePasswordV1: expected error for non-ASCII password, got nil")
+	}
+	if !errors.Is(err, model.ErrNSDP) {
+		t.Errorf("error does not wrap model.ErrNSDP: %v", err)
 	}
 }
 

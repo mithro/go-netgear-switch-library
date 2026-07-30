@@ -217,9 +217,17 @@ func (p *Packet) AddTLV(tag Tag, value []byte) {
 
 // packMAC returns mac as an exact macSize-byte slice: zero-padded on the
 // right if shorter, returned as-is if exactly macSize, or an error wrapping
-// model.ErrNSDP if longer -- mirroring struct.pack's "6s" format code
-// (Python zero-pads a too-short bytes object and raises struct.error for a
-// too-long one).
+// model.ErrNSDP if longer.
+//
+// The short-side zero-padding matches Python's struct.pack "6s" format code
+// exactly. The long side does NOT match Python: struct.pack("6s", ...)
+// silently truncates a too-long bytes object to macSize bytes (verified
+// directly -- struct.pack("6s", b"1234567") == b"123456", no exception).
+// This function deliberately diverges there and errors instead: silently
+// dropping bytes off a MAC address is exactly the kind of wire-corrupting
+// bug this codec should fail fast on rather than reproduce, and no caller
+// in this codebase ever legitimately has a >6-byte MAC to encode. See
+// docs/cross-language-divergences.md, "Slice 05", for this divergence.
 func packMAC(mac []byte, field string) ([]byte, error) {
 	if len(mac) > macSize {
 		return nil, errNSDP("NSDP %s must be at most %d bytes, got %d", field, macSize, len(mac))

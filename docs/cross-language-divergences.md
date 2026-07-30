@@ -93,3 +93,18 @@ compare.
     behaviour is negligible in practice (rearm is rarely interrupted and device
     state usually stabilizes fast) and arguably safer (stale context reuse avoids
     extra I/O). Documented for cross-language conformance suite awareness.
+
+## Slice 05 (NSDP)
+
+1. **`packMAC` fail-fast on an overlong MAC** (`nsdp/protocol.go`): Go's
+   `Packet.Encode` returns an error wrapping `model.ErrNSDP` if `ClientMAC`/
+   `ServerMAC` is longer than 6 bytes; Python's `struct.pack(HEADER_FORMAT,
+   ...)` with a `"6s"` field code silently TRUNCATES a too-long `bytes` object
+   to 6 bytes instead of raising (verified directly against the pinned
+   interpreter: `struct.pack("6s", b"1234567") == b"123456"`, no exception).
+   Both languages match on the short side (zero-pad to 6 bytes). Deliberate
+   improvement, not a bug: silently dropping trailing bytes off a MAC address
+   on the wire is exactly the class of corruption this codec should refuse to
+   produce, and no caller in this codebase ever legitimately has a >6-byte
+   MAC to encode. Cross-tests must not construct a >6-byte MAC expecting a
+   truncated (rather than rejected) encode.
