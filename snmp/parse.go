@@ -117,7 +117,8 @@ func IndexStrColumn(rows []Row, baseOID string) (map[int]string, error) {
 
 // decodeUTF8Replace decodes b as UTF-8, replacing each invalid byte with
 // U+FFFD (the Unicode replacement character), mirroring Python's
-// bytes.decode("utf-8", "replace").
+// bytes.decode("utf-8", "replace") for the common cases this package
+// actually sees (genuine ASCII/UTF-8 text, or an isolated invalid byte).
 //
 // Go's string(b) conversion does NOT validate UTF-8 -- it copies the bytes
 // verbatim, so an invalid byte silently survives inside a technically
@@ -127,7 +128,21 @@ func IndexStrColumn(rows []Row, baseOID string) (map[int]string, error) {
 // some multi-byte-invalid-sequence cases; walking the bytes with
 // utf8.DecodeRune (which reports a single invalid byte, size 1, on a bad
 // lead/continuation byte) and appending one U+FFFD per invalid byte matches
-// Python's replace semantics precisely.
+// Python's byte-by-byte replacement in the cases this package's tests
+// exercise, but is a KNOWN, documented divergence in one corner: a valid
+// multi-byte lead byte truncated by the end of the buffer (e.g. a 3-byte
+// sequence's lead byte with no continuation bytes following it at all).
+// Python's incremental decoder treats that trailing lead byte as ONE
+// undecodable unit and emits a single U+FFFD for it; utf8.DecodeRune has no
+// "more bytes might follow" signal to give it that same one-unit-per-error
+// semantics, so it can emit its own single U+FFFD PLUS this function's
+// per-remaining-byte loop can emit additional ones for what Python would
+// have folded into that same one replacement -- i.e. Go can emit 2xU+FFFD
+// where Python emits 1x for a truncated trailing sequence. Every real value
+// this package decodes (ifName/ifAlias/dot1qVlanStaticName/LLDP text) is
+// ASCII in practice, so this divergence is not believed to be reachable on
+// real hardware; flagged here as a slice-10 (cross-language parity harness)
+// watch item rather than "fixed" speculatively without a real repro.
 func decodeUTF8Replace(b []byte) string {
 	var sb strings.Builder
 	sb.Grow(len(b))
@@ -1293,18 +1308,24 @@ func ipv4FromRFC4293Index(rows []Row) *string {
 
 // toIntBestEffort attempts a Python int()-style coercion of an SNMP row
 // value: an int64 is returned as-is (the only numeric shape Row.Value ever
-// holds -- see Row's docstring); a string/[]byte is parsed as a decimal
-// integer. Returns ok=false for anything that doesn't coerce, mirroring
-// Python's int(row.value) raising (TypeError, ValueError).
+// holds -- see Row's docstring); a string is parsed as a decimal integer.
+// Returns ok=false for anything that doesn't coerce, mirroring Python's
+// int(row.value) raising (TypeError, ValueError).
+//
+// Deliberately does NOT accept []byte: Python's int(value) raises TypeError
+// for a bytes argument exactly as it does for any other non-str/non-numeric
+// type, so a []byte-valued dhcp-mode row here must degrade to UNKNOWN (via
+// ok=false) rather than being coerced -- this OID is UNVERIFIED/best-effort
+// (see ParseMgmtIP's doc comment), and every real transport normalizes an
+// INTEGER-typed OID to int64 (never []byte) per Row's own contract, so a
+// []byte value reaching this function at all is already the unverified
+// OID's own drift, not a shape this helper should paper over.
 func toIntBestEffort(v any) (int64, bool) {
 	switch t := v.(type) {
 	case int64:
 		return t, true
 	case string:
 		n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
-		return n, err == nil
-	case []byte:
-		n, err := strconv.ParseInt(strings.TrimSpace(string(t)), 10, 64)
 		return n, err == nil
 	default:
 		return 0, false

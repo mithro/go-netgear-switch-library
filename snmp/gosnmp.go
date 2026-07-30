@@ -29,6 +29,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -186,6 +187,20 @@ func (c *GoSNMPClient) Get(ctx context.Context, oids []string) ([]Row, error) {
 // way for a caller to distinguish that from a real EndOfMibView/absent
 // termination -- which would violate the mid-walk-error-must-raise rule
 // above.
+//
+// OID-monotonicity guard: RFC 3416 requires GETNEXT/GETBULK to always
+// advance strictly past the requested OID, but nothing on the wire
+// enforces that a misbehaving (buggy or malicious) agent actually does so
+// -- an agent that instead replies with the same, or a lesser, in-subtree
+// OID forever would otherwise send this loop spinning indefinitely with no
+// ctx deadline able to interrupt it (see the package doc comment on ctx
+// handling: a bare-cancel ctx with no Deadline is only observed BETWEEN
+// GetBulk attempts, never during one). So each accepted varbind's OID is
+// parsed to its numeric []int form and compared with slices.Compare
+// against the last-accepted position; anything <= 0 (not strictly
+// greater) returns an error wrapping model.ErrSNMP naming the offending
+// OID, exactly like every other drifted-response case in this package,
+// instead of looping forever.
 func (c *GoSNMPClient) Walk(ctx context.Context, baseOID string) ([]Row, error) {
 	g := c.session(ctx)
 	if err := g.Connect(); err != nil {
@@ -196,6 +211,11 @@ func (c *GoSNMPClient) Walk(ctx context.Context, baseOID string) ([]Row, error) 
 	root := strings.TrimLeft(baseOID, ".")
 	prefix := root + "."
 	oid := baseOID
+
+	position, ok := walkOIDInts(oid)
+	if !ok {
+		return nil, errOID(oid, "malformed base OID for WALK")
+	}
 
 	var rows []Row
 	for {
@@ -217,10 +237,19 @@ func (c *GoSNMPClient) Walk(ctx context.Context, baseOID string) ([]Row, error) 
 				stop = true
 				break
 			}
-			if !strings.HasPrefix(strings.TrimLeft(pdu.Name, "."), prefix) {
+			name := strings.TrimLeft(pdu.Name, ".")
+			if !strings.HasPrefix(name, prefix) {
 				stop = true
 				break
 			}
+			next, ok := walkOIDInts(name)
+			if !ok {
+				return nil, errOID(name, "malformed OID in WALK response")
+			}
+			if slices.Compare(next, position) <= 0 {
+				return nil, errOID(name, "OID not increasing")
+			}
+			position = next
 			row, err := normalizeVarbind(pdu)
 			if err != nil {
 				return nil, err
@@ -233,6 +262,29 @@ func (c *GoSNMPClient) Walk(ctx context.Context, baseOID string) ([]Row, error) 
 		oid = pkt.Variables[len(pkt.Variables)-1].Name
 	}
 	return rows, nil
+}
+
+// walkOIDInts parses a dotted-decimal OID string (with or without a
+// leading dot) into its component ints, for Walk's numeric
+// OID-monotonicity comparison (slices.Compare requires a same-shaped
+// numeric key, never a lexicographic string compare of the OID text --
+// e.g. ".8.2" must sort before ".8.10"). Returns ok=false for anything
+// that isn't purely numeric dotted components.
+func walkOIDInts(oid string) ([]int, bool) {
+	oid = strings.TrimLeft(oid, ".")
+	if oid == "" {
+		return nil, false
+	}
+	parts := strings.Split(oid, ".")
+	out := make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return nil, false
+		}
+		out[i] = n
+	}
+	return out, true
 }
 
 // Set performs a single-varbind SetMany.

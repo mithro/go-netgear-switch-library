@@ -60,6 +60,13 @@ type fakeAgent struct {
 	// never responds. Used to test ctx deadline handling.
 	blackhole bool
 
+	// loopPDU, if non-nil, makes every GetBulk response return exactly
+	// this one varbind, ignoring the requested OID entirely -- simulates
+	// a misbehaving agent that never advances past a given (in-subtree)
+	// OID, which Walk's monotonicity guard must reject instead of looping
+	// forever (see TestGoSNMPClient_Walk_NonAdvancingOIDIsRejected).
+	loopPDU *gosnmp.SnmpPDU
+
 	conn  *net.UDPConn
 	setCh chan []gosnmp.SnmpPDU
 }
@@ -124,6 +131,10 @@ func (a *fakeAgent) respond(req *gosnmp.SnmpPacket) *gosnmp.SnmpPacket {
 			resp.ErrorIndex = 1
 		}
 	case gosnmp.GetBulkRequest:
+		if a.loopPDU != nil {
+			resp.Variables = []gosnmp.SnmpPDU{*a.loopPDU}
+			break
+		}
 		if a.errorOnPrefix != "" && len(req.Variables) > 0 &&
 			strings.HasPrefix(strings.TrimLeft(req.Variables[0].Name, "."), a.errorOnPrefix) {
 			resp.Error = a.walkErrStatus
@@ -683,6 +694,32 @@ func TestGoSNMPClient_Walk_MidWalkError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "GenErr") {
 		t.Errorf("error = %q, want it to name the error-status", err.Error())
+	}
+}
+
+// TestGoSNMPClient_Walk_NonAdvancingOIDIsRejected pins the OID-monotonicity
+// guard: a misbehaving agent that keeps answering GetBulk with the same,
+// never-advancing, in-subtree OID must be rejected with an error wrapping
+// model.ErrSNMP, instead of Walk looping forever (fakeAgent.loopPDU
+// reproduces exactly that misbehaviour -- every GetBulk response is the
+// identical varbind, regardless of the requested OID). Without the guard
+// this test would hang until its own test-process timeout, since nothing
+// here ever signals EndOfMibView/leaves the subtree/advances the OID.
+func TestGoSNMPClient_Walk_NonAdvancingOIDIsRejected(t *testing.T) {
+	loop := gosnmp.SnmpPDU{Name: ".1.3.6.1.4.1.99999.10.1", Type: gosnmp.Integer, Value: int(1)}
+	agent := &fakeAgent{loopPDU: &loop}
+	agent.start(t)
+
+	client := NewGoSNMPClient(agent.addr(), "public", WithTimeout(2*time.Second))
+	rows, err := client.Walk(context.Background(), "1.3.6.1.4.1.99999.10")
+	if err == nil {
+		t.Fatalf("Walk() error = nil, rows = %+v, want an OID-not-increasing error", rows)
+	}
+	if !errors.Is(err, model.ErrSNMP) {
+		t.Errorf("error %v does not wrap model.ErrSNMP", err)
+	}
+	if !strings.Contains(err.Error(), "not increasing") {
+		t.Errorf("error = %q, want it to mention the OID not increasing", err.Error())
 	}
 }
 

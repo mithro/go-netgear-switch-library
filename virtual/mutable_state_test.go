@@ -278,9 +278,11 @@ func TestApplyWriteVendorWritesNoOpOnNoVendorModel(t *testing.T) {
 }
 
 // TestApplyWriteAcceptsAlternateIntLikeValueTypes exercises mustInt's full
-// int/bytes/str union (mirroring Python's permissive int(value) over the
-// same union ApplyWrite accepts), not just the plain `int` literals the
-// other tests use.
+// int/str union (mirroring Python's permissive int(value) over the same
+// union ApplyWrite accepts), not just the plain `int` literals the other
+// tests use. []byte is deliberately NOT in this union -- see
+// TestMustIntRejectsByteSlice and mustInt's doc comment: Python's int(value)
+// raises TypeError for a bytes argument, so mustInt panics there too.
 func TestApplyWriteAcceptsAlternateIntLikeValueTypes(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -294,7 +296,6 @@ func TestApplyWriteAcceptsAlternateIntLikeValueTypes(t *testing.T) {
 		{"uint64", uint64(2)},
 		{"byte", byte(2)},
 		{"numeric string", "2"},
-		{"single byte slice", []byte{2}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -328,6 +329,21 @@ func TestMustIntPanicsOnUnconvertibleValue(t *testing.T) {
 		}
 	}()
 	mustInt("some.oid", struct{}{})
+}
+
+// TestMustIntRejectsByteSlice pins the Python-parity fix: a single-byte
+// []byte value (the shape an OctetString-typed SET carries) must panic,
+// even though it looks superficially int-convertible, because Python's
+// int(value) raises TypeError for a bytes argument rather than coercing it.
+// See mustInt's doc comment and TestSnmpFaceSetOctetStringAgainstIntColumnIsWrongValue
+// for the face-level (wrongValue + rollback) consequence of this.
+func TestMustIntRejectsByteSlice(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("expected mustInt to panic on a []byte value (Python int(bytes) raises TypeError)")
+		}
+	}()
+	mustInt("some.oid", []byte{2})
 }
 
 func TestAsBytesAcceptsIntAndPanicsOnUnconvertibleValue(t *testing.T) {

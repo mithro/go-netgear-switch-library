@@ -510,9 +510,19 @@ func isPoeAdminColumn(oid string) (int, bool) {
 }
 
 // mustInt converts an ApplyWrite value to int, mirroring Python's
-// permissive int(value) on the int/bytes/str union this method accepts for
-// every integer-valued column. Panics on a value type no real call site
-// ever passes (a caller bug, not a device condition).
+// permissive int(value) on the int/str union this method accepts for every
+// integer-valued column.
+//
+// Deliberately does NOT accept []byte, even a single-byte slice that looks
+// superficially int-convertible: Python's int(value) raises TypeError for a
+// bytes argument (int() coerces a numeric str, never a bytes object), so an
+// OctetString-typed SET value against an INTEGER-typed column (e.g.
+// ifAdminStatus) must fail there too. Panics on this and on any other value
+// type no real call site ever passes (a caller bug, not a device
+// condition); for the (later-slice) SNMP face this is exactly right, since
+// applyUncommitted's recover (snmpface.go) converts the panic into a clean
+// wrongValue error status with a full-PDU rollback -- mirroring the Python
+// face's behaviour on the same wrong-type SET exactly.
 func mustInt(oid string, value any) int {
 	switch v := value.(type) {
 	case int:
@@ -533,10 +543,6 @@ func mustInt(oid string, value any) int {
 		n, err := strconv.Atoi(v)
 		if err == nil {
 			return n
-		}
-	case []byte:
-		if len(v) == 1 {
-			return int(v[0])
 		}
 	}
 	panic(fmt.Sprintf("virtual: ApplyWrite(%q): value %v (%T) is not int-convertible", oid, value, value))

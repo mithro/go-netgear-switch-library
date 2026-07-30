@@ -528,6 +528,50 @@ func TestSnmpFaceSetMultiVarbindRollsBackOnSecondFailure(t *testing.T) {
 	}
 }
 
+// TestSnmpFaceSetOctetStringAgainstIntColumnIsWrongValue pins the
+// mustInt Python-SET-parity fix (see mustInt's doc comment in state.go): a
+// raw gosnmp SET whose value arrives as an OctetString (not an
+// INTEGER-family wire type) against an INTEGER-typed writable column
+// (ifAdminStatus) must fail with wrongValue -- exactly like the Python
+// face, whose int(value) raises TypeError for a bytes value -- with the
+// correct 1-based error-index and the underlying state left UNCHANGED
+// (rollback). The before/after values are read back over the wire (not by
+// peeking at the face's MibView/State directly), matching every other
+// rollback test in this file, since a direct read of server-side state
+// from the test goroutine races with the face's own serve goroutine.
+func TestSnmpFaceSetOctetStringAgainstIntColumnIsWrongValue(t *testing.T) {
+	st := SeedGSM7252PS()
+	addr, _, _ := startFace(t, st)
+	client := snmp.NewGoSNMPClient(addr, "public", snmp.WithTimeout(2*time.Second))
+	ctx := context.Background()
+
+	oid := snmp.IfAdminStatus + ".1"
+	before, err := client.Get(ctx, []string{oid})
+	if err != nil {
+		t.Fatalf("Get(%s) before SET error = %v", oid, err)
+	}
+
+	g := rawClient(t, addr)
+	pkt, err := g.Set([]gosnmp.SnmpPDU{{Name: oid, Type: gosnmp.OctetString, Value: []byte{0x02}}})
+	if err != nil {
+		t.Fatalf("raw Set(%s, OctetString) error = %v", oid, err)
+	}
+	if pkt.Error != gosnmp.WrongValue {
+		t.Errorf("Set(%s, OctetString) error-status = %s, want WrongValue", oid, pkt.Error)
+	}
+	if pkt.ErrorIndex != 1 {
+		t.Errorf("Set(%s, OctetString) error-index = %d, want 1", oid, pkt.ErrorIndex)
+	}
+
+	after, err := client.Get(ctx, []string{oid})
+	if err != nil {
+		t.Fatalf("Get(%s) after failed SET error = %v", oid, err)
+	}
+	if after[0].Value != before[0].Value {
+		t.Errorf("ifAdminStatus.1 after failed SET = %v, want unchanged %v (rolled back)", after[0].Value, before[0].Value)
+	}
+}
+
 // -- Community / drop paths ------------------------------------------------
 
 func TestSnmpFaceWrongCommunityTimesOut(t *testing.T) {
