@@ -1,15 +1,18 @@
 package virtual
 
 // Code in this file (SeedGSM7252PS, SeedGSM7228PS, SeedM4300_24X,
-// SeedM4300_16X, SeedGS728TPP, BuildState) is a byte-for-byte transcription
-// of src/netgear_switch/virtual/seed.py's seed_gsm7252ps/seed_gsm7228ps/
-// seed_m4300_24x/seed_m4300_16x/seed_gs728tpp/_build_state (the normative
-// source; that repo is read-only from here -- pin 1aa1274, branch
-// fix/s3300-52x-live-verify). Any discrepancy between this file and the
-// Python source is a bug here. See D-VIRT §4 for the dossier's transcription
-// (NOTE: §4.2's gsm7228ps text is documented STALE there -- this file
-// transcribes gsm7228ps from the CURRENT, capture-based seed.py function,
-// not the dossier's superseded illustrative text).
+// SeedM4300_16X, SeedGS728TPP, SeedGS110EMX, SeedGS305EP, SeedGS105PE,
+// BuildState) is a byte-for-byte transcription of
+// src/netgear_switch/virtual/seed.py's seed_gsm7252ps/seed_gsm7228ps/
+// seed_m4300_24x/seed_m4300_16x/seed_gs728tpp/seed_gs110emx/seed_gs305ep/
+// seed_gs105pe/_build_state (the normative source; that repo is read-only
+// from here -- pin 1aa1274, branch fix/s3300-52x-live-verify). Any
+// discrepancy between this file and the Python source is a bug here. See
+// D-VIRT §4 for the SNMP-model seeds' dossier transcription (NOTE: §4.2's
+// gsm7228ps text is documented STALE there -- this file transcribes
+// gsm7228ps from the CURRENT, capture-based seed.py function, not the
+// dossier's superseded illustrative text) and D-NSDP §7.3 for the three
+// slice-05 Plus-model seeds (SeedGS110EMX/SeedGS305EP/SeedGS105PE).
 //
 // Every seed here is grounded in a real hardware capture committed under
 // testdata/captures/ (gsm7252ps.json, gsm7228ps.json, m4300-24x.json,
@@ -21,9 +24,19 @@ package virtual
 // testdata/captures/gs728tpp.json here and is grounded only by direct
 // structural pins against the transcribed seed.py values (see
 // TestSeedGS728TPP* in seed_test.go), not the assertSeedMatchesCapture
-// harness the other four seeds use.
+// harness the other four seeds use. The three Plus-model seeds (gs110emx,
+// gs305ep, gs105pe) likewise have no testdata/captures/*.json here: gs110emx
+// and gs105pe are grounded in real HTTP-UI/live-NSDP captures cited only in
+// the pinned Python seed.py's own docstrings (see each Seed function's doc
+// comment for exactly which values are transcribed vs. illustrative), and
+// gs305ep is HAND-INVENTED end to end (no capture of any kind exists for
+// it) -- none of the three use the assertSeedMatchesCapture harness.
 
-import "github.com/mithro/go-netgear-switch-library/model"
+import (
+	"fmt"
+
+	"github.com/mithro/go-netgear-switch-library/model"
+)
 
 // withDefaultIfType backfills IfType == 6 (ethernetCsmacd, the physical-port
 // default -- see PortSim.IfType's doc comment and NewPortSim) onto every
@@ -929,17 +942,249 @@ func SeedGS728TPP() *State {
 	return s
 }
 
+// SeedGS110EMX builds a GS110EMX (10-port Plus, NSDP+HTTP) State
+// transcribed field-for-field from the pinned Python seed_gs110emx (D-NSDP
+// §7.3), whose own docstring cites REAL captures of this exact model's own
+// web UI (host 10.1.5.25: tests/fixtures/http/gs110emx_{sysinfo,
+// port_settings,interface_stats,vlanmembership,pvid}.html at the Python
+// pin): ports 6/8/9/10 up at 100M/1G/10G/10G with port 8 described
+// "rumpus", the rest down; static 10.1.5.25/24 via 10.1.5.1; MAC
+// bc:a5:11:b8:ec:f1. VLAN 1's membership (ports 1-8 untagged, 9-10 tagged)
+// and every port's PVID (all 1) are likewise transcribed from that capture.
+//
+// STILL ILLUSTRATIVE (no capture exists, and this doc comment says so
+// rather than implying otherwise): VLAN 90's member/untagged sets -- only
+// VLAN 1's membership page was ever captured, and VLAN 90 is merely one of
+// the 12 VLAN IDs the real Cf8021q capture lists -- and the
+// QoS/mirroring/IGMP/broadcast/loop-detection tag values below, which are
+// test fixtures chosen so a caller decoding this seed's NSDP tags has
+// something non-vacuous on every one of them, NOT observed hardware
+// values. No PoE (registry: PoEPortCount 0), no box sensors/MAC-FDB/LLDP
+// (the Plus family exposes none of these over any face).
+func SeedGS110EMX() *State {
+	realSpeed := map[int]int{6: 100, 8: 1000, 9: 10000, 10: 10000}
+	realOctets := map[int][2]uint64{
+		6:  {0, 70_892_018_242},
+		8:  {59_921_732_691, 78_637_274_870},
+		9:  {2_963_140_428_936, 1_189_358_575_871},
+		10: {1_195_417_274_187, 3_027_396_511_187},
+	}
+	ports := map[int]*PortSim{}
+	for port := 1; port <= 10; port++ {
+		sim := &PortSim{
+			Name:  fmt.Sprintf("g%d", port),
+			Admin: true,
+			Link:  realSpeed[port] != 0,
+			Speed: realSpeed[port],
+		}
+		if port == 8 {
+			sim.Description = model.Ptr("rumpus")
+		}
+		octets := realOctets[port] // {0,0} zero value for every port not in real_octets
+		sim.RxOctets = model.Ptr(octets[0])
+		sim.TxOctets = model.Ptr(octets[1])
+		sim.RxErrors = model.Ptr(uint64(0))
+		ports[port] = sim
+	}
+
+	vlans := map[int]*VlanSim{
+		1:  {Name: "", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}), Untagged: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8})},
+		90: {Name: "", Member: portSetFromSlice([]int{1, 2, 10}), Untagged: portSetFromSlice([]int{1, 2})},
+	}
+	pvids := map[int]int{}
+	for port := 1; port <= 10; port++ {
+		pvids[port] = 1
+	}
+
+	mgmt := MgmtSim{Address: "10.1.5.25", Netmask: "255.255.255.0", Gateway: "10.1.5.1", Mode: "static"}
+
+	s := NewState("gs110emx")
+
+	s.Ports = withDefaultIfType(ports)
+
+	s.Vlans = vlans
+
+	s.Pvids = pvids
+
+	s.Mgmt = mgmt
+
+	s.ModelName = "GS110EMX"
+
+	s.Serial = "53H60253A0032"
+
+	s.Firmware = "1.0.1.4"
+
+	s.Hostname = "sw-netgear-gs110emx1"
+
+	s.NsdpMac = [6]byte{0xbc, 0xa5, 0x11, 0xb8, 0xec, 0xf1}
+
+	s.NsdpQosEngine = model.Ptr(1) // port-based
+
+	s.NsdpPortMirroringDest = model.Ptr(10)
+
+	s.NsdpPortMirroringSources = portSetFromSlice([]int{1, 2})
+
+	s.NsdpIgmpSnoopingEnabled = model.Ptr(true)
+
+	s.NsdpIgmpSnoopingVlan = model.Ptr(90)
+
+	s.NsdpBroadcastFiltering = model.Ptr(true)
+
+	s.NsdpLoopDetection = model.Ptr(true)
+
+	return s
+}
+
+// SeedGS305EP builds an ILLUSTRATIVE GS305EP (5-port, PoE ports 1-4) State,
+// transcribed field-for-field from the pinned Python seed_gs305ep (D-NSDP
+// §7.3). HAND-INVENTED: no capture of any kind exists for gs305ep -- the
+// port speeds, the 12800 mW PoE reading, VLAN 90 and the PVIDs are all
+// structural test data, NOT observed values (same convention as
+// SeedGSM7228PS, which says so explicitly). Only the shape is grounded:
+// the Plus family genuinely has no MAC/FDB, no box sensors and no LLDP
+// over its web UI.
+//
+// GENUINE GAP, ported deliberately, not filled in: the pinned Python
+// constructor call passes no model_name/serial/firmware/hostname/nsdp_mac/
+// nsdp_password/QoS/mirroring/IGMP/broadcast/loop-detection kwargs at all,
+// so every one of those -- and Mgmt -- falls through to the
+// VirtualSwitchState dataclass default (empty identity strings, the
+// default NsdpMac/NsdpPassword, every NSDP-extra field nil/unseeded, Mgmt
+// "0.0.0.0"/dhcp). This function therefore leaves every one of those
+// fields at NewState's own matching defaults rather than inventing
+// plausible-looking values gs305ep never actually had in the pinned
+// reference -- doing so would silently diverge from a future Go<->Python
+// cross-fake-equivalence test (roadmap slice 10). See D-NSDP
+// §7.3/§10.6#7.
+func SeedGS305EP() *State {
+	ports := map[int]*PortSim{}
+	for port := 1; port <= 5; port++ {
+		speed := 0
+		if port == 1 {
+			speed = 1000
+		}
+		ports[port] = &PortSim{
+			Name:  fmt.Sprintf("Port %d", port),
+			Admin: port != 3,
+			Link:  port == 1,
+			Speed: speed,
+		}
+	}
+	ports[1].RxOctets = model.Ptr(uint64(1_000_000))
+	ports[1].TxOctets = model.Ptr(uint64(2_000_000))
+	ports[1].RxErrors = model.Ptr(uint64(0))
+
+	vlans := map[int]*VlanSim{
+		1:  {Name: "default", Member: portSetFromSlice([]int{1, 2, 3, 4, 5}), Untagged: portSetFromSlice([]int{3, 4, 5})},
+		90: {Name: "iot", Member: portSetFromSlice([]int{1, 2}), Untagged: portSetFromSlice([]int{1, 2})},
+	}
+	pvids := map[int]int{1: 90, 2: 90, 3: 1, 4: 1, 5: 1}
+	poe := map[int]*PoeSim{
+		1: {Admin: true, Detect: 3, PowerMw: 12_800},
+		2: {Admin: true, Detect: 1, PowerMw: 0},
+		3: {Admin: true, Detect: 1, PowerMw: 0},
+		4: {Admin: false, Detect: 1, PowerMw: 0},
+	}
+
+	s := NewState("gs305ep")
+
+	s.Ports = withDefaultIfType(ports)
+
+	s.Vlans = vlans
+
+	s.Pvids = pvids
+
+	s.Poe = poe
+
+	return s
+}
+
+// SeedGS105PE builds a GS105PE (5-port Plus, NSDP+HTTP) State transcribed
+// field-for-field from the pinned Python seed_gs105pe (D-NSDP §7.3), whose
+// own docstring cites a REAL live capture (host 10.1.5.30 / poe-micro3,
+// 2026-07-21): ports 3 (100M) and 5 (1G) up, the rest down; VLANs 1/41/90
+// with their real member/untagged sets; real PVIDs; DHCP mgmt-IP (address
+// still the captured 10.1.5.30); and the QoS/mirroring/IGMP engine tags.
+//
+// Port mirroring is OFF on this unit (dest 0, no sources) -- the exact
+// 3-byte PORT_MIRRORING TLV shape (dest byte + a narrow, model-sized source
+// bitmap) that historically exposed a fixed-width parser bug in the pinned
+// Python reference (see nsdp.ParsePortMirroring's own doc comment); kept
+// here as a regression fixture for that same class of bug. No PoE
+// (registry: PoEPortCount 0 -- "PoE pass-through" only, not PSE), no box
+// sensors, no MAC/FDB over ANY interface (a confirmed firmware limitation),
+// no LLDP.
+func SeedGS105PE() *State {
+	realSpeed := map[int]int{3: 100, 5: 1000}
+	ports := map[int]*PortSim{}
+	for port := 1; port <= 5; port++ {
+		ports[port] = &PortSim{
+			Name:  fmt.Sprintf("Port %d", port),
+			Admin: true,
+			Link:  port == 3 || port == 5,
+			Speed: realSpeed[port],
+		}
+	}
+	ports[3].TxOctets = model.Ptr(uint64(10_246_512))
+	ports[5].RxOctets = model.Ptr(uint64(29_303_468))
+	ports[5].TxOctets = model.Ptr(uint64(289_149))
+	ports[5].RxErrors = model.Ptr(uint64(228_666))
+
+	vlans := map[int]*VlanSim{
+		1:  {Name: "", Member: portSetFromSlice([]int{5}), Untagged: portSetFromSlice([]int{5})},
+		41: {Name: "", Member: portSetFromSlice([]int{1, 2, 4, 5}), Untagged: portSetFromSlice([]int{1, 2, 4})},
+		90: {Name: "", Member: portSetFromSlice([]int{3, 5}), Untagged: portSetFromSlice([]int{3})},
+	}
+	pvids := map[int]int{1: 41, 2: 41, 3: 90, 4: 41, 5: 1}
+
+	mgmt := MgmtSim{Address: "10.1.5.30", Netmask: "255.255.255.0", Gateway: "10.1.5.1", Mode: "dhcp"}
+
+	s := NewState("gs105pe")
+
+	s.Ports = withDefaultIfType(ports)
+
+	s.Vlans = vlans
+
+	s.Pvids = pvids
+
+	s.Mgmt = mgmt
+
+	s.ModelName = "GS105PE"
+
+	s.Serial = "61W19753A00A8"
+
+	s.Firmware = "V1.6.0.4"
+
+	s.Hostname = "poe-micro3"
+
+	s.NsdpMac = [6]byte{0x38, 0x94, 0xed, 0xb7, 0xcd, 0xe0}
+
+	s.NsdpQosEngine = model.Ptr(2)
+
+	// dest=0/no sources: mirroring OFF on this unit -- see doc comment above.
+	s.NsdpPortMirroringDest = model.Ptr(0)
+
+	s.NsdpIgmpSnoopingEnabled = model.Ptr(true)
+
+	s.NsdpIgmpSnoopingVlan = model.Ptr(1)
+
+	s.NsdpBroadcastFiltering = model.Ptr(false)
+
+	s.NsdpLoopDetection = model.Ptr(false)
+
+	return s
+}
+
 // BuildState returns a seeded State for modelKey when this slice has a
 // hand-authored seed for it (the five SNMP-capable models: gsm7252ps,
-// gsm7228ps, m4300-24x, m4300-16x, gs728tpp), or a blank-but-valid State
-// (NewState's defaults) for every other registered model key.
+// gsm7228ps, m4300-24x, m4300-16x, gs728tpp; plus, as of slice 05, the three
+// NSDP/HTTP-only Plus models: gs110emx, gs305ep, gs105pe), or a
+// blank-but-valid State (NewState's defaults) for every other registered
+// model key.
 //
-// NSDP/HTTP-only Plus models (gs110emx, gs305ep, gs105pe) deliberately get a
-// blank state here -- their own seeds are Slice 05 (protocols/nsdp) and
-// Slice 06 (protocols/http) scope, not this slice's. An unrecognized
-// modelKey also gets a blank state: model-key validation is the caller's
-// job (model.GetModel), mirroring the Python reference's _build_state, which
-// likewise never validates the key itself.
+// An unrecognized modelKey also gets a blank state: model-key validation is
+// the caller's job (model.GetModel), mirroring the Python reference's
+// _build_state, which likewise never validates the key itself.
 func BuildState(modelKey string) *State {
 	switch modelKey {
 	case "gsm7252ps":
@@ -952,6 +1197,12 @@ func BuildState(modelKey string) *State {
 		return SeedM4300_16X()
 	case "gs728tpp":
 		return SeedGS728TPP()
+	case "gs110emx":
+		return SeedGS110EMX()
+	case "gs305ep":
+		return SeedGS305EP()
+	case "gs105pe":
+		return SeedGS105PE()
 	default:
 		return NewState(modelKey)
 	}

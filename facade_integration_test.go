@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -369,85 +368,84 @@ func TestFacadeIntegration_M4300_24XSnapshotDegradesPoEWhileGetPoEErrors(t *test
 	}
 }
 
-// TestFacadeIntegration_GS110EMXHonestFailure proves the "no Go NSDP backend
-// yet" honesty contract (D-FAC §3.1) against a REAL registry model: gs110emx
+// TestFacadeIntegration_GS110EMXNSDPServesReadsHTTPStillDegrades supersedes
+// this test's slice-03/04 predecessor (formerly
+// TestFacadeIntegration_GS110EMXHonestFailure, which asserted EVERY read
+// failed with ErrUnsupportedCapability because neither of gs110emx's two
+// backends -- NSDP, HTTP -- had a Go implementation yet). Slice 05 added the
+// NSDP backend (backend_nsdp.go), so that premise is now HALF false: gs110emx
 // is genuinely {NSDP, HTTP}-only (no SNMP backend at all -- see
-// model/registry.go), and neither NSDP nor HTTP has a Go implementation in
-// this slice, so NEW must still succeed (construction never does I/O), every
-// read must fail wrapping ErrUnsupportedCapability (never a panic, never a
-// silently-empty result masquerading as success), and Snapshot must degrade
-// EVERY field to empty/nil while itself returning no error. gs110emx needs no
-// SNMP community (it has no SNMP backend to gate on), so this Switch is
-// constructed with no SNMP options at all -- and, having no live SNMP face,
-// this test needs no virtual.VirtualSwitch at all (VirtualSwitch.Start would
-// itself refuse a model with no bindable face in this slice, per
-// virtual/server.go's Start doc comment).
-func TestFacadeIntegration_GS110EMXHonestFailure(t *testing.T) {
-	m, err := netgearswitch.GetModel("gs110emx")
-	if err != nil {
-		t.Fatalf("GetModel(\"gs110emx\") error = %v", err)
-	}
-
-	sw, err := netgearswitch.New(m, "127.0.0.1:1")
-	if err != nil {
-		t.Fatalf("New(\"gs110emx\") error = %v, want New to succeed (construction never does I/O)", err)
-	}
+// model/registry.go), and NSDP now serves ports/stats/vlans/pvids/mgmt-ip for
+// real, while HTTP remains unimplemented until slice 06. This test proves
+// BOTH halves of that updated contract against a REAL live gs110emx
+// VirtualSwitch: NSDP-servable reads succeed and Snapshot populates their
+// fields, while HTTP-only reads (MACs/LLDP/Sensors/PoE) still fail/degrade
+// exactly as before -- Snapshot's per-field degrade behavior (D-FAC §2.12)
+// is honest in BOTH directions, not just the "everything fails" one.
+// See facade_nsdp_integration_test.go for the full per-field capstone this
+// test deliberately does not re-derive in detail.
+func TestFacadeIntegration_GS110EMXNSDPServesReadsHTTPStillDegrades(t *testing.T) {
+	vsw := startVirtualSwitch(t, "gs110emx")
+	sw := nsdpFacadeFor(t, vsw, "gs110emx")
 
 	ctx, cancel := context.WithTimeout(context.Background(), facadeTestTimeout)
 	defer cancel()
 
-	_, err = sw.GetPorts(ctx)
-	if err == nil {
-		t.Fatal("GetPorts() on gs110emx error = nil, want an honest ErrUnsupportedCapability (no Go NSDP/HTTP backend exists yet)")
+	ports, err := sw.GetPorts(ctx)
+	if err != nil {
+		t.Fatalf("GetPorts() on gs110emx error = %v, want nil (NSDP now serves this op)", err)
 	}
-	if !errors.Is(err, netgearswitch.ErrUnsupportedCapability) {
-		t.Fatalf("GetPorts() on gs110emx error = %v, want wrapping ErrUnsupportedCapability", err)
+	if len(ports) == 0 {
+		t.Error("GetPorts() on gs110emx returned no ports, want the 10-port NSDP seed")
 	}
-	// backendPreference tries NSDP before HTTP (D-FAC §2.7 rule 1), and both
-	// are unregistered in this slice, so the LAST backend tried -- HTTP --
-	// is whose "no backend implementation yet" error the dispatch loop
-	// re-raises (D-FAC §2.7 rule 6; pinned identically for this exact
-	// {NSDP,HTTP} model shape by switch_test.go's
-	// TestReadVia_UnregisteredBackendTreatedAsUnsupported). The message
-	// still names the model, so the failure is honest and diagnosable even
-	// though "nsdp" itself isn't the substring that survives to the caller.
-	if got := err.Error(); !strings.Contains(got, "gs110emx") {
-		t.Errorf("GetPorts() error = %q, want it to name the model", got)
+
+	// GetMACs is gated at the facade level before any dispatch (gs110emx has
+	// no SNMP backend, so HasMACTable() is false); GetLLDP/GetSensors/GetPoE
+	// dispatch through NSDP (which raises ErrUnsupportedCapability for each)
+	// then HTTP (still unregistered in this slice) -- both still an honest
+	// ErrUnsupportedCapability naming the model, exactly like before slice 05.
+	if _, err := sw.GetMACs(ctx); !errors.Is(err, netgearswitch.ErrUnsupportedCapability) {
+		t.Errorf("GetMACs() on gs110emx error = %v, want wrapping ErrUnsupportedCapability", err)
+	}
+	if _, err := sw.GetLLDP(ctx); !errors.Is(err, netgearswitch.ErrUnsupportedCapability) {
+		t.Errorf("GetLLDP() on gs110emx error = %v, want wrapping ErrUnsupportedCapability", err)
 	}
 
 	data, err := sw.Snapshot(ctx)
 	if err != nil {
-		t.Fatalf("Snapshot() on gs110emx error = %v, want nil (every field honestly degrades)", err)
+		t.Fatalf("Snapshot() on gs110emx error = %v, want nil (every field either populates or honestly degrades)", err)
 	}
-	if len(data.Ports) != 0 {
-		t.Errorf("Snapshot().Ports = %v, want empty", data.Ports)
+	// NSDP-served fields: now populated, unlike the pre-slice-05 contract.
+	if len(data.Ports) == 0 {
+		t.Error("Snapshot().Ports is empty, want populated (gs110emx serves get_ports over NSDP as of slice 05)")
 	}
-	if len(data.Stats) != 0 {
-		t.Errorf("Snapshot().Stats = %v, want empty", data.Stats)
+	if len(data.Stats) == 0 {
+		t.Error("Snapshot().Stats is empty, want populated (NSDP)")
 	}
-	if len(data.Vlans) != 0 {
-		t.Errorf("Snapshot().Vlans = %v, want empty", data.Vlans)
+	if len(data.Vlans) == 0 {
+		t.Error("Snapshot().Vlans is empty, want populated (NSDP)")
 	}
-	if len(data.Pvids) != 0 {
-		t.Errorf("Snapshot().Pvids = %v, want empty", data.Pvids)
+	if len(data.Pvids) == 0 {
+		t.Error("Snapshot().Pvids is empty, want populated (NSDP)")
 	}
+	if data.MgmtIP == nil {
+		t.Error("Snapshot().MgmtIP is nil, want populated (NSDP)")
+	}
+	// HTTP-only fields: still degrade to empty until slice 06.
 	if len(data.Lldp) != 0 {
-		t.Errorf("Snapshot().Lldp = %v, want empty", data.Lldp)
+		t.Errorf("Snapshot().Lldp = %v, want empty (no Go HTTP backend yet)", data.Lldp)
 	}
 	if len(data.Macs) != 0 {
-		t.Errorf("Snapshot().Macs = %v, want empty", data.Macs)
+		t.Errorf("Snapshot().Macs = %v, want empty (gs110emx has no MAC table on any backend)", data.Macs)
 	}
 	if len(data.PoE) != 0 {
-		t.Errorf("Snapshot().PoE = %v, want empty", data.PoE)
+		t.Errorf("Snapshot().PoE = %v, want empty (NSDP has no PoE tag; no Go HTTP backend yet)", data.PoE)
 	}
 	if len(data.Sensors) != 0 {
-		t.Errorf("Snapshot().Sensors = %v, want empty", data.Sensors)
-	}
-	if data.MgmtIP != nil {
-		t.Errorf("Snapshot().MgmtIP = %v, want nil", data.MgmtIP)
+		t.Errorf("Snapshot().Sensors = %v, want empty (no Go HTTP backend yet)", data.Sensors)
 	}
 	if data.Model != "gs110emx" {
-		t.Errorf("Snapshot().Model = %q, want \"gs110emx\" (the field itself is not degraded by a capability gap)", data.Model)
+		t.Errorf("Snapshot().Model = %q, want \"gs110emx\"", data.Model)
 	}
 }
 

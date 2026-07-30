@@ -93,3 +93,104 @@ compare.
     behaviour is negligible in practice (rearm is rarely interrupted and device
     state usually stabilizes fast) and arguably safer (stale context reuse avoids
     extra I/O). Documented for cross-language conformance suite awareness.
+
+## Slice 05 (NSDP)
+
+1. **`packMAC` fail-fast on an overlong MAC** (`nsdp/protocol.go`): Go's
+   `Packet.Encode` returns an error wrapping `model.ErrNSDP` if `ClientMAC`/
+   `ServerMAC` is longer than 6 bytes; Python's `struct.pack(HEADER_FORMAT,
+   ...)` with a `"6s"` field code silently TRUNCATES a too-long `bytes` object
+   to 6 bytes instead of raising (verified directly against the pinned
+   interpreter: `struct.pack("6s", b"1234567") == b"123456"`, no exception).
+   Both languages match on the short side (zero-pad to 6 bytes). Deliberate
+   improvement, not a bug: silently dropping trailing bytes off a MAC address
+   on the wire is exactly the class of corruption this codec should refuse to
+   produce, and no caller in this codebase ever legitimately has a >6-byte
+   MAC to encode. Cross-tests must not construct a >6-byte MAC expecting a
+   truncated (rather than rejected) encode.
+
+2. **`PvidTLV`/`VlanMembersTLV` fail-fast on an out-of-range VLAN ID or port**
+   (`nsdp/write.go`): Go returns an error wrapping `model.ErrNSDP` up front if
+   `vlan` doesn't fit a `uint16` (0-65535) or, for `PvidTLV`, if `port`
+   doesn't fit a byte (0-255). Python's `pvid_tlv`/`vlan_members_tlv` only
+   fail when the out-of-range value is later packed (`bytes([port])` raising
+   `ValueError`, `struct.pack(">H", vlan)` raising `struct.error`) -- same
+   outcome (reject rather than silently wrap/truncate), just checked earlier
+   and with a different error type/message. Same fail-fast philosophy as
+   entry 1 above: no caller in this codebase ever legitimately has an
+   out-of-range port/VLAN to encode.
+3. **`IPv4TLV` uses Go's stricter `net.ParseIP`, not `inet_aton`'s leniency**
+   (`nsdp/write.go`): Python's `socket.inet_aton` accepts abbreviated forms
+   (e.g. `"10.1.5"` -> `10.1.0.5`) that `net.ParseIP` rejects, requiring a
+   full dotted-quad. Every call site in this codebase always passes a full
+   dotted-quad address, so this is a no-op in practice; it fails fast on a
+   malformed address rather than reproducing `inet_aton`'s abbreviated-form
+   guessing.
+4. **`State.ApplyNsdpWrite` uniformly no-ops on a too-short value for a
+   known tag; Python's equivalent branches are inconsistent, and for TWO
+   tags specifically that inconsistency is an uncaught, thread-killing bug**
+   (`virtual/state.go`): Python's `apply_nsdp_write` has no length guard
+   before indexing/parsing, and its branches disagree on what a too-short
+   `value` does:
+   - **PORT_PVID**: `self.pvids[value[0]] = struct.unpack_from(">H", value, 1)[0]`
+     raises `IndexError` (empty `value`) or `struct.error` (1-2 bytes) --
+     neither is a `ValueError`, so `faces/nsdp.py`'s `_serve` (which only
+     catches `ValueError` around `_handle`) does NOT catch it, silently
+     killing that one Python mock's serve thread permanently.
+   - **IP_ADDRESS/NETMASK/GATEWAY**: `socket.inet_ntoa(value)` on anything
+     but exactly 4 bytes raises `OSError` ("packed IP wrong length for
+     inet_ntoa") -- also not a `ValueError`, also uncaught, also kills the
+     thread.
+   - **VLAN_MEMBERS** is the one exception that behaves safely already:
+     `parse_vlan_members` explicitly `raise`s a plain `ValueError` for a
+     too-short buffer, which `_serve`'s `except ValueError: continue` DOES
+     catch -- the write response is silently dropped (client sees a
+     timeout) but the thread survives.
+   - **DHCP_MODE** never panics/raises in either language for an empty
+     value (`value[:1] == b"\x01"` in Python, `len(value) > 0 &&
+     value[0] == 0x01` in Go are both safe on empty input) -- but Python's
+     comparison is simply `False` for an empty value, so its `else` branch
+     sets `Mode="static"`: a spurious mutation from a too-short value, not
+     a crash, but still a violation of the same "too-short = no-op"
+     contract this entry documents for every other tag. Go's `ApplyNsdpWrite`
+     guards this branch with the same up-front `len(value) == 0` no-op
+     check as everything else, so an empty DHCP_MODE value leaves `Mgmt.Mode`
+     untouched instead of forcing it to "static".
+
+   An unrecovered Go panic from the same out-of-range access in this
+   package's background serve goroutine would be strictly worse than even
+   the PORT_PVID/IP_ADDRESS case: it crashes the entire process, not just
+   one mock's request loop. Go therefore guards every branch's length up
+   front and treats a too-short value as a no-op uniformly, regardless of
+   which tag -- simpler, and strictly safer than Python's per-branch mix of
+   "silently drops the response" (VLAN_MEMBERS), "kills the thread"
+   (PORT_PVID, IP_ADDRESS/NETMASK/GATEWAY), and "spuriously mutates state"
+   (DHCP_MODE). This only changes how a MALFORMED write degrades; every
+   well-formed write's wire encoding and resulting state mutation are
+   unchanged.
+5. **`UDPClient.exchange` resolves its per-exchange read deadline as
+   `min(now+c.Timeout, ctx's own deadline, if any)`** (`nsdp/client.go`):
+   Python's `UdpNsdpClient`/`AsyncUdpNsdpClient` call `sock.settimeout(2s)`
+   (dossier §5.5) unconditionally on every socket, bounding every single
+   `recvfrom` at ~2s regardless of any caller-side deadline concept (Python
+   has no equivalent of a caller-supplied `ctx` deadline threading through
+   the exchange at all). An earlier version of this Go port instead applied
+   `c.Timeout` ONLY when the caller's `ctx` had no deadline of its own,
+   which meant a caller passing a `ctx` with a large request-scoped
+   deadline (e.g. one derived from an HTTP request's own lifetime, several
+   layers up) could make a single NSDP exchange block for that entire
+   deadline instead of `c.Timeout` -- a real divergence from Python, which
+   always caps it at ~2s no matter what. This is now resolved with explicit
+   min-deadline semantics (`context.WithDeadline(ctx,
+   min(now+c.Timeout, ctxDeadline))`), which moves Go CLOSER to Python's
+   behaviour, not further from it: the client's own configured `Timeout`
+   now always bounds a single exchange, while a caller-supplied deadline
+   SHORTER than `c.Timeout` (or outright ctx cancellation) still takes
+   effect exactly as before, since the derived context still closes the
+   moment the parent `ctx` does.
+   `TestUDPClient_ExchangeUsesMinOfClientTimeoutAndCtxDeadline` pins this:
+   a caller `ctx` with a 10s deadline against a black-hole (never-
+   responding) fake server still times out within `c.Timeout` (300ms),
+   never anywhere near the 10s ctx deadline. This is the settled precedent
+   slice 06's HTTP client is expected to inherit for its own per-request
+   deadline handling.

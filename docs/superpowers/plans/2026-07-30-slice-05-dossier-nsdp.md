@@ -1301,20 +1301,38 @@ elif backend is Backend.NSDP:
     writer = NsdpWriter(nsdp, self.model, password=password, protected_ports=self.protected_ports)
 ```
 
-**Go status**: `switch.go` already has the plumbing hook for exactly this
-reuse — its `httpPassword *resolveOnce` field's doc comment (line 109-111)
-says verbatim: *"httpPassword resolves the HTTP (and, per D-FAC §2.16,
-NSDP-shared) admin password lazily; consumed by slice 06."* And
-`FromConfig`'s own comment (lines 233-237) says: *"Per D-FAC §2.16, Python's
-from_config also reuses this same spec as the NSDP admin-password resolver;
-slice 05 wires that reuse in once an NSDP password option exists on
-Switch."* **This slice must**: (a) confirm/add an NSDP-side accessor that
-reuses `sw.httpPassword.resolve()` (no new resolver field needed — same
-`resolveOnce` cell, same as Python's shared `cfg.http_password(env=_env)`
-call from two different closures) when building the NSDP writer, and (b) gate
-a `nil` resolved password the same way SNMP's write-community gate does —
-`fmt.Errorf("no NSDP admin password configured for %q: %w", sw.host,
-model.ErrCredential)`, mirroring Python's `CredentialError` message exactly.
+**CORRECTED post-Task-7 (this paragraph, and item #10 below, originally
+understated the pin)**: re-reading `sync_api.py`'s `SyncSwitch.__init__`
+directly (lines 185-218) shows `nsdp_password`/`nsdp_password_resolver` are
+GENUINELY SEPARATE constructor parameters from `http_password`/
+`http_password_resolver`, each with its OWN `_Unset`-sentinel resolve-once
+cell (`self._resolved_nsdp_password` / `self._resolved_http_password`,
+lines 214/218) and its own `_resolve_nsdp_password()`/`_resolve_http_password()`
+method (lines 588-598 / 297-307). `from_config` (lines 265-272) is the ONLY
+place that feeds both from the same `cfg.http_password(env=_env)` spec — and
+its own comment says so explicitly as a deliberate, non-forced choice: *"A
+dedicated `nsdp.password` config key is a trivial future follow-up (the
+facade already accepts a distinct nsdp_password/nsdp_password_resolver) if a
+deployment ever needs to split them; do NOT add a separate key now."* So the
+earlier read here (and item #10) — "ONE `resolveOnce` cell, not two" — was
+wrong about the constructor/option level; it only holds at the `from_config`
+level, and even there the sharing is two independent resolutions of the same
+underlying spec (see the "run twice" caveat item #10 itself half-noticed),
+not a literal single cell.
+
+**Go, corrected**: `switch.go` needs a SEPARATE `nsdpPassword *resolveOnce`
+field (parallel to `httpPassword`) plus `WithNSDPPassword(string)`/
+`WithNSDPPasswordResolver(func() (*string, error))` options (mirroring
+`WithHTTPPasswordResolver`'s shape). `backend_nsdp.go`'s `buildNSDPWriter`
+resolves `sw.nsdpPassword.resolve()` (NOT `sw.httpPassword`). `FromConfig`
+wires BOTH cells from the SAME `cfg.HTTPPassword(os.LookupEnv, nil)` spec,
+via two independent closures — matching Python's `from_config` exactly,
+including the (intentional) consequence that a `!command`-style secret spec
+resolves (and if it execs a subprocess, runs) independently for each cell on
+its own first use. Gate a `nil` resolved NSDP password the same way SNMP's
+write-community gate does — `fmt.Errorf("no NSDP admin password configured
+for %q: %w", sw.host, model.ErrCredential)`, mirroring Python's
+`CredentialError` message exactly.
 
 ### 8.3 `sync_api.py` — `nsdp_device()` bypass
 
@@ -1697,16 +1715,27 @@ imports).
    and write — a misrouted/stale `READ_RESPONSE` with `result=0x0000` must
    never be mistaken for a successful `WRITE_RESPONSE`. This is a subtle
    ordering requirement, not just "check both eventually."
-10. **The shared HTTP/NSDP password is ONE `resolveOnce` cell, not two.**
-   Python calls the identical `cfg.http_password(env=_env)` function from two
-   separately-named closures (`_resolve_nsdp_password`/`_resolve_http_password`)
-   that happen to do the same thing — it is NOT two independently-configured
-   passwords that happen to match by convention. Go must reuse the exact
-   same `sw.httpPassword` `resolveOnce` cell for both HTTP and NSDP writes
-   (already flagged in `switch.go`'s own doc comments as this slice's job) —
-   introducing a second, separately-resolved `nsdpPassword` cell would
-   diverge from Python's actual sharing semantics (e.g. a resolver that logs
-   or execs a subprocess once would now run twice).
+10. **CORRECTED (was wrong): the HTTP/NSDP password is TWO independent
+   `resolveOnce` cells, not one.** `SyncSwitch.__init__` (lines 185-218 of
+   the pin) takes genuinely separate `nsdp_password`/`nsdp_password_resolver`
+   and `http_password`/`http_password_resolver` constructor parameters, each
+   backed by its own `_Unset`-sentinel cell (`_resolved_nsdp_password` /
+   `_resolved_http_password`) and its own resolve method. `from_config` is
+   the ONLY caller that happens to feed both from the identical
+   `cfg.http_password(env=_env)` spec, via two SEPARATELY-NAMED closures
+   (`_resolve_nsdp_password`/`_resolve_http_password`) — and its own comment
+   says this sharing is a deliberate, non-forced convenience, not an
+   architectural constraint: *"the facade already accepts a distinct
+   nsdp_password/nsdp_password_resolver ... if a deployment ever needs to
+   split them; do NOT add a separate config key now."* Go must mirror this
+   with a SEPARATE `sw.nsdpPassword` `resolveOnce` cell (plus
+   `WithNSDPPassword`/`WithNSDPPasswordResolver` options), independent of
+   `sw.httpPassword` — `FromConfig` wires both from the same spec (two
+   independent closures, exactly like Python; yes, a `!command`-style secret
+   resolver genuinely does run once per cell/once per first-use, matching
+   Python's own behavior, not a bug to "fix" by sharing one cell). The
+   original version of this item asserted the opposite and was wrong; do not
+   trust it if referenced from an earlier draft/branch of this dossier.
 
 ---
 

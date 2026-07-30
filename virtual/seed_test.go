@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -889,10 +890,209 @@ func TestSeedGS728TPPMgmtAddress(t *testing.T) {
 	}
 }
 
+// --- Plus-model seeds (slice 05: gs110emx / gs305ep / gs105pe) -----------------
+//
+// None of these three has a committed testdata/captures/*.json at this pin
+// (see seed.go's package doc comment for exactly why each one doesn't), so
+// -- like gs728tpp above -- they are grounded only by direct structural
+// pins against the values transcribed into seed.go, not by
+// assertSeedMatchesCapture. Mirrors test_nsdp_state.py's
+// test_seed_has_plus_shape intent (D-NSDP §9.4).
+
+func TestSeedGS110EMXHasPlusShape(t *testing.T) {
+	st := SeedGS110EMX()
+	if st.ModelKey != "gs110emx" {
+		t.Errorf("ModelKey = %q, want gs110emx", st.ModelKey)
+	}
+	if st.Serial == "" {
+		t.Error("Serial should be non-empty")
+	}
+	if st.Firmware == "" {
+		t.Error("Firmware should be non-empty")
+	}
+	if len(st.Ports) != 10 {
+		t.Errorf("len(Ports) = %d, want 10", len(st.Ports))
+	}
+	// Transcribed from gs110emx_pvid.html: every port is PVID 1.
+	if st.Pvids[1] != 1 {
+		t.Errorf("Pvids[1] = %d, want 1", st.Pvids[1])
+	}
+	if len(st.Poe) != 0 {
+		t.Errorf("len(Poe) = %d, want 0 (registry PoEPortCount 0)", len(st.Poe))
+	}
+}
+
+func TestSeedGS110EMXPortLinkAndSpeed(t *testing.T) {
+	st := SeedGS110EMX()
+	wantLink := map[int]bool{1: false, 2: false, 3: false, 4: false, 5: false, 6: true, 7: false, 8: true, 9: true, 10: true}
+	wantSpeed := map[int]int{6: 100, 8: 1000, 9: 10000, 10: 10000}
+	for port := 1; port <= 10; port++ {
+		p, ok := st.Ports[port]
+		if !ok {
+			t.Fatalf("Ports[%d] missing", port)
+		}
+		if p.Link != wantLink[port] {
+			t.Errorf("Ports[%d].Link = %v, want %v", port, p.Link, wantLink[port])
+		}
+		if p.Speed != wantSpeed[port] {
+			t.Errorf("Ports[%d].Speed = %d, want %d", port, p.Speed, wantSpeed[port])
+		}
+	}
+	if st.Ports[8].Description == nil || *st.Ports[8].Description != "rumpus" {
+		t.Errorf("Ports[8].Description = %v, want \"rumpus\"", st.Ports[8].Description)
+	}
+}
+
+func TestSeedGS110EMXNsdpExtraFields(t *testing.T) {
+	st := SeedGS110EMX()
+	if st.NsdpMac != [6]byte{0xbc, 0xa5, 0x11, 0xb8, 0xec, 0xf1} {
+		t.Errorf("NsdpMac = %x, want bc:a5:11:b8:ec:f1", st.NsdpMac)
+	}
+	if st.NsdpQosEngine == nil || *st.NsdpQosEngine != 1 {
+		t.Errorf("NsdpQosEngine = %v, want 1", st.NsdpQosEngine)
+	}
+	if st.NsdpPortMirroringDest == nil || *st.NsdpPortMirroringDest != 10 {
+		t.Errorf("NsdpPortMirroringDest = %v, want 10", st.NsdpPortMirroringDest)
+	}
+	if want := (map[int]bool{1: true, 2: true}); !reflect.DeepEqual(st.NsdpPortMirroringSources, want) {
+		t.Errorf("NsdpPortMirroringSources = %v, want %v", st.NsdpPortMirroringSources, want)
+	}
+	if st.NsdpIgmpSnoopingEnabled == nil || !*st.NsdpIgmpSnoopingEnabled {
+		t.Error("NsdpIgmpSnoopingEnabled should be true")
+	}
+	if st.NsdpIgmpSnoopingVlan == nil || *st.NsdpIgmpSnoopingVlan != 90 {
+		t.Errorf("NsdpIgmpSnoopingVlan = %v, want 90", st.NsdpIgmpSnoopingVlan)
+	}
+	if st.NsdpBroadcastFiltering == nil || !*st.NsdpBroadcastFiltering {
+		t.Error("NsdpBroadcastFiltering should be true")
+	}
+	if st.NsdpLoopDetection == nil || !*st.NsdpLoopDetection {
+		t.Error("NsdpLoopDetection should be true")
+	}
+}
+
+// TestSeedGS305EPHasIncompleteNsdpIdentity pins the GENUINE gap in the
+// pinned Python reference (D-NSDP §7.3/§10.6#7): seed_gs305ep passes no
+// model_name/serial/firmware/hostname/nsdp_mac/nsdp_password/QoS/
+// mirroring/IGMP/broadcast/loop-detection kwargs at all, so every one of
+// them -- and Mgmt -- must still read back exactly NewState's own
+// defaults. A seed that "helpfully" filled these in would silently diverge
+// from this pin and defeat a future Go<->Python cross-fake-equivalence
+// test; this test exists specifically to catch that regression.
+func TestSeedGS305EPHasIncompleteNsdpIdentity(t *testing.T) {
+	st := SeedGS305EP()
+	blank := NewState("gs305ep")
+
+	if st.ModelName != blank.ModelName {
+		t.Errorf("ModelName = %q, want %q (NewState default)", st.ModelName, blank.ModelName)
+	}
+	if st.Serial != blank.Serial {
+		t.Errorf("Serial = %q, want %q (NewState default)", st.Serial, blank.Serial)
+	}
+	if st.Firmware != blank.Firmware {
+		t.Errorf("Firmware = %q, want %q (NewState default)", st.Firmware, blank.Firmware)
+	}
+	if st.Hostname != blank.Hostname {
+		t.Errorf("Hostname = %q, want %q (NewState default)", st.Hostname, blank.Hostname)
+	}
+	if st.NsdpMac != blank.NsdpMac {
+		t.Errorf("NsdpMac = %x, want %x (NewState default)", st.NsdpMac, blank.NsdpMac)
+	}
+	if st.NsdpPassword != blank.NsdpPassword {
+		t.Errorf("NsdpPassword = %q, want %q (NewState default)", st.NsdpPassword, blank.NsdpPassword)
+	}
+	if st.Mgmt != blank.Mgmt {
+		t.Errorf("Mgmt = %+v, want %+v (NewState default)", st.Mgmt, blank.Mgmt)
+	}
+	if st.NsdpQosEngine != nil || st.NsdpPortMirroringDest != nil || st.NsdpIgmpSnoopingEnabled != nil ||
+		st.NsdpIgmpSnoopingVlan != nil || st.NsdpBroadcastFiltering != nil || st.NsdpLoopDetection != nil {
+		t.Error("every NSDP-extra field should be nil/unseeded on gs305ep")
+	}
+}
+
+func TestSeedGS305EPPortsVlansPoe(t *testing.T) {
+	st := SeedGS305EP()
+	if len(st.Ports) != 5 {
+		t.Errorf("len(Ports) = %d, want 5", len(st.Ports))
+	}
+	if st.Ports[3].Admin {
+		t.Error("Ports[3].Admin should be false")
+	}
+	if !st.Ports[1].Link || st.Ports[1].Speed != 1000 {
+		t.Errorf("Ports[1] = %+v, want Link=true Speed=1000", st.Ports[1])
+	}
+	if want := (map[int]bool{1: true, 2: true, 3: true, 4: true, 5: true}); !reflect.DeepEqual(st.Vlans[1].Member, want) {
+		t.Errorf("Vlans[1].Member = %v, want %v", st.Vlans[1].Member, want)
+	}
+	if st.Vlans[1].Name != "default" {
+		t.Errorf("Vlans[1].Name = %q, want default", st.Vlans[1].Name)
+	}
+	if st.Vlans[90].Name != "iot" {
+		t.Errorf("Vlans[90].Name = %q, want iot", st.Vlans[90].Name)
+	}
+	if len(st.Poe) != 4 {
+		t.Errorf("len(Poe) = %d, want 4", len(st.Poe))
+	}
+	if st.Poe[1].PowerMw != 12_800 {
+		t.Errorf("Poe[1].PowerMw = %d, want 12800", st.Poe[1].PowerMw)
+	}
+}
+
+func TestSeedGS105PEHasPlusShape(t *testing.T) {
+	st := SeedGS105PE()
+	if st.ModelKey != "gs105pe" {
+		t.Errorf("ModelKey = %q, want gs105pe", st.ModelKey)
+	}
+	if len(st.Ports) != 5 {
+		t.Errorf("len(Ports) = %d, want 5", len(st.Ports))
+	}
+	if len(st.Poe) != 0 {
+		t.Errorf("len(Poe) = %d, want 0 (registry PoEPortCount 0 -- pass-through only)", len(st.Poe))
+	}
+	if len(st.Macs) != 0 || len(st.Lldp) != 0 || len(st.Sensors) != 0 {
+		t.Error("gs105pe should have no MAC/FDB, LLDP, or box sensors over any face")
+	}
+}
+
+func TestSeedGS105PEPortMirroringOffFixture(t *testing.T) {
+	st := SeedGS105PE()
+	// dest=0/no sources: the exact "off" shape that historically exposed a
+	// fixed-width PORT_MIRRORING parser bug (D-NSDP §3.9/§10.6#3) -- pinned
+	// here as a regression fixture, per SeedGS105PE's own doc comment.
+	if st.NsdpPortMirroringDest == nil || *st.NsdpPortMirroringDest != 0 {
+		t.Errorf("NsdpPortMirroringDest = %v, want a non-nil 0", st.NsdpPortMirroringDest)
+	}
+	if len(st.NsdpPortMirroringSources) != 0 {
+		t.Errorf("NsdpPortMirroringSources = %v, want empty", st.NsdpPortMirroringSources)
+	}
+}
+
+func TestSeedGS105PEMgmtAndVlans(t *testing.T) {
+	st := SeedGS105PE()
+	wantMgmt := MgmtSim{Address: "10.1.5.30", Netmask: "255.255.255.0", Gateway: "10.1.5.1", Mode: "dhcp"}
+	if st.Mgmt != wantMgmt {
+		t.Errorf("Mgmt = %+v, want %+v", st.Mgmt, wantMgmt)
+	}
+	if want := (map[int]int{1: 41, 2: 41, 3: 90, 4: 41, 5: 1}); !reflect.DeepEqual(st.Pvids, want) {
+		t.Errorf("Pvids = %v, want %v", st.Pvids, want)
+	}
+	if want := (map[int]bool{3: true, 5: true}); !reflect.DeepEqual(st.Vlans[90].Member, want) {
+		t.Errorf("Vlans[90].Member = %v, want %v", st.Vlans[90].Member, want)
+	}
+}
+
 // --- BuildState ---------------------------------------------------------------
 
+// TestBuildStateDispatchesSeededModels covers every model with a
+// hand-authored seed: the five SNMP-capable models from slice 02, plus (as
+// of slice 05) the three NSDP/HTTP-only Plus models gs110emx/gs305ep/
+// gs105pe, whose own seeds land in this slice -- see
+// TestBuildStateBlankForUnseededModels below for this list's counterpart.
 func TestBuildStateDispatchesSeededModels(t *testing.T) {
-	for _, key := range []string{"gsm7252ps", "gsm7228ps", "m4300-24x", "m4300-16x", "gs728tpp"} {
+	for _, key := range []string{
+		"gsm7252ps", "gsm7228ps", "m4300-24x", "m4300-16x", "gs728tpp",
+		"gs110emx", "gs305ep", "gs105pe",
+	} {
 		st := BuildState(key)
 		if st.ModelKey != key {
 			t.Errorf("BuildState(%q).ModelKey = %q", key, st.ModelKey)
@@ -903,13 +1103,15 @@ func TestBuildStateDispatchesSeededModels(t *testing.T) {
 	}
 }
 
-// TestBuildStateBlankForUnseededModels covers both the NSDP/HTTP-only Plus
-// models (whose own seeds are Slice 05/06 scope, not this one) and a
-// wholly-unregistered model key -- both get a blank-but-valid State,
-// mirroring the Python reference's _build_state (which never validates the
-// key itself; that is model.GetModel's job at a higher layer).
+// TestBuildStateBlankForUnseededModels covers a wholly-unregistered model
+// key: it gets a blank-but-valid State, mirroring the Python reference's
+// _build_state (which never validates the key itself; that is
+// model.GetModel's job at a higher layer). gs110emx/gs305ep/gs105pe used to
+// belong in this list (their seeds were out of scope before slice 05); now
+// that SeedGS110EMX/SeedGS305EP/SeedGS105PE exist, they instead assert
+// non-blank in TestBuildStateDispatchesSeededModels above.
 func TestBuildStateBlankForUnseededModels(t *testing.T) {
-	for _, key := range []string{"gs110emx", "gs305ep", "gs105pe", "not-a-real-model"} {
+	for _, key := range []string{"not-a-real-model"} {
 		st := BuildState(key)
 		if st.ModelKey != key {
 			t.Errorf("BuildState(%q).ModelKey = %q", key, st.ModelKey)
