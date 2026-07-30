@@ -7,6 +7,7 @@ package snmp
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -931,5 +932,303 @@ func ParseMacs(fdb, bridgePorts []Row) ([]model.MacEntry, error) {
 		}
 		return result[i].Mac < result[j].Mac
 	})
+	return result, nil
+}
+
+// errSNMP wraps model.ErrSNMP with a plain message and no OID, for cases
+// where there is no single offending row to name -- e.g. an entire
+// tracked column missing for a given (group, port) key, as opposed to one
+// malformed row (which uses errOID instead).
+func errSNMP(format string, a ...any) error {
+	return fmt.Errorf("%s: %w", fmt.Sprintf(format, a...), model.ErrSNMP)
+}
+
+// DetectMap maps the pethPsePortDetectionStatus INTEGER value (RFC 3621) to
+// model.PoEDetect. A value outside this map (including any never-seen
+// future enum member) is model.PoEDetectUnknown at the ParsePoe call site,
+// never a zero-value PoEDetect("").
+var DetectMap = map[int64]model.PoEDetect{
+	1: model.PoEDetectDisabled,
+	2: model.PoEDetectSearching,
+	3: model.PoEDetectDelivering,
+	4: model.PoEDetectFault,
+}
+
+// poeKey groups pethPsePortTable rows by their (group, port)
+// instance-suffix components -- the last two of the three
+// "<column>.<group>.<port>" suffix components.
+type poeKey struct{ group, port int }
+
+// ParsePoe builds PoE port status from RFC3621 pethPsePortTable + a vendor
+// per-port mW column.
+//
+// status is a walk of pethPsePortTable; only columns 3 (admin) and 6
+// (detect) are honoured -- never column 1. A row present under the table
+// prefix whose instance suffix isn't exactly 3 parts ("<column>.<group>.
+// <port>") is SILENTLY SKIPPED, unlike every other parser in this file
+// (which treats wrong arity as drift and errors): D-SNMP §3.15 pins this
+// asymmetry deliberately. A port present in the walk but missing either
+// tracked column IS drift and returns an error wrapping model.ErrSNMP
+// naming the port (no single offending row to name an OID from, since the
+// error is about an absent column, not a malformed one).
+//
+// powerMw is the vendor per-port power walk (e.g. VendorOids.PoEPowerMw),
+// matched to a port by the FINAL OID suffix component only (no base-OID
+// prefix check); a row whose final suffix component or Value isn't a
+// plain int64 is SILENTLY SKIPPED (never an error) -- mirroring Python's
+// bare try/except ValueError: continue. A port without a vendor mW row
+// gets PowerMw == nil, never a fabricated 0 (this is how a no-vendor-OID
+// model such as the gs728tpp, which always passes an empty powerMw walk,
+// is represented).
+func ParsePoe(status, powerMw []Row) ([]model.PoEStatus, error) {
+	prefix := PethPsePortTable + "."
+	cols := make(map[poeKey]map[int]int64)
+	for _, row := range status {
+		if !strings.HasPrefix(row.OID, prefix) {
+			continue
+		}
+		parts := strings.Split(row.OID[len(prefix):], ".")
+		if len(parts) != 3 {
+			continue // wrong arity: silently skipped, per D-SNMP §3.15.
+		}
+		column, err := strconv.Atoi(parts[0])
+		if err != nil {
+			// Mirrors a deliberate, untested corner of the Python source:
+			// int(parts[0]) sits OUTSIDE the try/except that wraps the
+			// group/port/value conversion below, so a non-integer column
+			// component there is an uncaught ValueError, not an
+			// SnmpError. Preserved here as a plain (non-model.ErrSNMP)
+			// error, following the same precedent as
+			// formatMacBytesFromOIDParts.
+			return nil, fmt.Errorf("non-integer PoE column %q at %s: %w", parts[0], row.OID, err)
+		}
+		if column != 3 && column != 6 {
+			continue
+		}
+		group, gerr := strconv.Atoi(parts[1])
+		port, perr := strconv.Atoi(parts[2])
+		value, ok := row.Value.(int64)
+		if gerr != nil || perr != nil || !ok {
+			return nil, errOID(row.OID, "non-integer PoE value %s", formatValue(row.Value))
+		}
+		key := poeKey{group, port}
+		if cols[key] == nil {
+			cols[key] = make(map[int]int64)
+		}
+		cols[key][column] = value
+	}
+
+	// Vendor mW keyed by the FINAL suffix component only; non-int
+	// component or value is silently skipped, never an error.
+	mw := make(map[int]int64)
+	for _, row := range powerMw {
+		parts := strings.Split(row.OID, ".")
+		idx, err := strconv.Atoi(parts[len(parts)-1])
+		if err != nil {
+			continue
+		}
+		v, ok := row.Value.(int64)
+		if !ok {
+			continue
+		}
+		mw[idx] = v
+	}
+
+	keys := make([]poeKey, 0, len(cols))
+	for k := range cols {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].group != keys[j].group {
+			return keys[i].group < keys[j].group
+		}
+		return keys[i].port < keys[j].port
+	})
+
+	result := make([]model.PoEStatus, 0, len(keys))
+	for _, k := range keys {
+		c := cols[k]
+		admin, ok := c[3]
+		if !ok {
+			return nil, errSNMP("PoE port %d missing admin (col 3)", k.port)
+		}
+		detectVal, ok := c[6]
+		if !ok {
+			return nil, errSNMP("PoE port %d missing detect (col 6)", k.port)
+		}
+		detect, ok := DetectMap[detectVal]
+		if !ok {
+			detect = model.PoEDetectUnknown
+		}
+		var powerMwPtr *int
+		if v, ok := mw[k.port]; ok {
+			powerMwPtr = model.Ptr(int(v))
+		}
+		result = append(result, model.PoEStatus{
+			Port:         k.port,
+			AdminEnabled: admin == 1,
+			Detect:       detect,
+			PowerMw:      powerMwPtr,
+		})
+	}
+	return result, nil
+}
+
+// SensorColumn is one vendor box-sensor column walk (e.g. fan RPM, PSU
+// power, temperature): Kind/Unit label the whole column (e.g. "fan",
+// "RPM"), and Rows is that column's walk-discovered rows. Sensor indices
+// come from each row's OID, never hardcoded, since they differ per model.
+type SensorColumn struct {
+	Kind, Unit string
+	Rows       []Row
+}
+
+// parseSensorReading extracts an integer box-sensor reading from a row's
+// Value, accepting either a plain int64 (the usual value-normalization
+// representation for a Gauge32/Integer wire value) OR a numeric string.
+// Some vendor sensor readings have been observed on the wire as a
+// STRING-typed OCTET STRING containing plain decimal digits (e.g. "3500")
+// rather than an INTEGER/Gauge32 -- Python's int(value) accepts both
+// transparently (a str or an int alike); this mirrors that dual
+// acceptance explicitly, since Go's type switch can't coerce silently the
+// way Python's int() does. Returns ok=false for anything else (including
+// a non-numeric string, e.g. "warm" or the "Not Supported" placeholder
+// handled separately by the caller).
+func parseSensorReading(v any) (int64, bool) {
+	switch t := v.(type) {
+	case int64:
+		return t, true
+	case string:
+		n, err := strconv.ParseInt(t, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
+// ParseBoxSensors builds box sensors from walk-discovered Netgear vendor
+// columns.
+//
+// Each SensorColumn is one vendor column walk (fan RPM, PSU power,
+// temperature, ...). The instance is the LAST OID component, used
+// verbatim (as a string) in the sensor's Name. The literal string
+// "Not Supported" is Netgear's placeholder for an unpopulated slot and is
+// skipped, not an error; any other value that isn't a plain int64 or
+// numeric string (see parseSensorReading) is present-but-malformed and
+// returns an error wrapping model.ErrSNMP naming the kind, the offending
+// value, and the OID.
+func ParseBoxSensors(cols []SensorColumn) ([]model.Sensor, error) {
+	result := make([]model.Sensor, 0)
+	for _, col := range cols {
+		for _, row := range col.Rows {
+			parts := strings.Split(row.OID, ".")
+			instance := parts[len(parts)-1]
+			if s, ok := row.Value.(string); ok && s == "Not Supported" {
+				continue
+			}
+			value, ok := parseSensorReading(row.Value)
+			if !ok {
+				return nil, errOID(row.OID, "non-integer %s reading %s", col.Kind, formatValue(row.Value))
+			}
+			result = append(result, model.Sensor{
+				Name:  col.Kind + instance,
+				Kind:  col.Kind,
+				Value: float64(value),
+				Unit:  col.Unit,
+			})
+		}
+	}
+	return result, nil
+}
+
+// entitySensorKindOf maps the entPhysicalClass INTEGER value to the Sensor
+// Kind label; any other class (chassis, module/slot, port, ...) is
+// ignored by ParseEntitySensors.
+var entitySensorKindOf = map[int64]string{
+	int64(EntClassPowerSupply): "power",
+	int64(EntClassFan):         "fan",
+}
+
+// canonSensorName canonicalizes an ENTITY-MIB component name to the
+// box-sensor label the HTTP DiagnosticsUnitList backend uses, so the two
+// backends' sensor NAMES are identical (only the value/unit differ -- SNMP
+// has no live reading here). entPhysicalName renders a PSU as
+// "Main PowerSupply"/"Redundant PowerSupply"; the web UI labels the same
+// component "Main PS"/"Redundant PS". Abbreviating "PowerSupply" -> "PS"
+// (with or without an internal space) unifies them; a fan name ("Fan1")
+// already matches and is returned unchanged.
+func canonSensorName(name string) string {
+	name = strings.ReplaceAll(name, "Power Supply", "PS")
+	name = strings.ReplaceAll(name, "PowerSupply", "PS")
+	return name
+}
+
+// ParseEntitySensors builds box sensors from the standard ENTITY-MIB
+// physical inventory -- the fallback path for a model whose SNMP agent
+// implements NO Netgear vendor OIDs (verified: the GS728TPP).
+// entPhysicalClass (6=powerSupply, 7=fan) identifies each row;
+// entPhysicalName, falling back to entPhysicalDescr, names it. This is
+// INVENTORY ONLY: the switch exposes NO live sensor value/status anywhere
+// in SNMP (ENTITY-SENSOR-MIB and the vendor tree both answer
+// noSuchObject on real hardware), so each Sensor carries Value ==
+// math.NaN() and Unit == "inventory" -- the component is honestly
+// reported as present without a fabricated reading. Callers must compare
+// with math.IsNaN, never ==. (HTTP DOES expose a health status for these
+// same components -- a real per-backend difference, not a parser bug.)
+//
+// Rows are matched by their shared entPhysicalIndex (the trailing OID
+// component, sorted ascending for deterministic output). Only
+// powerSupply/fan classes become sensors; chassis/module/port rows are
+// ignored. A non-integer class value present under the class column is
+// drift and returns an error wrapping model.ErrSNMP naming the offending
+// OID (via IndexIntColumn).
+func ParseEntitySensors(classRows, nameRows, descrRows []Row) ([]model.Sensor, error) {
+	names, err := IndexStrColumn(nameRows, EntPhysicalName)
+	if err != nil {
+		return nil, err
+	}
+	descrs, err := IndexStrColumn(descrRows, EntPhysicalDescr)
+	if err != nil {
+		return nil, err
+	}
+	classes, err := IndexIntColumn(classRows, EntPhysicalClass)
+	if err != nil {
+		return nil, err
+	}
+
+	idxs := make([]int, 0, len(classes))
+	for idx := range classes {
+		idxs = append(idxs, idx)
+	}
+	sort.Ints(idxs)
+
+	result := make([]model.Sensor, 0, len(idxs))
+	for _, idx := range idxs {
+		kind, ok := entitySensorKindOf[classes[idx]]
+		if !ok {
+			continue
+		}
+		// name/descr/index fallback chain: names.get(idx) or
+		// descrs.get(idx) or f"{kind}{idx}" -- a Go map's zero value for
+		// a missing key is "" here, matching Python's falsy-empty-string
+		// behavior for both an ABSENT and a present-but-empty entry, so
+		// no separate presence check is needed.
+		name := names[idx]
+		if name == "" {
+			name = descrs[idx]
+		}
+		if name == "" {
+			name = fmt.Sprintf("%s%d", kind, idx)
+		}
+		result = append(result, model.Sensor{
+			Name:  canonSensorName(name),
+			Kind:  kind,
+			Value: math.NaN(),
+			Unit:  "inventory",
+		})
+	}
 	return result, nil
 }
