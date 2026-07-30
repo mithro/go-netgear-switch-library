@@ -156,11 +156,18 @@ var models = []SwitchModel{
 		Verified:       true,
 	},
 	{
-		// UNVERIFIED-pending-capture: no real-hardware capture exists for
-		// this model (its seed is illustrative/structural only). The
-		// smart-managed-pro (4526.11) vendor family is a spec-guess from
-		// the same 4526 subtree that turned out WRONG on gs728tpp, so its
-		// vendor sensor/PoE-power readings are unconfirmed.
+		// VERIFIED 2026-07-30 against real hardware: the S3300-52X-PoE+
+		// (sw-netgear-s3300-1, sysObjectID 4526.100.10.19). The live
+		// capture confirmed the smart-managed-pro (4526.11) vendor family
+		// is correct here -- unlike gs728tpp (which had zero 4526 OIDs),
+		// this switch's fan/temp/PoE vendor data really does live under
+		// 4526.11.43, and all 9 read ops cross-verified SNMP<->mock. Its
+		// sysDescr "S3300-52X-PoE+" is deliberately unmatchable text (same
+		// shape as the unregistered S3300-28X), so it is auto-detected via
+		// the sysObjectID map instead. Registered key is gsm7228ps;
+		// "s3300" is an alias (see modelAliases). Note 4526.100.10.19 is
+		// the product-ID OID, distinct from the 4526.11 vendor DATA
+		// subtree.
 		Key:            "gsm7228ps",
 		DisplayName:    "GSM7228PS (S3300)",
 		Class:          ClassSmartManagedPro,
@@ -168,7 +175,7 @@ var models = []SwitchModel{
 		PoEPortCount:   48,
 		Backends:       []Backend{BackendSNMP, BackendHTTP, BackendSSH, BackendTelnet},
 		SNMPVendorBase: vendorBaseSmartManagedPro,
-		Verified:       false,
+		Verified:       true,
 	},
 	{
 		Key:            "gs110emx",

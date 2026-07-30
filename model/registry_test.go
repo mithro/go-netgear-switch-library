@@ -66,7 +66,7 @@ var wantModelsInOrder = []wantModel{
 		poePortCount: 48,
 		backends:     []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendSSH, model.BackendTelnet},
 		vendorBase:   "1.3.6.1.4.1.4526.11",
-		verified:     false,
+		verified:     true,
 		hasMACTable:  true,
 	},
 	{
@@ -321,8 +321,11 @@ func TestModelsExcludesAliases(t *testing.T) {
 func TestGetModelUnverifiedFlags(t *testing.T) {
 	// Spot-check the "honesty flag" models called out in registry.py: no
 	// real-hardware capture exists for these, so verified must be false
-	// even though they have full spec-derived data.
-	for _, key := range []string{"gsm7228ps", "m7300", "xs748t"} {
+	// even though they have full spec-derived data. gsm7228ps was in this
+	// group until a real hardware capture on 2026-07-30 resolved its OID
+	// family and confirmed all read ops -- it is now verified=true and is
+	// deliberately NOT in this list (see TestGetModelGSM7228PSVerified).
+	for _, key := range []string{"m7300", "xs748t"} {
 		m, err := model.GetModel(key)
 		if err != nil {
 			t.Fatalf("GetModel(%s) error: %v", key, err)
@@ -330,5 +333,21 @@ func TestGetModelUnverifiedFlags(t *testing.T) {
 		if m.Verified {
 			t.Errorf("%s: Verified = true, want false (unverified-pending-capture)", key)
 		}
+	}
+}
+
+// TestGetModelGSM7228PSVerified verifies gsm7228ps is Verified == true,
+// matching registry.py's _model("gsm7228ps", ...) call (no verified=
+// kwarg passed, so the SwitchModel dataclass default `verified: bool =
+// True` applies) and its comment documenting a 2026-07-30 real-hardware
+// capture that confirmed the 4526.11 (smart-managed-pro) vendor OID
+// family and cross-verified all 9 read ops.
+func TestGetModelGSM7228PSVerified(t *testing.T) {
+	m, err := model.GetModel("gsm7228ps")
+	if err != nil {
+		t.Fatalf("GetModel(gsm7228ps) error: %v", err)
+	}
+	if !m.Verified {
+		t.Error("gsm7228ps: Verified = false, want true (hardware-verified 2026-07-30)")
 	}
 }
