@@ -58,42 +58,6 @@ func resolveVendorOids(m *model.SwitchModel) *snmp.VendorOids {
 	return &vo
 }
 
-// vlanBitmapWidth is the wire byte-width of model's dot1q VLAN egress/
-// untagged bitmaps: max(8, ceil(port_count/8)). Ported from
-// protocols/snmp/write.vlan_bitmap_width (Python); this package owns the Go
-// copy per the task brief (that helper lives in a different Python module
-// than state.py, but has no Go home yet outside this package).
-func vlanBitmapWidth(m *model.SwitchModel) int {
-	w := (m.PortCount + 7) / 8
-	if w < 8 {
-		return 8
-	}
-	return w
-}
-
-// EncodePortBitmap is the inverse of snmp.DecodePortBitmap: a port set ->
-// a wire-format bitmap. Bit 7 (MSB) of byte 0 is port 1; byteIdx, bit =
-// divmod(port-1, 8). The buffer grows past widthBytes if a port number
-// needs it -- never pre-sized to a model's port count, so a bogus
-// out-of-range port set still encodes rather than silently truncating.
-// Only ports with a true value in the set are encoded; a false-valued or
-// absent key is simply not a member.
-func EncodePortBitmap(ports map[int]bool, widthBytes int) []byte {
-	data := make([]byte, widthBytes)
-	for port, present := range ports {
-		if !present {
-			continue
-		}
-		byteIdx := (port - 1) / 8
-		bit := (port - 1) % 8
-		for byteIdx >= len(data) {
-			data = append(data, 0)
-		}
-		data[byteIdx] |= 0x80 >> uint(bit)
-	}
-	return data
-}
-
 // OIDMap projects this state onto the full numeric OID -> (type, value)
 // view, built directly from the exact OID layouts in package snmp so a
 // protocol face can serve it. See D-VIRT §1.4 for the full conditional-
@@ -101,7 +65,7 @@ func EncodePortBitmap(ports map[int]bool, widthBytes int) []byte {
 func (s *State) OIDMap() map[string]OIDEntry {
 	m := s.mustModel()
 	v := resolveVendorOids(m)
-	vlanWidth := vlanBitmapWidth(m)
+	vlanWidth := snmp.VlanBitmapWidth(m.PortCount)
 	out := make(map[string]OIDEntry)
 
 	// dot1dBaseBridgeAddress.0: reuses NsdpMac -- on real hardware the SNMP
@@ -172,8 +136,8 @@ func (s *State) OIDMap() map[string]OIDEntry {
 
 	for vid, vsim := range s.Vlans {
 		out[colKey(snmp.Dot1qVlanStaticName, vid)] = entry("OCTETSTR", vsim.Name)
-		out[colKey(snmp.Dot1qVlanStaticEgress, vid)] = entry("OCTETSTR", string(EncodePortBitmap(vsim.Member, vlanWidth)))
-		out[colKey(snmp.Dot1qVlanStaticUntagged, vid)] = entry("OCTETSTR", string(EncodePortBitmap(vsim.Untagged, vlanWidth)))
+		out[colKey(snmp.Dot1qVlanStaticEgress, vid)] = entry("OCTETSTR", string(snmp.EncodePortBitmap(sliceFromPortSet(vsim.Member), vlanWidth)))
+		out[colKey(snmp.Dot1qVlanStaticUntagged, vid)] = entry("OCTETSTR", string(snmp.EncodePortBitmap(sliceFromPortSet(vsim.Untagged), vlanWidth)))
 	}
 
 	for port, pv := range s.Pvids {

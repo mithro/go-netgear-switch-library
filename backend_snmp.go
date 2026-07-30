@@ -27,6 +27,7 @@ import (
 
 func init() {
 	RegisterBackend(model.BackendSNMP, buildSNMPReader)
+	RegisterWriteBackend(model.BackendSNMP, buildSNMPWriter)
 }
 
 // requireSNMPCommunity mirrors Python's _require_community: a nil
@@ -82,4 +83,66 @@ func buildSNMPReader(sw *Switch) (BackendReader, error) {
 		return nil, err
 	}
 	return reader, nil
+}
+
+// requireSNMPWriteCommunity mirrors Python's _require_write_community: a
+// nil (unconfigured) OR EMPTY-STRING write community is rejected with an
+// error wrapping model.ErrCredential naming host, exactly like Python's
+// `CredentialError(f"no SNMP write community configured for {host!r}")`
+// (`if not community:` is Python's falsy check, which is true for both None
+// and "").
+//
+// This is DELIBERATELY a separate function from requireSNMPCommunity (the
+// read-side gate, which accepts "" as configured) -- D-WR §3.4/trap #9:
+// unifying the two would silently break the `snmpset -c ""` regression the
+// write side must still reject.
+func requireSNMPWriteCommunity(host string, community *string) (string, error) {
+	if community == nil || *community == "" {
+		return "", fmt.Errorf("no SNMP write community configured for %q: %w", host, model.ErrCredential)
+	}
+	return *community, nil
+}
+
+// buildSNMPWriteClient returns sw's injected snmp.WriteClient as-is, or
+// resolves the write community (via sw.snmpWriteCommunity's lazy,
+// once-only cell) and builds a default one via
+// snmp.NewGoSNMPClient(sw.host, community) -- mirroring Python's
+// _writer_for's SNMP branch (D-WR §3.2/§3.4). An injected write client
+// bypasses community resolution entirely, exactly like the read side's
+// buildSNMPClient. A resolver error (e.g. an unresolvable secret spec) or a
+// requireSNMPWriteCommunity gate failure propagates uncaught -- this is
+// where a CredentialError-equivalent surfaces on first write, never cached
+// as resolved (D-WR §3.2 point 2, D-FAC trap #2).
+func buildSNMPWriteClient(sw *Switch) (snmp.WriteClient, error) {
+	if sw.snmpWriteClient != nil {
+		return sw.snmpWriteClient, nil
+	}
+	community, err := sw.snmpWriteCommunity.resolve()
+	if err != nil {
+		return nil, err
+	}
+	requiredCommunity, err := requireSNMPWriteCommunity(sw.host, community)
+	if err != nil {
+		return nil, err
+	}
+	return snmp.NewGoSNMPClient(sw.host, requiredCommunity), nil
+}
+
+// buildSNMPWriter is the WriteBackendBuilder registered for
+// model.BackendSNMP: it builds (or reuses an injected) snmp.WriteClient via
+// buildSNMPWriteClient, then wraps it in a *snmp.Writer via snmp.NewWriter
+// (passing sw.protectedPorts through, D-WR §2.4), which itself returns an
+// error wrapping model.ErrUnsupportedCapability if sw.model has no SNMP
+// backend -- needing no further gate here. *snmp.Writer already satisfies
+// the BackendWriter interface verbatim, so no adapter shim is needed.
+func buildSNMPWriter(sw *Switch) (BackendWriter, error) {
+	client, err := buildSNMPWriteClient(sw)
+	if err != nil {
+		return nil, err
+	}
+	writer, err := snmp.NewWriter(client, sw.model, snmp.WithProtectedPorts(sw.protectedPorts...))
+	if err != nil {
+		return nil, err
+	}
+	return writer, nil
 }

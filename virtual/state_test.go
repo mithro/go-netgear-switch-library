@@ -442,39 +442,26 @@ func TestVlanBitmapWidthFormula(t *testing.T) {
 		if want < 8 {
 			want = 8
 		}
-		if got := vlanBitmapWidth(m); got != want {
-			t.Errorf("[%s] vlanBitmapWidth = %d, want %d", key, got, want)
+		if got := snmp.VlanBitmapWidth(m.PortCount); got != want {
+			t.Errorf("[%s] snmp.VlanBitmapWidth = %d, want %d", key, got, want)
 		}
 	}
 }
 
-func TestEncodePortBitmapMSBFirstAndGrowth(t *testing.T) {
-	// Port 1 = bit 7 (MSB) of byte 0; port 3 = bit 5 of byte 0.
-	got := EncodePortBitmap(map[int]bool{1: true, 3: true}, 1)
-	want := []byte{0b10100000}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("EncodePortBitmap MSB-first mismatch (-want +got):\n%s", diff)
+// TestSliceFromPortSetSortsAndExcludesFalseValues pins sliceFromPortSet's
+// contract: only true-valued map entries are members, and the result is
+// sorted ascending -- the composition with snmp.EncodePortBitmap that
+// OIDMap relies on for the VLAN egress/untagged columns. The underlying
+// MSB-first bit-packing/growth logic itself is pinned directly against
+// snmp.EncodePortBitmap in the snmp package's own tests.
+func TestSliceFromPortSetSortsAndExcludesFalseValues(t *testing.T) {
+	got := sliceFromPortSet(map[int]bool{25: true, 1: true, 2: false, 10: true})
+	if diff := cmp.Diff([]int{1, 10, 25}, got); diff != "" {
+		t.Errorf("sliceFromPortSet mismatch (-want +got):\n%s", diff)
 	}
 
-	// Port 9 needs byte index 1; a 1-byte-wide request must grow.
-	got = EncodePortBitmap(map[int]bool{9: true}, 1)
-	if len(got) != 2 {
-		t.Fatalf("expected buffer to grow to 2 bytes for port 9 at width 1, got len %d", len(got))
-	}
-	want = []byte{0, 0b10000000}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("EncodePortBitmap growth mismatch (-want +got):\n%s", diff)
-	}
-
-	// A false-valued entry is not a member.
-	got = EncodePortBitmap(map[int]bool{1: true, 2: false}, 1)
-	want = []byte{0b10000000}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("EncodePortBitmap false-valued-entry mismatch (-want +got):\n%s", diff)
-	}
-
-	// Round-trip through DecodePortBitmap.
-	roundTrip := EncodePortBitmap(map[int]bool{1: true, 2: true, 10: true, 25: true}, 8)
+	// Round-trip through snmp.EncodePortBitmap/DecodePortBitmap.
+	roundTrip := snmp.EncodePortBitmap(sliceFromPortSet(map[int]bool{1: true, 2: true, 10: true, 25: true}), 8)
 	if diff := cmp.Diff([]int{1, 2, 10, 25}, snmp.DecodePortBitmap(roundTrip)); diff != "" {
 		t.Errorf("round-trip mismatch (-want +got):\n%s", diff)
 	}
