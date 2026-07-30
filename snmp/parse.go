@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/mithro/go-netgear-switch-library/model"
@@ -538,5 +539,379 @@ func ParsePvids(rows, ifTypes []Row) ([]model.Pvid, error) {
 	for _, p := range ports {
 		result = append(result, model.Pvid{Port: p, Vlan: int(pvidMap[p])})
 	}
+	return result, nil
+}
+
+// formatMacBytesRaw renders b as an uppercase colon-hex MAC string, e.g.
+// []byte{0xC8, 0, 0x84, 0x89, 0x71, 0x70} -> "C8:00:84:89:71:70".
+func formatMacBytesRaw(b []byte) string {
+	parts := make([]string, len(b))
+	for i, v := range b {
+		parts[i] = fmt.Sprintf("%02X", v)
+	}
+	return strings.Join(parts, ":")
+}
+
+// formatMacBytesFromOIDParts renders a slice of decimal-ASCII OID index
+// components (the six trailing sub-identifiers of a dot1qTpFdbPort
+// instance, one decimal byte value per component) as an uppercase
+// colon-hex MAC string. Mirrors Python's _format_mac_bytes.
+//
+// A non-numeric component returns a plain (non-model.ErrSNMP-wrapped)
+// error: the Python source's _format_mac_bytes has no try/except around
+// its int(b) conversion, so a malformed byte there is an uncaught bare
+// ValueError there, not an SnmpError -- a deliberate, untested corner of
+// the source (no test exercises a non-numeric MAC-byte OID component) that
+// is preserved here rather than "fixed" into a wrapped error.
+func formatMacBytesFromOIDParts(parts []string) (string, error) {
+	b := make([]byte, len(parts))
+	for i, p := range parts {
+		v, err := strconv.Atoi(p)
+		if err != nil {
+			return "", fmt.Errorf("non-numeric MAC OID byte %q: %w", p, err)
+		}
+		b[i] = byte(v)
+	}
+	return formatMacBytesRaw(b), nil
+}
+
+// formatMacOctetString formats a raw 6-byte/6-char MAC-shaped OCTET
+// STRING value as "XX:XX:XX:XX:XX:XX", returning ok=false when value
+// isn't MAC-shaped (neither a 6-byte []byte nor a 6-char string).
+//
+// A string value is treated as raw bytes directly: Go's string is already
+// a byte sequence, unlike Python's str (a sequence of Unicode code
+// points), so no latin-1 decode/encode step is needed here, unlike the
+// Python source's _format_mac_octetstring -- the same reasoning
+// DecodePortBitmap's docstring applies to VLAN bitmaps.
+func formatMacOctetString(value any) (string, bool) {
+	var b []byte
+	switch v := value.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	default:
+		return "", false
+	}
+	if len(b) != 6 {
+		return "", false
+	}
+	return formatMacBytesRaw(b), true
+}
+
+// macFromASCIIText recognizes a MAC already rendered as 17-character ASCII
+// text "XX:XX:XX:XX:XX:XX" -- the M4300-24X quirk, where
+// dot1dBaseBridgeAddress arrives as human-readable colon-hex text instead
+// of 6 raw octets. Each of the 6 colon-separated parts must be exactly 2
+// hex characters (case-insensitive in; strconv.ParseUint accepts upper or
+// lower case); output is always uppercase. Returns ok=false (not an
+// error) for anything else, so callers fall through to the
+// malformed-drift path.
+func macFromASCIIText(value any) (string, bool) {
+	s, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) != 6 {
+		return "", false
+	}
+	octets := make([]byte, 6)
+	for i, p := range parts {
+		if len(p) != 2 {
+			return "", false
+		}
+		v, err := strconv.ParseUint(p, 16, 8)
+		if err != nil {
+			return "", false
+		}
+		octets[i] = byte(v)
+	}
+	return formatMacBytesRaw(octets), true
+}
+
+// isPrintableLatin1 reports whether every byte of s is "printable",
+// mirroring Python's str.isprintable() as applied to a
+// latin-1-normalized OCTET STRING (or plain ASCII text): each byte is
+// treated as its own Unicode code point (0-255), matching how the Python
+// reference's string values arise -- either genuine ASCII text, or a
+// transport that maps raw octets 1:1 onto Latin-1 chr() values.
+// Crucially this is NOT a UTF-8 decode of s (which could combine bytes
+// into different code points and diverge from Python's per-character
+// check). Go's unicode.IsPrint uses the same definition of "printable" as
+// Python's str.isprintable() for this purpose: both admit the L/M/N/P/S
+// categories plus the ASCII space (0x20), and both reject other Unicode
+// separators/control characters (e.g. U+00A0 NBSP, U+007F DEL, or a NUL
+// byte) -- so space IS printable here, but \x00 is not.
+func isPrintableLatin1(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !unicode.IsPrint(rune(s[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+// columnText renders a non-chassis, non-port-id LLDP column
+// (portDesc/sysName) as text: []byte is UTF-8-decoded (replacing invalid
+// bytes), string is returned as-is, anything else falls back to fmt's
+// default formatting.
+func columnText(value any) string {
+	switch v := value.(type) {
+	case []byte:
+		return decodeUTF8Replace(v)
+	case string:
+		return v
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// formatChassisID formats an lldpRemChassisId value: the MAC-address
+// chassis subtype (a 6-byte/6-char MAC-shaped OCTET STRING) formats as
+// colon-hex; any other chassis-id subtype (e.g. a chassis component name)
+// falls back to formatValue rather than columnText's UTF-8 decode -- a
+// literal port of a "latent oddity" in the Python source
+// (_format_chassis_id's non-MAC fallback calls Python's str() on a bytes
+// value, producing its b'...' repr, rather than decoding it as UTF-8 text
+// like _column_text does). No test in the ported suite exercises a
+// non-MAC-shaped bytes chassis-id, so this divergence from columnText is
+// preserved exactly as documented rather than "fixed".
+func formatChassisID(value any) string {
+	if mac, ok := formatMacOctetString(value); ok {
+		return mac
+	}
+	if s, ok := value.(string); ok {
+		return s
+	}
+	return formatValue(value)
+}
+
+// formatPortID formats an lldpRemPortId value. Consistent with
+// formatChassisID, a MAC-address port-id subtype (lldpPortIdSubtype 3) is
+// raw binary and formats as colon-hex, instead of being UTF-8-decoded
+// (with replacement) into garbled U+FFFD text.
+//
+// THE trickiest asymmetry in this file (D-SNMP §3.11): a 6-byte []byte
+// value is ALWAYS MAC-hex -- a genuinely binary portId only ever arrives
+// as []byte (the transport's own printable-ASCII heuristic only emits
+// string for values that decode cleanly as text). A 6-char string,
+// however, is treated as raw MAC bytes ONLY when it is NOT printable text
+// (isPrintableLatin1): this guards a real, everyday ASCII interface-name
+// portId that happens to be exactly 6 characters (e.g. "1/xg51") from
+// being mistaken for a MAC and corrupted into hex -- unlike chassis-id,
+// port-id routinely carries short human-readable interface names, so a
+// bare length-6 check on string is unsafe here. Get this check backwards
+// and interface-name portIds corrupt silently. Any other value (a
+// printable 6-char string, or any non-MAC-shaped value) is plain text,
+// per columnText.
+func formatPortID(value any) string {
+	switch v := value.(type) {
+	case []byte:
+		if len(v) == 6 {
+			if mac, ok := formatMacOctetString(v); ok {
+				return mac
+			}
+		}
+	case string:
+		if len(v) == 6 && !isPrintableLatin1(v) {
+			if mac, ok := formatMacOctetString(v); ok {
+				return mac
+			}
+		}
+	}
+	return columnText(value)
+}
+
+// ParseBaseMac parses dot1dBaseBridgeAddress (BRIDGE-MIB scalar, standard
+// MIB-II) into a colon-separated MAC string.
+//
+// An absent scalar (no row under the OID at all) is honestly nil -- not
+// every device necessarily answers this instance. A row that IS present
+// but isn't a 6-byte/6-char OCTET STRING (raw bytes) NOR the M4300-24X's
+// 17-char ASCII colon-hex quirk is drift, not absence, and returns an
+// error wrapping model.ErrSNMP naming the offending OID.
+func ParseBaseMac(rows []Row) (*string, error) {
+	prefix := Dot1dBaseBridgeAddress + "."
+	for _, row := range rows {
+		if !strings.HasPrefix(row.OID, prefix) {
+			continue
+		}
+		if mac, ok := formatMacOctetString(row.Value); ok {
+			return model.Ptr(mac), nil
+		}
+		if mac, ok := macFromASCIIText(row.Value); ok {
+			return model.Ptr(mac), nil
+		}
+		return nil, errOID(row.OID, "malformed base MAC %s", formatValue(row.Value))
+	}
+	return nil, nil
+}
+
+// lldpKey groups lldpRemTable rows into one neighbor entry by their
+// (timeMark, localPort, remIndex) instance-suffix components, compared as
+// raw strings (never parsed to int) -- only localPort is parsed to int,
+// and only once, at emit time.
+type lldpKey struct {
+	timeMark, localPort, remIndex string
+}
+
+// lldpValueEmpty reports whether an LLDP column value counts as "no data"
+// for the purposes of skipping an all-empty neighbor group, mirroring
+// Python truthiness: an empty string or []byte, or an int64 zero, are all
+// falsy; anything else (including a non-empty string of any content, e.g.
+// a single NUL byte) is not.
+func lldpValueEmpty(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return true
+	case string:
+		return t == ""
+	case []byte:
+		return len(t) == 0
+	case int64:
+		return t == 0
+	default:
+		return false
+	}
+}
+
+// colOrEmpty returns cols[col], or "" (a string, never Go's untyped nil)
+// when col isn't in cols -- mirroring Python's dict.get(col, "").
+func colOrEmpty(cols map[int]any, col int) any {
+	if v, ok := cols[col]; ok {
+		return v
+	}
+	return ""
+}
+
+// ParseLldp groups lldpRemTable rows by local port into LLDPNeighbor
+// entries.
+//
+// The instance suffix is "<column>.<timeMark>.<localPortNum>.<remIndex>";
+// the middle component is the local port. A row present under the table
+// prefix but with other than exactly 4 suffix components, or a
+// non-integer column component, is drift (not absence) and returns an
+// error wrapping model.ErrSNMP naming the offending OID. Columns 5/7/8/9
+// are chassis-id/port-id/port-desc/sys-name; other columns are ignored. A
+// fully-empty neighbor group (every tracked column absent) carries no
+// data and is skipped. A non-integer local-port component (present but
+// malformed) also errors -- following the Python source literally, this
+// error names "<prefix>...<localPort>", a synthetic string rather than a
+// real row OID, since the offending row's own OID is discarded once rows
+// are grouped by key. Results are sorted by local port.
+func ParseLldp(rows []Row) ([]model.LLDPNeighbor, error) {
+	prefix := LldpRemTable + ".1."
+	grouped := make(map[lldpKey]map[int]any)
+	for _, row := range rows {
+		if !strings.HasPrefix(row.OID, prefix) {
+			continue
+		}
+		parts := strings.Split(row.OID[len(prefix):], ".")
+		if len(parts) != 4 {
+			return nil, errOID(row.OID, "malformed LLDP index")
+		}
+		column, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return nil, errOID(row.OID, "non-integer LLDP column %q", parts[0])
+		}
+		key := lldpKey{parts[1], parts[2], parts[3]}
+		if grouped[key] == nil {
+			grouped[key] = make(map[int]any)
+		}
+		grouped[key][column] = row.Value
+	}
+
+	result := make([]model.LLDPNeighbor, 0, len(grouped))
+	for key, cols := range grouped {
+		// An absent column defaults to "" (mirroring Python's
+		// cols.get(col, "")), not Go's nil zero value: nil would render as
+		// the literal text "<nil>" through columnText's fmt fallback
+		// instead of being recognized as empty by lldpValueEmpty/the
+		// formatters' "" checks below.
+		chassis := colOrEmpty(cols, 5)
+		portID := colOrEmpty(cols, 7)
+		portDesc := colOrEmpty(cols, 8)
+		sysName := colOrEmpty(cols, 9)
+		if lldpValueEmpty(chassis) && lldpValueEmpty(portID) && lldpValueEmpty(portDesc) && lldpValueEmpty(sysName) {
+			continue
+		}
+		lp, err := strconv.Atoi(key.localPort)
+		if err != nil {
+			return nil, errOID(fmt.Sprintf("%s...%s", prefix, key.localPort), "non-integer LLDP local port %q", key.localPort)
+		}
+		neighbor := model.LLDPNeighbor{LocalPort: lp}
+		if t := columnText(sysName); t != "" {
+			neighbor.RemoteSysName = model.Ptr(t)
+		}
+		if t := columnText(portDesc); t != "" {
+			neighbor.RemotePortDesc = model.Ptr(t)
+		}
+		if t := formatChassisID(chassis); t != "" {
+			neighbor.RemoteChassisID = model.Ptr(t)
+		}
+		if t := formatPortID(portID); t != "" {
+			neighbor.RemotePortID = model.Ptr(t)
+		}
+		result = append(result, neighbor)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].LocalPort < result[j].LocalPort })
+	return result, nil
+}
+
+// ParseMacs builds the MAC/FDB table from dot1qTpFdbPort +
+// dot1dBasePortIfIndex.
+//
+// dot1qTpFdbPort gives the bridge PORT number keyed by
+// "<vlan>.<mac-as-6-oid-octets>"; dot1dBasePortIfIndex maps that bridge
+// port to an ifIndex, falling back to the bridge port number itself when
+// unmapped. An FDB OID suffix that isn't exactly 7 parts (vlan + 6 MAC
+// bytes), a non-integer VLAN component, or a bridge-port Value that isn't
+// int64, is drift and returns an error wrapping model.ErrSNMP naming the
+// offending OID. Results are sorted by (port, mac).
+func ParseMacs(fdb, bridgePorts []Row) ([]model.MacEntry, error) {
+	bridgeToIf, err := IndexIntColumn(bridgePorts, Dot1dBasePortIfIndex)
+	if err != nil {
+		return nil, err
+	}
+	prefix := Dot1qTpFdbPort + "."
+	result := make([]model.MacEntry, 0)
+	for _, row := range fdb {
+		if !strings.HasPrefix(row.OID, prefix) {
+			continue
+		}
+		parts := strings.Split(row.OID[len(prefix):], ".")
+		if len(parts) != 7 { // <vlan>.<6 MAC bytes>
+			return nil, errOID(row.OID, "malformed FDB index")
+		}
+		vlanID, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return nil, errOID(row.OID, "non-integer VLAN index %q", parts[0])
+		}
+		bridgePortVal, ok := row.Value.(int64)
+		if !ok {
+			return nil, errOID(row.OID, "non-integer bridge port %s", formatValue(row.Value))
+		}
+		mac, err := formatMacBytesFromOIDParts(parts[1:7])
+		if err != nil {
+			return nil, err
+		}
+		port, mapped := bridgeToIf[int(bridgePortVal)]
+		if !mapped {
+			port = bridgePortVal
+		}
+		result = append(result, model.MacEntry{
+			Mac:    mac,
+			Port:   int(port),
+			VlanID: model.Ptr(vlanID),
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Port != result[j].Port {
+			return result[i].Port < result[j].Port
+		}
+		return result[i].Mac < result[j].Mac
+	})
 	return result, nil
 }
