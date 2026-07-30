@@ -273,6 +273,51 @@ func TestGetModelUnknown(t *testing.T) {
 	}
 }
 
+// TestGetModelAliasS3300 verifies GetModel resolves the "s3300" alias to
+// the canonical "gsm7228ps" entry, mirroring Python's
+// MODEL_ALIASES = {"s3300": "gsm7228ps"} resolved by get_model().
+func TestGetModelAliasS3300(t *testing.T) {
+	alias, err := model.GetModel("s3300")
+	if err != nil {
+		t.Fatalf("GetModel(s3300) error: %v", err)
+	}
+	canonical, err := model.GetModel("gsm7228ps")
+	if err != nil {
+		t.Fatalf("GetModel(gsm7228ps) error: %v", err)
+	}
+	if alias != canonical {
+		t.Errorf("GetModel(s3300) = %p (%+v), want the same canonical entry as GetModel(gsm7228ps) = %p (%+v)", alias, alias, canonical, canonical)
+	}
+	if alias.Key != "gsm7228ps" {
+		t.Errorf("GetModel(s3300).Key = %q, want %q", alias.Key, "gsm7228ps")
+	}
+}
+
+// TestGetModelAliasCaseSensitive verifies alias resolution is an exact,
+// case-sensitive match (Python's dict.get performs no normalisation), so
+// an uppercase variant of a known alias is NOT resolved and is reported as
+// unknown.
+func TestGetModelAliasCaseSensitive(t *testing.T) {
+	_, err := model.GetModel("S3300")
+	if !errors.Is(err, model.ErrUnknownModel) {
+		t.Errorf("GetModel(S3300): errors.Is(err, ErrUnknownModel) = false, want true (alias resolution must be case-sensitive; err=%v)", err)
+	}
+}
+
+// TestModelsExcludesAliases verifies alias keys are NOT separate entries
+// in Models() -- Python's MODEL_ALIASES is deliberately not added to
+// MODELS, which stays a canonical one-key-per-model listing.
+func TestModelsExcludesAliases(t *testing.T) {
+	for _, m := range model.Models() {
+		if m.Key == "s3300" {
+			t.Errorf("Models() contains alias key %q as its own entry, want only canonical keys", m.Key)
+		}
+	}
+	if len(model.Models()) != 10 {
+		t.Errorf("len(Models()) = %d, want 10 (unchanged by alias support)", len(model.Models()))
+	}
+}
+
 func TestGetModelUnverifiedFlags(t *testing.T) {
 	// Spot-check the "honesty flag" models called out in registry.py: no
 	// real-hardware capture exists for these, so verified must be false

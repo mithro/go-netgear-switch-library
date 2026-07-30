@@ -31,13 +31,14 @@ import "fmt"
 //     to test membership.
 //   - Python additionally defines MODEL_ALIASES (currently just
 //     "s3300" -> "gsm7228ps") and get_model() resolves it before the
-//     canonical lookup. That alias table/resolution is NOT ported here:
-//     this task's brief specifies GetModel(key) as a direct canonical-key
-//     lookup only, with no alias parameter in its interface list, and the
-//     brief's own test plan does not exercise aliasing. GetModel("s3300")
-//     therefore returns ErrUnknownModel in this package as it stands.
-//     Flagged for the task owner to decide whether/where alias resolution
-//     belongs in a later slice.
+//     canonical lookup: `MODEL_ALIASES.get(key, key)` is an exact
+//     (case-sensitive) dict lookup with no key normalisation anywhere in
+//     the resolution path, and aliases are deliberately NOT added to
+//     MODELS/_MODELS -- they resolve only inside get_model(), never appear
+//     as their own entry when iterating the registry. modelAliases below
+//     ports that table verbatim, and GetModel resolves it the same way
+//     (case-sensitively, before the canonical-key lookup) without adding
+//     alias keys to the models slice/Models() output.
 
 // Backend is a protocol/transport this library can use to talk to a
 // switch, mirroring Python registry.Backend.
@@ -257,6 +258,19 @@ var models = []SwitchModel{
 	},
 }
 
+// modelAliases maps an alternate model-name key to the canonical registry
+// key it resolves to, ported verbatim from Python's MODEL_ALIASES.
+// "s3300" <-> "gsm7228ps": the model registered under the canonical key
+// "gsm7228ps" is really the S3300-52X-PoE+ (its real firmware sysDescr and
+// marketing name are "S3300-52X"; GSM7228PS is the ProSAFE part-number
+// family), so both names must resolve to it. Aliases are deliberately not
+// entries in models/modelIndex's canonical listing (what Models() and
+// range-over-registry callers iterate) -- they are resolved only by
+// GetModel, exactly mirroring Python's get_model().
+var modelAliases = map[string]string{
+	"s3300": "gsm7228ps",
+}
+
 // modelIndex maps canonical registry key -> pointer into models, built
 // once in init(). Since models is never resized or reallocated after
 // init(), these pointers stay valid and stable for the process lifetime.
@@ -285,13 +299,19 @@ func Models() []*SwitchModel {
 	return out
 }
 
-// GetModel looks up a switch model by its canonical registry key. On a
-// miss it returns an error wrapping ErrUnknownModel (match with
-// errors.Is). The returned pointer references the canonical registry
-// entry directly (not a copy, unlike Models()) and must be treated as
-// read-only -- mutating it corrupts shared package state.
+// GetModel looks up a switch model by its canonical registry key or by a
+// known alias (see modelAliases; resolution is an exact, case-sensitive
+// match, mirroring Python's MODEL_ALIASES.get(key, key)). On a miss it
+// returns an error wrapping ErrUnknownModel (match with errors.Is). The
+// returned pointer references the canonical registry entry directly (not a
+// copy, unlike Models()) and must be treated as read-only -- mutating it
+// corrupts shared package state.
 func GetModel(key string) (*SwitchModel, error) {
-	m, ok := modelIndex[key]
+	canonical := key
+	if alias, ok := modelAliases[key]; ok {
+		canonical = alias
+	}
+	m, ok := modelIndex[canonical]
 	if !ok {
 		return nil, fmt.Errorf("%s: %w", key, ErrUnknownModel)
 	}
