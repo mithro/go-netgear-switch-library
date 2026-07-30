@@ -22,10 +22,16 @@ The Python library is the behavioural reference:
 
 - Repo: `/home/tim/github/mithro/python-netgear-switch-library`
   (`github.com/mithro/python-netgear-switch-library`)
-- **Pinned reference:** branch `fix/live-hardware-parity` @
-  `b73e7519776aa6031b4565171f823b997dba9d07` (2026-07-30). `main` was at
-  `418312da` when this spec was written. Re-pin to the merge commit once that
-  branch lands; parity claims are always against the pin.
+- **Pinned reference:** branch `fix/s3300-52x-live-verify` @
+  `aaab57751559c0b172ca61c323d4649cddfd1eae` (2026-07-30). Re-pinned from
+  `fix/live-hardware-parity` @ `b73e7519` during slice 02: the Python
+  checkout advanced mid-session and the newer branch carries live-verified
+  improvements the Go port must match (real S3300-52X capture + reseeded
+  gsm7228ps with `verified=True`, `SYSOBJECTID_MODELS` authoritative
+  sysObjectID detection tried before sysDescr, `MODEL_ALIASES`
+  s3300→gsm7228ps). Slice 1's registry already matches this state. `main`
+  was at `418312da` when this spec was written. Re-pin again to the merge
+  commit once the branch lands; parity claims are always against the pin.
 
 Where this spec says "same as Python", the pinned source is normative. Protocol
 constants (OID tables, NSDP tags/sizes, HTTP endpoints/login schemes/dialects,
