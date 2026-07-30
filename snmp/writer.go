@@ -16,6 +16,7 @@ package snmp
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mithro/go-netgear-switch-library/model"
 )
@@ -35,6 +36,13 @@ type Writer struct {
 	model          *model.SwitchModel
 	protectedPorts map[int]bool
 	reader         *Reader
+
+	// clock/sleep are the injectable time seam CyclePoE/ClearPoEFault's
+	// poll loops use (see writer_cycle.go's WithClock); they default to
+	// time.Now/defaultSleep and are otherwise unused by every other
+	// Writer method.
+	clock func() time.Time
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
 // WriterOption configures optional Writer construction parameters (only
@@ -72,6 +80,8 @@ func NewWriter(c WriteClient, m *model.SwitchModel, opts ...WriterOption) (*Writ
 		model:          m,
 		protectedPorts: make(map[int]bool),
 		reader:         reader,
+		clock:          time.Now,
+		sleep:          defaultSleep,
 	}
 	for _, opt := range opts {
 		opt(w)
