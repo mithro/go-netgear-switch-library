@@ -43,6 +43,24 @@ type (
 	SwitchClass = model.SwitchClass
 	// SwitchModel is aliased from model.SwitchModel.
 	SwitchModel = model.SwitchModel
+	// LinkSpeed is aliased from model.LinkSpeed.
+	LinkSpeed = model.LinkSpeed
+	// VLANEngine is aliased from model.VLANEngine.
+	VLANEngine = model.VLANEngine
+	// NsdpPortStatus is aliased from model.NsdpPortStatus.
+	NsdpPortStatus = model.NsdpPortStatus
+	// NsdpPortStatistics is aliased from model.NsdpPortStatistics.
+	NsdpPortStatistics = model.NsdpPortStatistics
+	// NsdpVlanMembership is aliased from model.NsdpVlanMembership.
+	NsdpVlanMembership = model.NsdpVlanMembership
+	// NsdpPortPvid is aliased from model.NsdpPortPvid.
+	NsdpPortPvid = model.NsdpPortPvid
+	// NsdpPortMirroring is aliased from model.NsdpPortMirroring.
+	NsdpPortMirroring = model.NsdpPortMirroring
+	// NsdpIgmpSnooping is aliased from model.NsdpIgmpSnooping.
+	NsdpIgmpSnooping = model.NsdpIgmpSnooping
+	// NsdpDevice is aliased from model.NsdpDevice.
+	NsdpDevice = model.NsdpDevice
 )
 
 // WriteVerificationError is aliased from model; see model.WriteVerificationError.
@@ -97,6 +115,32 @@ const (
 	ClassFullyManaged    = model.ClassFullyManaged
 	ClassSmartManagedPro = model.ClassSmartManagedPro
 	ClassPlus            = model.ClassPlus
+)
+
+// LinkSpeed values, re-exported from model.
+const (
+	LinkSpeedDown       = model.LinkSpeedDown
+	LinkSpeedHalf10M    = model.LinkSpeedHalf10M
+	LinkSpeedFull10M    = model.LinkSpeedFull10M
+	LinkSpeedHalf100M   = model.LinkSpeedHalf100M
+	LinkSpeedFull100M   = model.LinkSpeedFull100M
+	LinkSpeedGigabit    = model.LinkSpeedGigabit
+	LinkSpeedTenGigabit = model.LinkSpeedTenGigabit
+)
+
+// LinkSpeedFromByte decodes a raw NSDP wire byte into a LinkSpeed; see
+// model.LinkSpeedFromByte.
+func LinkSpeedFromByte(b byte) LinkSpeed {
+	return model.LinkSpeedFromByte(b)
+}
+
+// VLANEngine values, re-exported from model.
+const (
+	VLANEngineDisabled      = model.VLANEngineDisabled
+	VLANEngineBasicPort     = model.VLANEngineBasicPort
+	VLANEngineAdvancedPort  = model.VLANEngineAdvancedPort
+	VLANEngineBasic8021Q    = model.VLANEngineBasic8021Q
+	VLANEngineAdvanced8021Q = model.VLANEngineAdvanced8021Q
 )
 
 // Error sentinels, re-exported from model. Match with errors.Is (and
