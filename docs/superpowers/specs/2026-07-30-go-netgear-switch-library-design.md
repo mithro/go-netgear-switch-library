@@ -469,7 +469,31 @@ Hardware verification threads through slices 2–9 (reads as each backend
 lands), with the full sweep in slice 11. Development uses subagents (≤3
 concurrent) per the executing-plans/subagent workflow.
 
-## 15. Out of scope
+## 15. Documentation (completion gate)
+
+- **API documentation:** every exported identifier carries a proper godoc
+  comment (enforced by lint); package-level docs with examples
+  (`Example*` test functions) for the root package and each protocol package.
+  Published automatically at pkg.go.dev once the repo is public and tagged;
+  the README links it.
+- **CLI documentation:** generated from cobra (`GenMarkdownTree`) for every
+  `gngsw`/`gngsw-mcp`/`gngsw-virtual` command, committed under `docs/cli/` and
+  published on the GitHub Pages site alongside the apt repo. Regeneration is
+  CI-checked (drift fails the build).
+- **Guides:** README (install via apt/Releases/`go install`, quick start,
+  inventory format), a cross-testing guide (how to run the four cross-language
+  suites), and the hardware conformance guide (§11 policy, how to run).
+
+## 16. Resource limits during development & CI
+
+All heavyweight local executions (Go builds, test runs, fake fleets, Python
+cross-test processes) run inside resource jails so development never
+overwhelms the host: `systemd-run --user --scope` with `MemoryMax` and
+`CPUQuota` (fallback: `ulimit`-wrapped subshells where systemd is
+unavailable). Development uses at most 3 concurrent subagents. CI jobs are
+naturally isolated by the runner.
+
+## 17. Out of scope
 
 - Porting downstream tools (`sensors2mqtt`, `gdoc2netcfg`) to the Go library.
 - NSDP v2 auth (matches Python: detected and reported, not implemented).
