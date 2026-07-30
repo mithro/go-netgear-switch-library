@@ -174,6 +174,33 @@ func TestMibViewExhaustiveWalkVisitsEverySeededOIDOnce(t *testing.T) {
 	}
 }
 
+// TestMibViewApplyWriteRebuildsImmediately confirms ApplyWrite (the
+// committed single-write path, as opposed to ApplyWriteUncommitted) is
+// visible to a subsequent Get without any separate Rebuild call.
+func TestMibViewApplyWriteRebuildsImmediately(t *testing.T) {
+	st := ifOperStatusState()
+	v := NewMibView(st)
+
+	pvidOID, ok := oidToInts(snmp.Dot1qPvid)
+	if !ok {
+		t.Fatalf("bad Dot1qPvid constant")
+	}
+	oid := append(pvidOID, 1)
+	if _, ok := v.Get(oid); ok {
+		t.Fatalf("Get(dot1qPvid.1) before any write = ok, want not-ok (no pvids seeded)")
+	}
+
+	v.ApplyWrite(snmp.Dot1qPvid+".1", 42)
+
+	entry, ok := v.Get(oid)
+	if !ok {
+		t.Fatalf("Get(dot1qPvid.1) after ApplyWrite = not-ok, want ok")
+	}
+	if entry.Value != "42" {
+		t.Errorf("Get(dot1qPvid.1) after ApplyWrite = %q, want \"42\"", entry.Value)
+	}
+}
+
 func intsEqual(a, b []int) bool {
 	if len(a) != len(b) {
 		return false
