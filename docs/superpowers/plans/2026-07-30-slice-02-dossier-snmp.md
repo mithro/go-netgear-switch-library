@@ -1,7 +1,7 @@
 # SNMP Read Core — Porting Dossier (Slice 02)
 
 **Pinned Python reference:** `python-netgear-switch-library` branch
-`fix/s3300-52x-live-verify` @ `aaab57751559c0b172ca61c323d4649cddfd1eae`.
+`fix/s3300-52x-live-verify` @ `1aa1274254a233ddce0409160849bb6ce8f8b2e7` (snapshot worktree: `/home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-1aa1274`).
 This repo is read-only; every quote below is verbatim from that state.
 
 **PIN NOTE (resolved during slice 02):** the spec originally pinned
