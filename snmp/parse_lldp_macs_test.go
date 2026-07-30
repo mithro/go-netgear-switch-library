@@ -130,6 +130,32 @@ func TestParseLldpRemotePortIDNonPrintableSixCharIsMac(t *testing.T) {
 	}
 }
 
+// TestParseLldpSameLocalPortPreservesFirstAppearanceOrder verifies that two
+// neighbours sharing a LocalPort (distinct timeMark/remIndex, so distinct
+// groups) come out in first-appearance (row) order, not Go's randomized
+// map-iteration order. Python's dict is insertion-ordered and sorted() is
+// stable, so grouping-key order is first-appearance order and the final
+// sort by local_port alone leaves same-port ties in that order; ParseLldp
+// must match. Run with `-count=20` (or more) to catch the randomization
+// this pins against -- a single run can pass by chance even when the
+// underlying order is not actually deterministic.
+func TestParseLldpSameLocalPortPreservesFirstAppearanceOrder(t *testing.T) {
+	rows := []Row{
+		NewStrRow(lldpBase+".9.75.49.8", "first"),
+		NewStrRow(lldpBase+".9.76.49.7", "second"),
+	}
+	n, err := ParseLldp(rows)
+	if err != nil {
+		t.Fatalf("ParseLldp: %v", err)
+	}
+	if len(n) != 2 {
+		t.Fatalf("len(n) = %d, want 2", len(n))
+	}
+	if got0, got1 := deref(n[0].RemoteSysName), deref(n[1].RemoteSysName); got0 != "first" || got1 != "second" {
+		t.Fatalf("order = [%q, %q], want [\"first\", \"second\"] (first-appearance order must be preserved on a LocalPort tie)", got0, got1)
+	}
+}
+
 // TestParseLldpRaisesOnPresentButMalformedLocalPort mirrors
 // test_parse_lldp_raises_on_present_but_malformed_local_port: a row IS
 // present with a non-empty sysName column but a non-integer local port.

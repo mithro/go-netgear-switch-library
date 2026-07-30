@@ -563,6 +563,12 @@ func formatMacBytesRaw(b []byte) string {
 // ValueError there, not an SnmpError -- a deliberate, untested corner of
 // the source (no test exercises a non-numeric MAC-byte OID component) that
 // is preserved here rather than "fixed" into a wrapped error.
+//
+// An out-of-range component (e.g. "256") is a second, separate,
+// also-untested divergence: Python's f"{int(b):02X}" formats it as extra
+// hex digits ("100") with no truncation, whereas byte(v) below silently
+// truncates it modulo 256 ("00"). Real MAC-OID index components are
+// always 0-255, so neither behavior is reachable in practice.
 func formatMacBytesFromOIDParts(parts []string) (string, error) {
 	b := make([]byte, len(parts))
 	for i, p := range parts {
@@ -800,10 +806,20 @@ func colOrEmpty(cols map[int]any, col int) any {
 // malformed) also errors -- following the Python source literally, this
 // error names "<prefix>...<localPort>", a synthetic string rather than a
 // real row OID, since the offending row's own OID is discarded once rows
-// are grouped by key. Results are sorted by local port.
+// are grouped by key.
+//
+// Results are sorted by local port using a STABLE sort: two neighbours
+// that tie on local port keep their first-appearance (row) order, exactly
+// mirroring Python's semantics (an insertion-ordered dict grouped by key,
+// followed by a stable sorted()). A plain map has no defined iteration
+// order in Go, so groups are additionally tracked in an explicit `order`
+// slice, appended to only the first time a given key is seen -- iterating
+// that slice (not the map) is what makes first-appearance order
+// reproducible instead of randomized per run.
 func ParseLldp(rows []Row) ([]model.LLDPNeighbor, error) {
 	prefix := LldpRemTable + ".1."
 	grouped := make(map[lldpKey]map[int]any)
+	order := make([]lldpKey, 0)
 	for _, row := range rows {
 		if !strings.HasPrefix(row.OID, prefix) {
 			continue
@@ -819,12 +835,14 @@ func ParseLldp(rows []Row) ([]model.LLDPNeighbor, error) {
 		key := lldpKey{parts[1], parts[2], parts[3]}
 		if grouped[key] == nil {
 			grouped[key] = make(map[int]any)
+			order = append(order, key)
 		}
 		grouped[key][column] = row.Value
 	}
 
-	result := make([]model.LLDPNeighbor, 0, len(grouped))
-	for key, cols := range grouped {
+	result := make([]model.LLDPNeighbor, 0, len(order))
+	for _, key := range order {
+		cols := grouped[key]
 		// An absent column defaults to "" (mirroring Python's
 		// cols.get(col, "")), not Go's nil zero value: nil would render as
 		// the literal text "<nil>" through columnText's fmt fallback
@@ -856,7 +874,7 @@ func ParseLldp(rows []Row) ([]model.LLDPNeighbor, error) {
 		}
 		result = append(result, neighbor)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].LocalPort < result[j].LocalPort })
+	sort.SliceStable(result, func(i, j int) bool { return result[i].LocalPort < result[j].LocalPort })
 	return result, nil
 }
 
