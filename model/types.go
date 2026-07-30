@@ -125,9 +125,15 @@ type MgmtIPConfig struct {
 }
 
 // DetectedModel is the result of identifying a switch's model over SNMP
-// (sysDescr matching). Key is a registry key iff sysDescr confidently
-// matched exactly one model; nil is never a fabricated guess. SysObjectID
-// is carried but never used for matching (no OID→model table exists).
+// (sysObjectID + sysDescr matching). Key is a registry key when the switch
+// was confidently identified: either SysObjectID matches an entry in the
+// known-OID map (the preferred, authoritative signal -- an unambiguous
+// manufacturer product identifier, tried first) or, failing that, SysDescr
+// confidently matches exactly one registered model's name (the fallback
+// text heuristic); nil is never a fabricated guess. The Go port's
+// DetectModel arrives in a later slice and MUST port the Python reference's
+// SYSOBJECTID_MODELS map (protocols/snmp/parse.py) to preserve this
+// preference order.
 type DetectedModel struct {
 	Key         *string `json:"key"`
 	SysDescr    *string `json:"sys_descr"`
