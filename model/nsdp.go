@@ -86,9 +86,9 @@ type NsdpPortStatistics struct {
 
 // NsdpVlanMembership is a single VLAN's port membership (NSDP TLV tag
 // 0x2800), mirroring Python protocols.nsdp.types.NsdpVlanMembership.
-// MemberPorts/TaggedPorts are canonical: sorted ascending, never containing
-// duplicates. UntaggedPorts is deliberately not a struct field — see its
-// method below.
+// MemberPorts/TaggedPorts are canonical: sorted ascending, never nil, never
+// containing duplicates. UntaggedPorts is deliberately not a struct field —
+// see its method below.
 type NsdpVlanMembership struct {
 	VlanID      int   `json:"vlan_id"`
 	MemberPorts []int `json:"member_ports"`
@@ -186,4 +186,66 @@ type NsdpDevice struct {
 	// LoopDetection reports whether loop detection is enabled (TLV tag
 	// 0x9000).
 	LoopDetection *bool `json:"loop_detection"`
+}
+
+// Canonical returns a copy of d with every nil slice field (PortStatus,
+// PortStatistics, VlanMembers, PortPvids — and, recursively, each
+// VlanMembers entry's MemberPorts/TaggedPorts and a non-nil PortMirroring's
+// SourcePorts) replaced by a non-nil empty slice, so that json.Marshal
+// emits "[]" rather than "null" for absent collections — matching Python's
+// jsonify, which always renders these (default-()/frozenset) fields as
+// empty lists, never null. Follows the same precedent as
+// SwitchData.Canonical(). The original d is never mutated.
+func (d NsdpDevice) Canonical() NsdpDevice {
+	out := d
+
+	if out.PortStatus == nil {
+		out.PortStatus = []NsdpPortStatus{}
+	}
+	if out.PortStatistics == nil {
+		out.PortStatistics = []NsdpPortStatistics{}
+	}
+	if out.PortPvids == nil {
+		out.PortPvids = []NsdpPortPvid{}
+	}
+
+	if out.VlanMembers == nil {
+		out.VlanMembers = []NsdpVlanMembership{}
+	} else {
+		members := make([]NsdpVlanMembership, len(out.VlanMembers))
+		for i, m := range out.VlanMembers {
+			members[i] = m.canonical()
+		}
+		out.VlanMembers = members
+	}
+
+	if out.PortMirroring != nil {
+		pm := out.PortMirroring.canonical()
+		out.PortMirroring = &pm
+	}
+
+	return out
+}
+
+// canonical returns a copy of m with nil MemberPorts/TaggedPorts replaced by
+// non-nil empty slices; see NsdpDevice.Canonical.
+func (m NsdpVlanMembership) canonical() NsdpVlanMembership {
+	out := m
+	if out.MemberPorts == nil {
+		out.MemberPorts = []int{}
+	}
+	if out.TaggedPorts == nil {
+		out.TaggedPorts = []int{}
+	}
+	return out
+}
+
+// canonical returns a copy of p with a nil SourcePorts replaced by a
+// non-nil empty slice; see NsdpDevice.Canonical.
+func (p NsdpPortMirroring) canonical() NsdpPortMirroring {
+	out := p
+	if out.SourcePorts == nil {
+		out.SourcePorts = []int{}
+	}
+	return out
 }

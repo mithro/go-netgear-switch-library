@@ -286,6 +286,108 @@ func TestNsdpDeviceMarshalJSONMinimal(t *testing.T) {
 	}
 }
 
+// TestNsdpDeviceCanonicalEmptyArrays verifies that a minimal NsdpDevice
+// (only Model/Mac set, the four collection fields left nil) marshals its
+// Canonical() copy with empty JSON arrays ("[]"), never JSON null, matching
+// Python's jsonify (which always renders these default-()/frozenset fields
+// as empty lists).
+func TestNsdpDeviceCanonicalEmptyArrays(t *testing.T) {
+	d := model.NsdpDevice{Model: "gs305ep", Mac: "aa:bb:cc:dd:ee:ff"}
+
+	b, err := json.Marshal(d.Canonical())
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal into map: %v", err)
+	}
+
+	for _, key := range []string{"port_status", "port_statistics", "vlan_members", "port_pvids"} {
+		if string(got[key]) != "[]" {
+			t.Errorf("%s: got %s, want []", key, got[key])
+		}
+	}
+}
+
+// TestNsdpDeviceCanonicalNestedEmptySlices verifies that Canonical()
+// recurses into a VlanMembers entry's nil MemberPorts/TaggedPorts and a
+// non-nil PortMirroring's nil SourcePorts, rendering all of them as "[]"
+// rather than null.
+func TestNsdpDeviceCanonicalNestedEmptySlices(t *testing.T) {
+	d := model.NsdpDevice{
+		Model: "gs305ep",
+		Mac:   "aa:bb:cc:dd:ee:ff",
+		VlanMembers: []model.NsdpVlanMembership{
+			{VlanID: 1},
+		},
+		PortMirroring: &model.NsdpPortMirroring{DestinationPort: 5},
+	}
+
+	b, err := json.Marshal(d.Canonical())
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal into map: %v", err)
+	}
+
+	var vlanMembers []map[string]json.RawMessage
+	if err := json.Unmarshal(got["vlan_members"], &vlanMembers); err != nil {
+		t.Fatalf("Unmarshal vlan_members: %v", err)
+	}
+	if len(vlanMembers) != 1 {
+		t.Fatalf("vlan_members: got %d entries, want 1", len(vlanMembers))
+	}
+	for _, key := range []string{"member_ports", "tagged_ports"} {
+		if string(vlanMembers[0][key]) != "[]" {
+			t.Errorf("vlan_members[0].%s: got %s, want []", key, vlanMembers[0][key])
+		}
+	}
+
+	var portMirroring map[string]json.RawMessage
+	if err := json.Unmarshal(got["port_mirroring"], &portMirroring); err != nil {
+		t.Fatalf("Unmarshal port_mirroring: %v", err)
+	}
+	if string(portMirroring["source_ports"]) != "[]" {
+		t.Errorf("port_mirroring.source_ports: got %s, want []", portMirroring["source_ports"])
+	}
+}
+
+// TestNsdpDeviceCanonicalDoesNotMutateOriginal follows the SwitchData
+// precedent: Canonical() must return a copy, never mutate the receiver.
+func TestNsdpDeviceCanonicalDoesNotMutateOriginal(t *testing.T) {
+	d := model.NsdpDevice{
+		Model: "gs305ep",
+		Mac:   "aa:bb:cc:dd:ee:ff",
+		VlanMembers: []model.NsdpVlanMembership{
+			{VlanID: 1},
+		},
+		PortMirroring: &model.NsdpPortMirroring{DestinationPort: 5},
+	}
+
+	_ = d.Canonical()
+
+	if d.PortStatus != nil {
+		t.Errorf("Canonical() mutated original PortStatus: %+v", d.PortStatus)
+	}
+	if d.PortStatistics != nil {
+		t.Errorf("Canonical() mutated original PortStatistics: %+v", d.PortStatistics)
+	}
+	if d.PortPvids != nil {
+		t.Errorf("Canonical() mutated original PortPvids: %+v", d.PortPvids)
+	}
+	if d.VlanMembers[0].MemberPorts != nil || d.VlanMembers[0].TaggedPorts != nil {
+		t.Errorf("Canonical() mutated original VlanMembers[0]: %+v", d.VlanMembers[0])
+	}
+	if d.PortMirroring.SourcePorts != nil {
+		t.Errorf("Canonical() mutated original PortMirroring: %+v", d.PortMirroring)
+	}
+}
+
 func TestNsdpDeviceMarshalJSONFull(t *testing.T) {
 	d := model.NsdpDevice{
 		Model:           "gs305ep",
