@@ -1248,3 +1248,410 @@ func ParseEntitySensors(classRows, nameRows, descrRows []Row) ([]model.Sensor, e
 	}
 	return result, nil
 }
+
+// --- Management IP configuration (RFC-1213/RFC-4293/vendor DHCP mode) -----
+
+// ipStr returns an IP-valued row's value as string.
+//
+// Both transports normalize IpAddress varbinds to string; a row present
+// under an address/netmask/gateway column whose value is NOT a string is
+// table drift / a malformed reply, not absence, and returns an error
+// wrapping model.ErrSNMP naming the offending OID.
+func ipStr(row Row) (string, error) {
+	s, ok := row.Value.(string)
+	if !ok {
+		return "", errOID(row.OID, "non-IP value %s", formatValue(row.Value))
+	}
+	return s, nil
+}
+
+// ipv4FromRFC4293Index returns the management IPv4 from an RFC-4293
+// ipAddressTable walk (the address is in the ROW INDEX:
+// <base>.<type>.<len>.<b1>.<b2>.<b3>.<b4>, type 1=ipv4, len 4). Skips
+// loopback and non-IPv4 (IPv6) rows. Returns nil when the walk is empty --
+// older firmware that populates the RFC-1213 ipAddrTable instead. Used
+// only as a FALLBACK; see ParseMgmtIP.
+func ipv4FromRFC4293Index(rows []Row) *string {
+	prefix := IPAddressIfIndex + "."
+	for _, row := range rows {
+		if !strings.HasPrefix(row.OID, prefix) {
+			continue
+		}
+		parts := strings.Split(row.OID[len(prefix):], ".")
+		// ipv4 (type 1) with a 4-byte address: type, len=4, then 4 octets.
+		if len(parts) < 6 || parts[0] != "1" || parts[1] != "4" {
+			continue
+		}
+		ip := strings.Join(parts[2:6], ".")
+		if ip == "127.0.0.1" {
+			continue
+		}
+		return model.Ptr(ip)
+	}
+	return nil
+}
+
+// toIntBestEffort attempts a Python int()-style coercion of an SNMP row
+// value: an int64 is returned as-is (the only numeric shape Row.Value ever
+// holds -- see Row's docstring); a string/[]byte is parsed as a decimal
+// integer. Returns ok=false for anything that doesn't coerce, mirroring
+// Python's int(row.value) raising (TypeError, ValueError).
+func toIntBestEffort(v any) (int64, bool) {
+	switch t := v.(type) {
+	case int64:
+		return t, true
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+		return n, err == nil
+	case []byte:
+		n, err := strconv.ParseInt(strings.TrimSpace(string(t)), 10, 64)
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
+// ParseMgmtIP builds the management-IP config from ipAddrTable/
+// ipRouteTable plus the vendor DHCP-mode OID.
+//
+// Address/netmask/gateway come from the standard MIBs (ipAddrTable,
+// ipRouteTable) and are trustworthy:
+//
+//  1. RFC-1213 primary: the first non-loopback IPAdEntAddr row wins,
+//     remembering its instance suffix as ipIndex.
+//  2. RFC-4293 fallback ONLY when step 1 found nothing (see
+//     ipv4FromRFC4293Index).
+//  3. Netmask ONLY via the RFC-1213 path: an exact-OID
+//     IPAdEntNetmask.<ipIndex> match. The RFC-4293 fallback path never
+//     gets a netmask -- it stays nil, honestly, rather than fabricating
+//     one.
+//  4. Gateway: build a {suffix: dest value} map from every routeDest row;
+//     the first routeNexthop row whose suffix's dest == "0.0.0.0" (the
+//     default route) wins.
+//
+// The DHCP-vs-static mode is UNVERIFIED (see
+// VendorOids.DHCPModeUnverified): only the FIRST dhcpMode row is ever
+// consulted, and model.IPModeUnknown is returned whenever the mode OID is
+// absent/unset or its value fails int coercion -- never a guessed dhcp/
+// static, and never an error, since this OID is explicitly best-effort.
+// Only a recognized present value (1/2) maps to DHCP/STATIC.
+//
+// baseMac is the standard (non-UNVERIFIED) dot1dBaseBridgeAddress scalar
+// walk; see ParseBaseMac. An empty walk (OID absent) yields BaseMac ==
+// nil.
+//
+// Returns an error wrapping model.ErrSNMP naming the offending OID for a
+// present-but-non-string address/netmask/gateway value, or a malformed
+// base MAC (see ParseBaseMac).
+func ParseMgmtIP(addr, netmask, routeDest, routeNexthop, dhcpMode, baseMac, addrRFC4293 []Row) (model.MgmtIPConfig, error) {
+	var ip *string
+	var ipIndex string
+	haveIPIndex := false
+	aprefix := IPAdEntAddr + "."
+	for _, row := range addr {
+		if !strings.HasPrefix(row.OID, aprefix) {
+			continue
+		}
+		if s, ok := row.Value.(string); ok && s == "127.0.0.1" {
+			continue
+		}
+		s, err := ipStr(row)
+		if err != nil {
+			return model.MgmtIPConfig{}, err
+		}
+		ip = model.Ptr(s)
+		ipIndex = row.OID[len(aprefix):]
+		haveIPIndex = true
+		break
+	}
+
+	// RFC-4293 fallback: firmware that leaves ipAddrTable empty (M4300)
+	// carries the address in the ipAddressTable index instead.
+	if ip == nil {
+		ip = ipv4FromRFC4293Index(addrRFC4293)
+	}
+
+	var mask *string
+	if haveIPIndex {
+		want := IPAdEntNetmask + "." + ipIndex
+		for _, r := range netmask {
+			if r.OID == want {
+				s, err := ipStr(r)
+				if err != nil {
+					return model.MgmtIPConfig{}, err
+				}
+				mask = model.Ptr(s)
+				break
+			}
+		}
+	}
+
+	destRows := make(map[string]any, len(routeDest))
+	for _, r := range routeDest {
+		if s, ok := suffix(r, IPRouteDest); ok {
+			destRows[s] = r.Value
+		}
+	}
+	var gateway *string
+	nprefix := IPRouteNextHop + "."
+	for _, row := range routeNexthop {
+		if !strings.HasPrefix(row.OID, nprefix) {
+			continue
+		}
+		idx := row.OID[len(nprefix):]
+		if dv, ok := destRows[idx].(string); ok && dv == "0.0.0.0" {
+			s, err := ipStr(row)
+			if err != nil {
+				return model.MgmtIPConfig{}, err
+			}
+			gateway = model.Ptr(s)
+			break
+		}
+	}
+
+	mode := model.IPModeUnknown
+	if len(dhcpMode) > 0 {
+		if v, ok := toIntBestEffort(dhcpMode[0].Value); ok {
+			switch v {
+			case 1:
+				mode = model.IPModeDHCP
+			case 2:
+				mode = model.IPModeStatic
+			}
+		}
+	}
+
+	mac, err := ParseBaseMac(baseMac)
+	if err != nil {
+		return model.MgmtIPConfig{}, err
+	}
+
+	return model.MgmtIPConfig{
+		Mode:    mode,
+		Address: ip,
+		Netmask: mask,
+		Gateway: gateway,
+		BaseMac: mac,
+	}, nil
+}
+
+// --- System info extraction + authoritative model detection ----------------
+
+// scalarText extracts one scalar exact-OID GET result's value as text, or
+// nil.
+//
+// Unlike the walk-based column parsers above (matched by base-OID
+// *prefix*), sysDescr/sysObjectID are fetched with a plain exact-OID GET,
+// so rows is the combined result of one client.Get([...]) call and this
+// matches by exact OID equality. An absent scalar (no row with this exact
+// OID at all) is honestly nil -- not every device necessarily answers,
+// and a caller must never fabricate a value. A row that IS present but
+// isn't decodable to text is drift, not absence, and returns an error
+// wrapping model.ErrSNMP naming the offending OID, consistent with every
+// other parser in this file.
+func scalarText(rows []Row, oid string) (*string, error) {
+	for _, row := range rows {
+		if row.OID != oid {
+			continue
+		}
+		switch v := row.Value.(type) {
+		case []byte:
+			return model.Ptr(decodeUTF8Replace(v)), nil
+		case string:
+			return model.Ptr(v), nil
+		default:
+			return nil, errOID(row.OID, "non-string value %s", formatValue(row.Value))
+		}
+	}
+	return nil, nil
+}
+
+// ParseSystemInfo extracts the raw sysDescr/sysObjectID scalar text from
+// one combined GET.
+//
+// Pure row -> (sysDescr, sysObjectID) extraction ONLY -- no model
+// matching happens here. Kept strictly separate from
+// DetectModelFromSysDescr so the matching heuristic is unit-testable
+// against plain strings, with no Row/client machinery involved at all.
+func ParseSystemInfo(rows []Row) (sysDescr, sysObjectID *string, err error) {
+	sysDescr, err = scalarText(rows, SysDescr)
+	if err != nil {
+		return nil, nil, err
+	}
+	sysObjectID, err = scalarText(rows, SysObjectID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sysDescr, sysObjectID, nil
+}
+
+// modelMatchTokens returns the name tokens to search for in a sysDescr
+// string.
+//
+// Built ONLY from the registry's own Key/DisplayName -- there is NO
+// hand-invented per-model sysDescr/sysObjectID table anywhere (no MIBs,
+// no captures, no prior-art map exist for one). DisplayName sometimes
+// carries a parenthesized alias (e.g. "GSM7228PS (S3300)" or "M4300-24X
+// (XSM4324CS)"); both the main name and the alias are valid tokens, since
+// a real switch's sysDescr text could plausibly use either. Uppercasing
+// happens at comparison time (DetectModelFromSysDescr), not here.
+func modelMatchTokens(m *model.SwitchModel) []string {
+	var tokens []string
+	tokens = append(tokens, strings.ToUpper(m.Key))
+	name := m.DisplayName
+	if idx := strings.Index(name, "("); idx >= 0 && strings.HasSuffix(name, ")") {
+		tokens = append(tokens, strings.TrimSpace(name[:idx]), strings.TrimSpace(name[idx+1:len(name)-1]))
+	} else {
+		tokens = append(tokens, strings.TrimSpace(name))
+	}
+	out := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		if t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// wordStripChars is all ASCII punctuation minus '-', built
+// programmatically (ASCII 0x21-0x7E excluding letters/digits/hyphen)
+// rather than hand-typed, mirroring Python's
+// string.punctuation.replace("-", ""). See
+// TestWordStripCharsMatchPythonPunctuationMinusHyphen for the pinned
+// literal-value cross-check. Hyphens are deliberately EXCLUDED: they are
+// meaningful inside a model identifier itself (e.g. "M4300-24X"), so
+// stripping them would merge distinct SKUs together.
+var wordStripChars = buildWordStripChars()
+
+func buildWordStripChars() string {
+	var b strings.Builder
+	for c := byte('!'); c <= '~'; c++ {
+		switch {
+		case c == '-':
+			continue
+		case c >= '0' && c <= '9':
+			continue
+		case c >= 'A' && c <= 'Z':
+			continue
+		case c >= 'a' && c <= 'z':
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+// candidateTokens returns the whitespace-delimited "words" of a sysDescr
+// string, as whole-token candidates for exact (uppercased) comparison
+// against a registered model's match tokens.
+//
+// Only edge punctuation is stripped (e.g. the trailing comma in
+// "M4300-24X,") -- internal structure, in particular hyphens, is left
+// intact. This is what makes the comparison a WHOLE-IDENTIFIER match: a
+// registered token must equal an entire sysDescr word, not merely appear
+// as a prefix/substring of it -- e.g. the single sysDescr word
+// "GS305EPP" never equals the registered token "GS305EP", and the single
+// word "S3300-28X" never equals the registered alias token "S3300", no
+// matter what non-alphanumeric character (or none) immediately follows
+// the registered token's text.
+func candidateTokens(sysDescr string) map[string]bool {
+	out := make(map[string]bool)
+	for _, word := range strings.Fields(sysDescr) {
+		out[strings.ToUpper(strings.Trim(word, wordStripChars))] = true
+	}
+	return out
+}
+
+// SysObjectIDModels is the authoritative sysObjectID -> registry-key map.
+//
+// HONESTY CONSTRAINT: every entry is confirmed from a REAL hardware
+// capture. sysObjectID is the manufacturer's stable product identifier --
+// unlike free-form sysDescr text it is unambiguous, so it is the
+// PREFERRED detector when present. Entries are added only when a live
+// capture proves the mapping, NEVER guessed from a spec sheet (that is
+// why this map is small: most registered models have no committed
+// sysObjectID capture yet).
+//
+//   - "1.3.6.1.4.1.4526.100.10.19" -> "gsm7228ps": the S3300-52X-PoE+
+//     (sw-netgear-s3300-1, captured 2026-07-30). Its sysDescr
+//     "S3300-52X-PoE+ ..." is DELIBERATELY unmatchable by
+//     DetectModelFromSysDescr (same textual shape as the unregistered
+//     S3300-28X SKU), so this OID map is the ONLY safe way to
+//     auto-detect it.
+var SysObjectIDModels = map[string]string{
+	"1.3.6.1.4.1.4526.100.10.19": "gsm7228ps",
+}
+
+// DetectModelFromSysObjectID identifies a model from its sysObjectID via
+// SysObjectIDModels.
+//
+// Returns the registry key ONLY when the OID is in the real-capture-
+// confirmed map AND that key is present in models; otherwise nil (never
+// a guess). This is the AUTHORITATIVE detector -- sysObjectID is a
+// stable manufacturer product identifier, so unlike
+// DetectModelFromSysDescr's text heuristic it can safely distinguish
+// SKUs whose sysDescr strings are textually indistinguishable (the
+// S3300-52X vs the unregistered S3300-28X).
+func DetectModelFromSysObjectID(sysObjectID *string, models []*model.SwitchModel) *string {
+	if sysObjectID == nil || *sysObjectID == "" {
+		return nil
+	}
+	key, ok := SysObjectIDModels[*sysObjectID]
+	if !ok {
+		return nil
+	}
+	for _, m := range models {
+		if m.Key == key {
+			return model.Ptr(key)
+		}
+	}
+	return nil
+}
+
+// DetectModelFromSysDescr matches a switch's sysDescr text against
+// registered models' names.
+//
+// HONESTY CONSTRAINT: there is no ground-truth sysObjectID -> model
+// table -- matching is EXACT (case-insensitive) whole-word matching: the
+// sysDescr string is split into whitespace-delimited candidate tokens
+// (candidateTokens) and a registered model matches only when one of its
+// own key/display-name/alias tokens (modelMatchTokens) equals one of
+// those candidates in full -- NEVER a bare substring/prefix check, and
+// NEVER a guess:
+//
+//   - A sysDescr containing an unregistered Netgear model name matches
+//     no token and correctly returns nil -- it is NEVER coerced onto
+//     some other, wrong, registered model just because it looks
+//     Netgear-ish.
+//   - A non-Netgear/garbage string matches nothing and also returns nil.
+//   - A real, unregistered Netgear model whose name EXTENDS a registered
+//     token must also return nil, never the shorter registered model
+//     (e.g. "GS305EPP" vs the registered "GS305EP"; "S3300-28X" vs the
+//     registered alias "S3300"). Whole-word equality rejects both:
+//     neither is ever *equal* to the shorter registered token, regardless
+//     of what character (alphanumeric or not) follows it in the original
+//     text.
+//   - A sysDescr matching MORE THAN ONE registered model's tokens (two
+//     registered models' names collide and can't be disambiguated by
+//     this heuristic) ALSO returns nil rather than guessing between them.
+func DetectModelFromSysDescr(sysDescr *string, models []*model.SwitchModel) *string {
+	if sysDescr == nil || *sysDescr == "" {
+		return nil
+	}
+	candidates := candidateTokens(*sysDescr)
+	matches := make(map[string]bool)
+	for _, m := range models {
+		for _, token := range modelMatchTokens(m) {
+			if candidates[strings.ToUpper(token)] {
+				matches[m.Key] = true
+				break
+			}
+		}
+	}
+	if len(matches) == 1 {
+		for k := range matches {
+			return model.Ptr(k)
+		}
+	}
+	return nil
+}
