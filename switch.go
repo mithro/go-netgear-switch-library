@@ -94,6 +94,13 @@ type Switch struct {
 	// slice 04's write dispatch, stored here since construction already
 	// accepts the resolver option.
 	snmpWriteCommunity *resolveOnce
+	// snmpWriteClient, if non-nil, is used as-is by the SNMP
+	// WriteBackendBuilder (buildSNMPWriter, write_dispatch.go/backend_snmp.go)
+	// instead of building a default one from host/write-community -- a
+	// SEPARATE field from snmpClient, mirroring Python's distinct
+	// _snmp_write_client constructor param (D-WR §3.4 point 1: Go does not
+	// type-assert the read client into a WriteClient).
+	snmpWriteClient snmp.WriteClient
 
 	// nsdpInterface, if set, names the network interface NSDP UDP broadcast
 	// discovery should bind to; stored for slice 05.
@@ -108,10 +115,12 @@ type Switch struct {
 	// config.go's protectedPorts helper for the same convention).
 	protectedPorts []int
 
-	// mu guards readerCache: readerFor both reads and populates it, and a
-	// Switch may be dispatched from multiple goroutines concurrently.
+	// mu guards readerCache/writerCache: readerFor/writerFor both read and
+	// populate them, and a Switch may be dispatched from multiple
+	// goroutines concurrently.
 	mu          sync.Mutex
 	readerCache map[model.Backend]BackendReader
+	writerCache map[model.Backend]BackendWriter
 }
 
 // SwitchOption configures a Switch at construction time (functional-options
@@ -138,6 +147,15 @@ func WithSNMPWriteCommunityResolver(r func() (*string, error)) SwitchOption {
 // caller reusing an already-open connection.
 func WithSNMPClient(c snmp.Client) SwitchOption {
 	return func(sw *Switch) { sw.snmpClient = c }
+}
+
+// WithSNMPWriteClient injects an already-built snmp.WriteClient, used as-is
+// instead of a default one the SNMP WriteBackendBuilder would otherwise
+// construct from the host/resolved write community -- the write-side twin
+// of WithSNMPClient, kept as a SEPARATE field/option (not a type-assert of
+// an injected read client) per D-WR §3.4 point 1.
+func WithSNMPWriteClient(c snmp.WriteClient) SwitchOption {
+	return func(sw *Switch) { sw.snmpWriteClient = c }
 }
 
 // WithProtectedPorts marks ports as protected (write guards -- slice 04 --
@@ -194,6 +212,7 @@ func New(m *model.SwitchModel, host string, opts ...SwitchOption) (*Switch, erro
 		httpPassword:       newResolveOnce(nil),
 		protectedPorts:     []int{},
 		readerCache:        make(map[model.Backend]BackendReader),
+		writerCache:        make(map[model.Backend]BackendWriter),
 	}
 	for _, opt := range opts {
 		opt(sw)

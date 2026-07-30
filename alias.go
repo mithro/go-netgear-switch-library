@@ -1,6 +1,9 @@
 package netgearswitch
 
-import "github.com/mithro/go-netgear-switch-library/model"
+import (
+	"github.com/mithro/go-netgear-switch-library/model"
+	"github.com/mithro/go-netgear-switch-library/snmp"
+)
 
 // Device-data and enum types below are aliased from model so callers need
 // only import this top-level package. See model/types.go and
@@ -44,6 +47,17 @@ type (
 
 // WriteVerificationError is aliased from model; see model.WriteVerificationError.
 type WriteVerificationError = model.WriteVerificationError
+
+// PoeCycleTimeouts is aliased from snmp.PoeCycleTimeouts, so callers
+// configuring a CyclePoE/ClearPoEFault call (via WithCycleTimeouts) need not
+// import the snmp package directly. See snmp/writer_cycle.go.
+type PoeCycleTimeouts = snmp.PoeCycleTimeouts
+
+// DefaultPoeCycleTimeouts returns the production PoE-cycle deadlines
+// (30s/60s/2s); see snmp.DefaultPoeCycleTimeouts.
+func DefaultPoeCycleTimeouts() PoeCycleTimeouts {
+	return snmp.DefaultPoeCycleTimeouts()
+}
 
 // PoEDetect values, re-exported from model.
 const (
