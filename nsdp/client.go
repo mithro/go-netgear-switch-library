@@ -51,56 +51,32 @@ var dummyClientMAC = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
 // request -- read AND write -- regardless of query type.
 var zeroMAC = make([]byte, 6)
 
-// NsdpError is returned by every UDPClient failure mode: timeout, malformed
-// response, unexpected op-code, or a non-zero result (via CheckResult).
-// It mirrors Python's NsdpError(NetgearSwitchError): a plain marker type
-// with no extra fields, distinct from the codec-level errors protocol.go /
-// auth.go / write.go produce (which also wrap model.ErrNSDP, just via the
-// package-private errNSDP helper rather than this named type).
-//
-// errors.Is(err, model.ErrNSDP) matches every NsdpError, and errors.Is also
-// reaches any wrapped cause (e.g. the *NSDPPacket.Decode error a malformed
-// response wraps) via Unwrap.
-//
-// This name deliberately stutters with the package name (nsdp.NsdpError)
-// rather than being called just "Error", to mirror Python's
-// protocols.nsdp.client.NsdpError exactly, per the task brief.
-//
-//nolint:revive // stutter is intentional; see doc comment above
-type NsdpError struct {
-	msg   string
-	cause error
+// errNSDPCause returns an error wrapping both model.ErrNSDP and cause (via a
+// Go 1.20+ multi-%w Errorf), so errors.Is matches either the library-wide
+// NSDP sentinel or the original underlying cause. Sibling to errNSDP
+// (protocol.go), for the handful of call sites in this file that must keep
+// a wrapped cause reachable in the error chain (a decode error behind a
+// malformed response, or the real net.Error behind a receive timeout) --
+// see TestErrNSDPCause_PreservesCauseAndSentinel for the direct proof this
+// mechanism actually works.
+func errNSDPCause(cause error, format string, a ...any) error {
+	return fmt.Errorf("%s: %w: %w", fmt.Sprintf(format, a...), model.ErrNSDP, cause)
 }
 
-func (e *NsdpError) Error() string { return e.msg }
-
-// Unwrap exposes both e.cause (if any) and model.ErrNSDP, so errors.Is finds
-// either the underlying cause or the library-wide NSDP sentinel.
-func (e *NsdpError) Unwrap() []error {
-	if e.cause != nil {
-		return []error{e.cause, model.ErrNSDP}
-	}
-	return []error{model.ErrNSDP}
-}
-
-func newNsdpError(cause error, format string, a ...any) *NsdpError {
-	return &NsdpError{msg: fmt.Sprintf(format, a...), cause: cause}
-}
-
-// CheckResult raises (returns) an *NsdpError unless packet reports success
-// (Result == ResultSuccess). Mirrors Python protocols.nsdp.client.check_result
-// exactly: only ResultSuccess is silent; ResultBadPassword gets the
-// bad-password message with AuthV2Unsupported appended verbatim; any other
-// non-zero result gets a generic "failed with result 0x%04x" message (4
-// lowercase hex digits, zero-padded).
+// CheckResult returns an error (wrapping model.ErrNSDP, via errNSDP) unless
+// packet reports success (Result == ResultSuccess). Mirrors Python
+// protocols.nsdp.client.check_result exactly: only ResultSuccess is silent;
+// ResultBadPassword gets the bad-password message with AuthV2Unsupported
+// appended verbatim; any other non-zero result gets a generic "failed with
+// result 0x%04x" message (4 lowercase hex digits, zero-padded).
 func CheckResult(packet Packet) error {
 	switch packet.Result {
 	case ResultSuccess:
 		return nil
 	case ResultBadPassword:
-		return newNsdpError(nil, "NSDP write rejected: bad password (result 0x0700). %s", AuthV2Unsupported)
+		return errNSDP("NSDP write rejected: bad password (result 0x0700). %s", AuthV2Unsupported)
 	default:
-		return newNsdpError(nil, "NSDP request failed with result 0x%04x", packet.Result)
+		return errNSDP("NSDP request failed with result 0x%04x", packet.Result)
 	}
 }
 
@@ -114,8 +90,9 @@ func CheckResult(packet Packet) error {
 // A missing/unreadable sysfs file, or non-hex content, propagates the raw
 // os/hex error UNWRAPPED (mirroring Python's Path.read_text()/bytes.fromhex
 // raising their own exception types, not NsdpError). Only the length check
-// -- present but not 6 bytes -- raises *NsdpError, matching Python's single
-// explicit `raise NsdpError(...)` call site.
+// -- present but not 6 bytes -- returns an error wrapping model.ErrNSDP (via
+// errNSDP), matching Python's single explicit `raise NsdpError(...)` call
+// site.
 func ReadInterfaceMAC(iface string) ([]byte, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/address", iface))
 	if err != nil {
@@ -127,7 +104,7 @@ func ReadInterfaceMAC(iface string) ([]byte, error) {
 		return nil, err
 	}
 	if len(raw) != 6 {
-		return nil, newNsdpError(nil, "interface %q MAC is not 6 bytes: %q", iface, text)
+		return nil, errNSDP("interface %q MAC is not 6 bytes: %q", iface, text)
 	}
 	return raw, nil
 }
@@ -247,9 +224,6 @@ func NewUDPClient(host string, opts ...Option) (*UDPClient, error) {
 	default:
 		c.ClientMAC = dummyClientMAC
 	}
-	if c.transceive == nil {
-		c.transceive = realTransceive
-	}
 	return c, nil
 }
 
@@ -265,12 +239,15 @@ func (c *UDPClient) nextSeq() uint32 {
 }
 
 // exchange encodes req, sends it via c.transceive, and decodes the response.
-// Mirrors Python UdpNsdpClient._exchange's error ordering exactly: a receive
-// timeout becomes NsdpError("...timed out"); any other transceive error
-// (e.g. a bind/send failure) propagates unwrapped, exactly like Python's
-// _exchange only special-cases the recvfrom TimeoutError and lets any other
-// OSError from bind/sendto propagate raw; a decode failure becomes
-// NsdpError("malformed NSDP response from %s: %v").
+// Mirrors Python UdpNsdpClient._exchange's error ordering exactly: any
+// transceive error (bind/send/recv failure -- including a receive timeout)
+// propagates from c.transceive UNCHANGED; the recv-side timeout-to-"timed
+// out" translation happens inside the transceiveFunc itself (realTransceive
+// does this only for its actual recv step, matching Python's _exchange only
+// special-casing the recvfrom TimeoutError and letting any other OSError
+// from bind/sendto propagate raw). A decode failure becomes an error
+// wrapping model.ErrNSDP and the decode cause ("malformed NSDP response
+// from %s: %v").
 func (c *UDPClient) exchange(ctx context.Context, req Packet) (Packet, error) {
 	payload, err := req.Encode()
 	if err != nil {
@@ -294,16 +271,12 @@ func (c *UDPClient) exchange(ctx context.Context, req Packet) (Packet, error) {
 	}
 	data, err := fn(cctx, payload, c.Host, c.ServerPort, c.ClientPort, c.Interface)
 	if err != nil {
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			return Packet{}, newNsdpError(err, "NSDP request to %s timed out", c.Host)
-		}
 		return Packet{}, err
 	}
 
 	resp, err := DecodePacket(data)
 	if err != nil {
-		return Packet{}, newNsdpError(err, "malformed NSDP response from %s: %v", c.Host, err)
+		return Packet{}, errNSDPCause(err, "malformed NSDP response from %s: %v", c.Host, err)
 	}
 	return resp, nil
 }
@@ -319,7 +292,7 @@ func (c *UDPClient) Read(ctx context.Context, tags []Tag) (*Packet, error) {
 		return nil, err
 	}
 	if resp.Op != OpReadResponse {
-		return nil, newNsdpError(nil, "expected READ_RESPONSE from %s, got %s", c.Host, resp.Op)
+		return nil, errNSDP("expected READ_RESPONSE from %s, got %s", c.Host, resp.Op)
 	}
 	return &resp, nil
 }
@@ -341,7 +314,7 @@ func (c *UDPClient) Write(ctx context.Context, tlvs []TLVEntry, password string)
 		return nil, err
 	}
 	if resp.Op != OpWriteResponse {
-		return nil, newNsdpError(nil, "expected WRITE_RESPONSE from %s, got %s", c.Host, resp.Op)
+		return nil, errNSDP("expected WRITE_RESPONSE from %s, got %s", c.Host, resp.Op)
 	}
 	if err := CheckResult(resp); err != nil {
 		return nil, err
@@ -357,22 +330,28 @@ var (
 
 // realTransceive is the production transceiveFunc: one real UDP socket per
 // call (mirroring Python's per-call socket lifecycle), ctx-aware via
-// net.Dialer (dial itself and the read deadline both derive from ctx's
-// deadline, set up by exchange -- either the caller's own ctx deadline, or
-// one derived from the client's configured Timeout).
+// net.Dialer (dial itself derives its deadline from ctx, set up by exchange
+// -- either the caller's own ctx deadline, or one derived from the client's
+// configured Timeout).
 //
 // Socket options (dossier §5.3/§5.4) are applied via the platform-specific
 // controlFunc: SO_REUSEADDR unconditionally, and -- on linux only, via a
 // build-tagged file -- best-effort SO_BINDTODEVICE to iface, suppressing
 // any error (needs CAP_NET_RAW/root; an unprivileged caller must still
 // attempt the query rather than crash).
+//
+// The ctx deadline is applied ONLY as a read deadline (conn.SetReadDeadline,
+// not conn.SetDeadline), so it bounds the recv step alone -- matching
+// Python's _exchange, which only special-cases the recvfrom TimeoutError and
+// lets any dial/sendto failure propagate raw (dossier §5.10). Dial and write
+// failures here likewise return the raw error unchanged; only a recv-side
+// net.Error with Timeout()==true is translated into an error wrapping
+// model.ErrNSDP (via errNSDPCause, preserving the original net.Error as the
+// cause) with the "NSDP request to %s timed out" message.
 func realTransceive(ctx context.Context, payload []byte, host string, serverPort, clientPort int, iface string) ([]byte, error) {
 	dialer := &net.Dialer{
 		LocalAddr: &net.UDPAddr{Port: clientPort},
 		Control:   controlFunc(iface),
-	}
-	if dl, ok := ctx.Deadline(); ok {
-		dialer.Timeout = time.Until(dl)
 	}
 
 	conn, err := dialer.DialContext(ctx, "udp4", net.JoinHostPort(host, strconv.Itoa(serverPort)))
@@ -381,19 +360,23 @@ func realTransceive(ctx context.Context, payload []byte, host string, serverPort
 	}
 	defer func() { _ = conn.Close() }()
 
-	if dl, ok := ctx.Deadline(); ok {
-		if err := conn.SetDeadline(dl); err != nil {
-			return nil, err
-		}
-	}
-
 	if _, err := conn.Write(payload); err != nil {
 		return nil, err
+	}
+
+	if dl, ok := ctx.Deadline(); ok {
+		if err := conn.SetReadDeadline(dl); err != nil {
+			return nil, err
+		}
 	}
 
 	buf := make([]byte, recvBufferSize)
 	n, err := conn.Read(buf)
 	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return nil, errNSDPCause(err, "NSDP request to %s timed out", host)
+		}
 		return nil, err
 	}
 	return buf[:n], nil

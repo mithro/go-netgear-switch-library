@@ -40,14 +40,6 @@ func bytesRepeat(b byte, n int) []byte {
 	return out
 }
 
-// fakeTimeoutErr satisfies net.Error with Timeout()==true, standing in for
-// a real dial/read timeout without needing an actual socket.
-type fakeTimeoutErr struct{}
-
-func (fakeTimeoutErr) Error() string   { return "i/o timeout" }
-func (fakeTimeoutErr) Timeout() bool   { return true }
-func (fakeTimeoutErr) Temporary() bool { return true }
-
 // fakeExchange records the payload sent to it and returns a scripted
 // response (or error), standing in for a real UDP socket. Mirrors the
 // Python test suite's _FakeSocket / _fake_transceive.
@@ -112,21 +104,6 @@ func TestUDPClient_ReadSendsReadRequestAndDecodesResponse(t *testing.T) {
 	}
 }
 
-func TestUDPClient_ReadTimeoutRaisesNsdpError(t *testing.T) {
-	fx := &fakeExchange{err: fakeTimeoutErr{}}
-	c := newTestClient(t, fx)
-
-	_, err := c.Read(context.Background(), []Tag{TagModel})
-	var nsdpErr *NsdpError
-	if !errors.As(err, &nsdpErr) {
-		t.Fatalf("Read err = %v, want *NsdpError", err)
-	}
-	if !errors.Is(err, model.ErrNSDP) {
-		t.Errorf("errors.Is(err, model.ErrNSDP) = false, want true")
-	}
-	wantSubstr(t, err, "timed out")
-}
-
 func TestUDPClient_ReadMalformedResponseRaisesNsdpError(t *testing.T) {
 	fx := &fakeExchange{response: []byte("not-nsdp-bytes")}
 	c := newTestClient(t, fx)
@@ -147,21 +124,24 @@ func TestUDPClient_ReadWrongOpRaisesNsdpError(t *testing.T) {
 	wantSubstr(t, err, "expected READ_RESPONSE")
 }
 
-func TestUDPClient_ReadPropagatesNonTimeoutTransportError(t *testing.T) {
-	// A non-timeout transceive failure (e.g. a bind/send OSError) must
-	// propagate unwrapped, exactly like Python's _exchange only
-	// special-cases the recvfrom TimeoutError.
+func TestUDPClient_ReadPropagatesTransportErrorsUnwrapped(t *testing.T) {
+	// ANY transceive failure -- bind/send/recv, timeout or not -- must
+	// propagate exactly as the transceiveFunc returned it: exchange() no
+	// longer inspects/wraps transceive errors at all (that translation, for
+	// the one case Python special-cases -- a real recv timeout -- lives
+	// inside realTransceive itself; see TestRealTransceive_*). A fake
+	// transceiver returning a plain sentinel error must therefore come back
+	// out of Read completely unwrapped: not matching model.ErrNSDP.
 	sentinel := errors.New("bind: address already in use")
 	fx := &fakeExchange{err: sentinel}
 	c := newTestClient(t, fx)
 
 	_, err := c.Read(context.Background(), []Tag{TagModel})
 	if !errors.Is(err, sentinel) {
-		t.Errorf("err = %v, want to wrap %v unwrapped (not an *NsdpError)", err, sentinel)
+		t.Errorf("err = %v, want to wrap %v unwrapped", err, sentinel)
 	}
-	var nsdpErr *NsdpError
-	if errors.As(err, &nsdpErr) {
-		t.Errorf("err = %v (*NsdpError), want the raw sentinel to propagate unwrapped", err)
+	if errors.Is(err, model.ErrNSDP) {
+		t.Errorf("err = %v, want it NOT to wrap model.ErrNSDP (dial/send/recv errors from the transceiver propagate raw)", err)
 	}
 }
 
@@ -314,10 +294,76 @@ func TestReadInterfaceMAC_MissingInterfacePropagatesRaw(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error for a nonexistent interface")
 	}
-	var nsdpErr *NsdpError
-	if errors.As(err, &nsdpErr) {
-		t.Errorf("err = %v (*NsdpError), want the raw os.ReadFile error to propagate unwrapped (mirrors Python's Path.read_text())", err)
+	if errors.Is(err, model.ErrNSDP) {
+		t.Errorf("err = %v, want it NOT to wrap model.ErrNSDP (mirrors Python's Path.read_text() propagating its own raw exception type unwrapped)", err)
 	}
+}
+
+// TestErrNSDPCause_PreservesCauseAndSentinel directly proves errNSDPCause's
+// Go 1.20+ multi-%w mechanism actually does what its doc comment claims:
+// both the library-wide model.ErrNSDP sentinel AND the original cause must
+// be independently reachable via errors.Is. This is the deterministic,
+// identity-based proof that a review nit flagged as missing when the wrap
+// path only had indirect (message-substring) coverage.
+func TestErrNSDPCause_PreservesCauseAndSentinel(t *testing.T) {
+	cause := errors.New("boom")
+	err := errNSDPCause(cause, "context %s", "info")
+
+	if !errors.Is(err, model.ErrNSDP) {
+		t.Errorf("errors.Is(err, model.ErrNSDP) = false, want true")
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("errors.Is(err, cause) = false, want true -- the cause must survive in the error chain")
+	}
+	wantSubstr(t, err, "context info")
+}
+
+// TestRealTransceive_RecvTimeoutWrapsErrNSDPWithCause exercises the ACTUAL
+// production recv-timeout path (realTransceive itself, called directly, no
+// fake): a real UDP server binds and drains every datagram it receives but
+// never replies, so the client's conn.Read genuinely times out (as opposed
+// to an immediate ECONNREFUSED, which loopback UDP can otherwise deliver
+// near-instantly for a CLOSED port -- this is why the test needs a real,
+// listening-but-silent server rather than just an unused port number).
+//
+// This is the direct, non-fake proof that dossier §5.10's exact message
+// ("NSDP request to %s timed out") is produced, model.ErrNSDP is reachable,
+// AND the real net.Error (satisfying Timeout()==true) survives as the cause
+// -- closing the review's "untested cause" gap for the one call site a fake
+// can't exercise (the fake seam bypasses realTransceive entirely).
+func TestRealTransceive_RecvTimeoutWrapsErrNSDPWithCause(t *testing.T) {
+	serverConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer func() { _ = serverConn.Close() }()
+	serverPort := serverConn.LocalAddr().(*net.UDPAddr).Port
+
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		buf := make([]byte, recvBufferSize)
+		_, _, _ = serverConn.ReadFromUDP(buf) // read it, but never reply
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_, err = realTransceive(ctx, []byte("probe"), "127.0.0.1", serverPort, 0, "")
+	if err == nil {
+		t.Fatal("realTransceive: want a recv-timeout error, got nil")
+	}
+	if !errors.Is(err, model.ErrNSDP) {
+		t.Errorf("errors.Is(err, model.ErrNSDP) = false, want true: %v", err)
+	}
+	wantSubstr(t, err, "timed out")
+
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Errorf("errors.As(err, &netErr) found a Timeout()==true net.Error = false, want true (the original cause must be reachable): %v", err)
+	}
+
+	<-drained
 }
 
 // wantSubstr fails t if err is nil or its message doesn't contain substr.
