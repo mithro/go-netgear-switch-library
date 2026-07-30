@@ -209,12 +209,19 @@ func TestApplyNsdpWriteUnknownAndReadOnlyTagsAreNoOps(t *testing.T) {
 // a panic that would crash NsdpFace's background serve goroutine.
 func TestApplyNsdpWriteTooShortValueIsANoOp(t *testing.T) {
 	st := SeedGS110EMX()
+	// Seeded Mode is already "static" (see SeedGS110EMX), which would make
+	// an empty-DHCP_MODE-still-static assertion below pass even if the
+	// no-op guard were missing entirely (it'd merely re-set the same
+	// value). Force Mode to "dhcp" first so the assertion actually proves
+	// ApplyNsdpWrite left Mode UNTOUCHED, not merely unchanged-by-coincidence.
+	st.Mgmt.Mode = "dhcp"
 	before := st.Snapshot()
 
 	st.ApplyNsdpWrite(nsdp.TagPortPVID, []byte{5}) // needs 3 bytes, has 1
 	st.ApplyNsdpWrite(nsdp.TagVLANMembers, []byte{0x00})
 	st.ApplyNsdpWrite(nsdp.TagIPAddress, []byte{1, 2}) // needs 4 bytes
 	st.ApplyNsdpWrite(nsdp.TagDHCPMode, nil)
+	st.ApplyNsdpWrite(nsdp.TagDHCPMode, []byte{}) // empty-but-non-nil, same contract
 
 	if !reflect.DeepEqual(st.Pvids, before.Pvids) {
 		t.Error("too-short PORT_PVID value mutated Pvids, want a no-op")
@@ -225,11 +232,10 @@ func TestApplyNsdpWriteTooShortValueIsANoOp(t *testing.T) {
 	if st.Mgmt.Address != before.Mgmt.Address {
 		t.Error("too-short IP_ADDRESS value mutated Mgmt.Address, want a no-op")
 	}
-	// An empty DHCP_MODE value falls to the "static" branch (matching
-	// Python's `value[:1] == b"\x01"` being false for empty value), not a
-	// no-op -- pinned separately so this test's other no-op assertions
-	// aren't misread as claiming DHCP_MODE behaves the same way.
-	if st.Mgmt.Mode != "static" {
-		t.Errorf("Mgmt.Mode after empty DHCP_MODE value = %q, want static", st.Mgmt.Mode)
+	// An empty DHCP_MODE value must be a no-op like every other too-short
+	// value for a known tag (docs/cross-language-divergences.md, "Slice
+	// 05", entry 4): it must NOT fall through to the "static" branch.
+	if st.Mgmt.Mode != "dhcp" {
+		t.Errorf("Mgmt.Mode after empty DHCP_MODE value = %q, want dhcp (unchanged, a no-op)", st.Mgmt.Mode)
 	}
 }

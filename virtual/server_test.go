@@ -235,6 +235,42 @@ func TestGoFakeProviderStartModelReturnsLiveEndpoints(t *testing.T) {
 	}
 }
 
+// TestGoFakeProviderStartModelReturnsLiveNsdpEndpoint proves Endpoints.NsdpPort
+// mirrors VirtualSwitch.NsdpPort through the provider seam: gs305ep (a
+// Plus-class, NSDP+HTTP-only model, see TestVirtualSwitchGS305EPStartBindsNsdpFaceNotSnmp)
+// must come back with a nonzero, LIVE Endpoints.NsdpPort and a zero
+// Endpoints.SnmpPort -- the same "no face this slice can't bind for" split
+// as the underlying VirtualSwitch, just surfaced through the
+// EndpointProvider seam slice 10's cross-language harness drives.
+func TestGoFakeProviderStartModelReturnsLiveNsdpEndpoint(t *testing.T) {
+	p := &GoFakeProvider{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ep, err := p.StartModel(ctx, "gs305ep")
+	if err != nil {
+		t.Fatalf("StartModel(gs305ep) error = %v", err)
+	}
+	if ep.NsdpPort == 0 {
+		t.Fatal("Endpoints.NsdpPort = 0, want nonzero bound port")
+	}
+	if ep.SnmpPort != 0 {
+		t.Errorf("Endpoints.SnmpPort = %d, want 0 (gs305ep has no BackendSNMP)", ep.SnmpPort)
+	}
+
+	client, err := nsdp.NewUDPClient(ep.Host, nsdp.WithServerPort(ep.NsdpPort), nsdp.WithClientPort(0), nsdp.WithTimeout(5*time.Second))
+	if err != nil {
+		t.Fatalf("nsdp.NewUDPClient: %v", err)
+	}
+	if _, err := client.Read(context.Background(), []nsdp.Tag{nsdp.TagModel}); err != nil {
+		t.Errorf("Read against provider-started NSDP endpoint failed: %v", err)
+	}
+
+	if err := p.CloseAll(); err != nil {
+		t.Errorf("CloseAll() error = %v", err)
+	}
+}
+
 func TestGoFakeProviderUnknownModelPropagatesError(t *testing.T) {
 	p := &GoFakeProvider{}
 	_, err := p.StartModel(context.Background(), "not-a-real-model")

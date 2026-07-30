@@ -199,12 +199,14 @@ func (v *VirtualSwitch) Stop() error {
 // Endpoints is the set of listening endpoints a started VirtualSwitch
 // exposes, for a caller (e.g. a cross-language conformance-harness client,
 // slice 10) that wants only connection details, not this package's
-// concrete VirtualSwitch type. Later slices add NsdpPort, HTTPPort,
-// SSHPort, TelnetPort, Password fields as those faces land, mirroring
-// VirtualSwitch's own reserved fields.
+// concrete VirtualSwitch type. NsdpPort mirrors VirtualSwitch.NsdpPort now
+// that the NSDP face has landed (this slice); later slices add HTTPPort,
+// SSHPort, TelnetPort, Password fields the same way, as those faces land,
+// mirroring VirtualSwitch's own reserved fields.
 type Endpoints struct {
 	Host      string
 	SnmpPort  int
+	NsdpPort  int
 	Community string
 }
 
@@ -272,7 +274,7 @@ func (p *GoFakeProvider) StartModel(ctx context.Context, modelKey string) (Endpo
 		_ = sw.Stop() // idempotent: a no-op if CloseAll's own Stop call already ran.
 	}()
 
-	return Endpoints{Host: sw.Host, SnmpPort: sw.SnmpPort, Community: sw.community}, nil
+	return Endpoints{Host: sw.Host, SnmpPort: sw.SnmpPort, NsdpPort: sw.NsdpPort, Community: sw.community}, nil
 }
 
 // CloseAll stops every VirtualSwitch this provider has ever started via

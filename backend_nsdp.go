@@ -152,26 +152,30 @@ func buildNSDPWriter(sw *Switch) (BackendWriter, error) {
 // but CyclePoE/ClearPoEFault -- deliberately not ported, since NSDP has no
 // PoE control tag at all and the timeouts parameter's package "home" is a
 // slice-06 decision; see nsdp/writer.go's own doc comment). CyclePoE/
-// ClearPoEFault below round-trip through the embedded Writer's SetPoE to
-// reuse its EXACT "NSDP has no PoE control tag" error text (mirroring
-// Python's NsdpWriter.cycle_poe/clear_poe_fault, which both raise the same
-// _NO_POE UnsupportedCapabilityError set_poe does) rather than duplicating
-// that message string here.
+// ClearPoEFault below are constant model.ErrUnsupportedCapability stubs
+// wrapping nsdp.NoPoEWriteMsg VERBATIM -- the same exported message
+// constant SetPoE itself wraps (mirroring Python's NsdpWriter.cycle_poe/
+// clear_poe_fault, which both raise the same _NO_POE
+// UnsupportedCapabilityError set_poe does) -- rather than calling through
+// to SetPoE: these are unsupported operations in their own right, not "turn
+// PoE off", and a stub that never touches the embedded Writer at all makes
+// that reading unambiguous at the call site.
 type nsdpWriterAdapter struct {
 	*nsdp.Writer
 }
 
-// CyclePoE always returns the same error SetPoE does: NSDP has no PoE
-// control tag. port/timeouts/force are accepted-but-effectively-unused
-// (force is forwarded to SetPoE only so a protected-port-guard message, if
-// nsdp.Writer ever grows one for SetPoE, stays consistent -- today SetPoE
-// itself ignores force too).
-func (a *nsdpWriterAdapter) CyclePoE(ctx context.Context, port int, _ snmp.PoeCycleTimeouts, force bool) error {
-	return a.SetPoE(ctx, port, false, force)
+// CyclePoE always returns an error wrapping model.ErrUnsupportedCapability:
+// NSDP has no PoE control tag. port/timeouts/force are accepted-but-unused,
+// purely so this method's signature matches the shared BackendWriter
+// surface (see write_dispatch.go); this is a constant stub, never a
+// disguised "turn PoE off" call.
+func (a *nsdpWriterAdapter) CyclePoE(_ context.Context, _ int, _ snmp.PoeCycleTimeouts, _ bool) error {
+	return fmt.Errorf("%s: %w", nsdp.NoPoEWriteMsg, model.ErrUnsupportedCapability)
 }
 
-// ClearPoEFault always returns the same error SetPoE does: NSDP has no PoE
-// control tag. See CyclePoE's doc comment.
-func (a *nsdpWriterAdapter) ClearPoEFault(ctx context.Context, port int, _ snmp.PoeCycleTimeouts, force bool) error {
-	return a.SetPoE(ctx, port, false, force)
+// ClearPoEFault always returns an error wrapping
+// model.ErrUnsupportedCapability: NSDP has no PoE control tag. See
+// CyclePoE's doc comment.
+func (a *nsdpWriterAdapter) ClearPoEFault(_ context.Context, _ int, _ snmp.PoeCycleTimeouts, _ bool) error {
+	return fmt.Errorf("%s: %w", nsdp.NoPoEWriteMsg, model.ErrUnsupportedCapability)
 }

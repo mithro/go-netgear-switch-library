@@ -1023,8 +1023,20 @@ func (s *State) NsdpTlvs(tags map[nsdp.Tag]bool) []nsdp.TLVEntry {
 // package's background serve goroutine would be strictly worse than even
 // the thread-killing cases above: it crashes the entire process, not just
 // one mock's request loop. Go therefore guards every branch uniformly
-// rather than mirroring Python's per-tag mix. See
-// docs/cross-language-divergences.md, "Slice 05", entry 4, for the full
+// rather than mirroring Python's per-tag mix.
+//
+// DHCP_MODE is a related but distinct case: neither language ever panics on
+// an empty value here (indexing `value[:1]`/`value[0]==0x01` guarded by
+// `len(value) > 0` doesn't raise/index-fault on empty in either language).
+// But Python's `value[:1] == b"\x01"` is simply False for an empty value,
+// so Python's else branch sets Mode="static" -- a spurious mutation of a
+// known tag from a too-short (here, zero-length) value, violating the same
+// "too-short value = no-op" contract this comment documents for the other
+// tags above. Go deliberately does NOT mirror that inconsistency: an empty
+// DHCP_MODE value is guarded to a no-op up front, same as every other known
+// tag's too-short value.
+//
+// See docs/cross-language-divergences.md, "Slice 05", entry 4, for the full
 // call-out; nothing here changes the wire encoding of any well-formed
 // write, only how a malformed one degrades.
 func (s *State) ApplyNsdpWrite(tag nsdp.Tag, value []byte) {
@@ -1067,7 +1079,10 @@ func (s *State) ApplyNsdpWrite(tag nsdp.Tag, value []byte) {
 			s.Mgmt.Gateway = addr
 		}
 	case nsdp.TagDHCPMode:
-		if len(value) > 0 && value[0] == 0x01 {
+		if len(value) == 0 {
+			return
+		}
+		if value[0] == 0x01 {
 			s.Mgmt.Mode = "dhcp"
 		} else {
 			s.Mgmt.Mode = "static"

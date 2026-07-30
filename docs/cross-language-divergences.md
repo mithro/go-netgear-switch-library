@@ -146,6 +146,16 @@ compare.
      too-short buffer, which `_serve`'s `except ValueError: continue` DOES
      catch -- the write response is silently dropped (client sees a
      timeout) but the thread survives.
+   - **DHCP_MODE** never panics/raises in either language for an empty
+     value (`value[:1] == b"\x01"` in Python, `len(value) > 0 &&
+     value[0] == 0x01` in Go are both safe on empty input) -- but Python's
+     comparison is simply `False` for an empty value, so its `else` branch
+     sets `Mode="static"`: a spurious mutation from a too-short value, not
+     a crash, but still a violation of the same "too-short = no-op"
+     contract this entry documents for every other tag. Go's `ApplyNsdpWrite`
+     guards this branch with the same up-front `len(value) == 0` no-op
+     check as everything else, so an empty DHCP_MODE value leaves `Mgmt.Mode`
+     untouched instead of forcing it to "static".
 
    An unrecovered Go panic from the same out-of-range access in this
    package's background serve goroutine would be strictly worse than even
@@ -153,7 +163,34 @@ compare.
    one mock's request loop. Go therefore guards every branch's length up
    front and treats a too-short value as a no-op uniformly, regardless of
    which tag -- simpler, and strictly safer than Python's per-branch mix of
-   "silently drops the response" (VLAN_MEMBERS) and "kills the thread"
-   (PORT_PVID, IP_ADDRESS/NETMASK/GATEWAY). This only changes how a
-   MALFORMED write degrades; every well-formed write's wire encoding and
-   resulting state mutation are unchanged.
+   "silently drops the response" (VLAN_MEMBERS), "kills the thread"
+   (PORT_PVID, IP_ADDRESS/NETMASK/GATEWAY), and "spuriously mutates state"
+   (DHCP_MODE). This only changes how a MALFORMED write degrades; every
+   well-formed write's wire encoding and resulting state mutation are
+   unchanged.
+5. **`UDPClient.exchange` resolves its per-exchange read deadline as
+   `min(now+c.Timeout, ctx's own deadline, if any)`** (`nsdp/client.go`):
+   Python's `UdpNsdpClient`/`AsyncUdpNsdpClient` call `sock.settimeout(2s)`
+   (dossier §5.5) unconditionally on every socket, bounding every single
+   `recvfrom` at ~2s regardless of any caller-side deadline concept (Python
+   has no equivalent of a caller-supplied `ctx` deadline threading through
+   the exchange at all). An earlier version of this Go port instead applied
+   `c.Timeout` ONLY when the caller's `ctx` had no deadline of its own,
+   which meant a caller passing a `ctx` with a large request-scoped
+   deadline (e.g. one derived from an HTTP request's own lifetime, several
+   layers up) could make a single NSDP exchange block for that entire
+   deadline instead of `c.Timeout` -- a real divergence from Python, which
+   always caps it at ~2s no matter what. This is now resolved with explicit
+   min-deadline semantics (`context.WithDeadline(ctx,
+   min(now+c.Timeout, ctxDeadline))`), which moves Go CLOSER to Python's
+   behaviour, not further from it: the client's own configured `Timeout`
+   now always bounds a single exchange, while a caller-supplied deadline
+   SHORTER than `c.Timeout` (or outright ctx cancellation) still takes
+   effect exactly as before, since the derived context still closes the
+   moment the parent `ctx` does.
+   `TestUDPClient_ExchangeUsesMinOfClientTimeoutAndCtxDeadline` pins this:
+   a caller `ctx` with a 10s deadline against a black-hole (never-
+   responding) fake server still times out within `c.Timeout` (300ms),
+   never anywhere near the 10s ctx deadline. This is the settled precedent
+   slice 06's HTTP client is expected to inherit for its own per-request
+   deadline handling.

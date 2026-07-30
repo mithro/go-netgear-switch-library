@@ -38,10 +38,22 @@ import (
 	"github.com/mithro/go-netgear-switch-library/model"
 )
 
-// Exact unsupported-write messages, mirroring Python nsdp_write.py's
-// _NO_POE/_NO_PORT_ADMIN/_NO_VLAN_LIFECYCLE module constants verbatim.
+// NoPoEWriteMsg is the exact message SetPoE below wraps in every error it
+// returns, mirroring Python nsdp_write.py's _NO_POE module constant
+// verbatim. Exported so callers outside this package that must surface the
+// identical "NSDP has no PoE control tag" text -- without themselves calling
+// into a Writer (e.g. the root package's CyclePoE/ClearPoEFault adapter
+// stubs in backend_nsdp.go, which this package's own doc comment on Writer
+// explicitly defers to the facade layer) -- can reference this constant
+// instead of duplicating the string.
+const NoPoEWriteMsg = "NSDP has no PoE control tag; use the HTTP backend (Slice 6) for PoE"
+
+// Exact unsupported-write messages for the two remaining unsupported
+// writes, mirroring Python nsdp_write.py's _NO_PORT_ADMIN/
+// _NO_VLAN_LIFECYCLE module constants verbatim. Unexported: nothing outside
+// this package needs to reproduce these two messages independently (unlike
+// NoPoEWriteMsg above).
 const (
-	noPoEWriteMsg  = "NSDP has no PoE control tag; use the HTTP backend (Slice 6) for PoE"
 	noPortAdminMsg = "no per-port admin-enable is available on these Plus models: NSDP has no " +
 		"admin-enable tag, and the web UI has no grounded port-enable endpoint " +
 		"(UNVERIFIED-pending-capture)"
@@ -373,7 +385,7 @@ func (w *Writer) SetMgmtIP(ctx context.Context, address, netmask, gateway string
 // parameter is accepted-but-unused, purely so this method's signature
 // matches the shared BackendWriter surface (see write_dispatch.go).
 func (w *Writer) SetPoE(_ context.Context, _ int, _ bool, _ bool) error {
-	return unsupportedWrite(noPoEWriteMsg)
+	return unsupportedWrite(NoPoEWriteMsg)
 }
 
 // SetPortEnabled always returns an error wrapping

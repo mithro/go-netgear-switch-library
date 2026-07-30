@@ -366,6 +366,60 @@ func TestRealTransceive_RecvTimeoutWrapsErrNSDPWithCause(t *testing.T) {
 	<-drained
 }
 
+// TestUDPClient_ExchangeUsesMinOfClientTimeoutAndCtxDeadline proves the
+// min-deadline resolution documented on UDPClient.exchange: a caller ctx
+// with a deadline far longer than the client's own Timeout must NOT let a
+// single exchange block anywhere near that long. Against a real (never
+// replying) UDP black-hole server, Read must still time out within roughly
+// c.Timeout, not the 10s ctx deadline -- exactly the divergence-from-Python
+// this fixes (Python's socket settimeout(2s) always bounds every recv
+// unconditionally, regardless of any caller-side deadline concept).
+func TestUDPClient_ExchangeUsesMinOfClientTimeoutAndCtxDeadline(t *testing.T) {
+	serverConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer func() { _ = serverConn.Close() }()
+	serverPort := serverConn.LocalAddr().(*net.UDPAddr).Port
+
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		buf := make([]byte, recvBufferSize)
+		_, _, _ = serverConn.ReadFromUDP(buf) // read the request, but never reply.
+	}()
+
+	client, err := NewUDPClient("127.0.0.1",
+		WithClientPort(0),
+		WithServerPort(serverPort),
+		WithClientMAC(clientTestMAC),
+		WithTimeout(300*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("NewUDPClient: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_, err = client.Read(ctx, []Tag{TagModel})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Read: want a timeout error, got nil")
+	}
+	if !errors.Is(err, model.ErrNSDP) {
+		t.Errorf("errors.Is(err, model.ErrNSDP) = false, want true: %v", err)
+	}
+	wantSubstr(t, err, "timed out")
+	if elapsed > 2*time.Second {
+		t.Errorf("Read took %v, want it bounded by the client's own 300ms Timeout, not the 10s ctx deadline", elapsed)
+	}
+
+	<-drained
+}
+
 // wantSubstr fails t if err is nil or its message doesn't contain substr.
 func wantSubstr(t *testing.T, err error, substr string) {
 	t.Helper()

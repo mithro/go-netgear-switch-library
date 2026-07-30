@@ -248,6 +248,27 @@ func (c *UDPClient) nextSeq() uint32 {
 // from bind/sendto propagate raw). A decode failure becomes an error
 // wrapping model.ErrNSDP and the decode cause ("malformed NSDP response
 // from %s: %v").
+//
+// Deliberate improvement over the pinned Python reference's deadline
+// handling: Python's sock.settimeout(2s) (dossier §5.5) bounds EVERY
+// recvfrom call unconditionally, regardless of how the caller got there --
+// there is no concept of a caller-supplied deadline overriding it. The
+// original Go port instead applied c.Timeout ONLY when ctx had no deadline
+// of its own, which meant a caller-supplied ctx with a large request-scoped
+// deadline (e.g. a 30s HTTP-request-lifetime ctx passed down through several
+// layers) could make a single NSDP exchange block up to THAT deadline
+// instead of c.Timeout -- diverging from Python, which always caps it at
+// ~2s. This is resolved with min-deadline semantics: the effective read
+// deadline for this exchange is min(now+c.Timeout, ctx's own deadline, if
+// any) -- so the client's own Timeout always bounds a single exchange no
+// matter how generous the caller's ctx is, while a SHORTER caller deadline
+// (or outright cancellation) still takes effect exactly as before, since
+// context.WithDeadline derives cctx from ctx and therefore still closes
+// cctx.Done() the moment ctx itself is cancelled. See
+// docs/cross-language-divergences.md, "Slice 05", for the divergence this
+// resolves (now CLOSER to Python than before, not further from it) --
+// TestUDPClient_ExchangeUsesMinOfClientTimeoutAndCtxDeadline proves a long
+// caller ctx deadline no longer defeats c.Timeout.
 func (c *UDPClient) exchange(ctx context.Context, req Packet) (Packet, error) {
 	payload, err := req.Encode()
 	if err != nil {
@@ -258,12 +279,13 @@ func (c *UDPClient) exchange(ctx context.Context, req Packet) (Packet, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	cctx := ctx
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		cctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
+	deadlineFromTimeout := time.Now().Add(timeout)
+	effectiveDeadline := deadlineFromTimeout
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(effectiveDeadline) {
+		effectiveDeadline = ctxDeadline
 	}
+	cctx, cancel := context.WithDeadline(ctx, effectiveDeadline)
+	defer cancel()
 
 	fn := c.transceive
 	if fn == nil {
@@ -331,8 +353,8 @@ var (
 // realTransceive is the production transceiveFunc: one real UDP socket per
 // call (mirroring Python's per-call socket lifecycle), ctx-aware via
 // net.Dialer (dial itself derives its deadline from ctx, set up by exchange
-// -- either the caller's own ctx deadline, or one derived from the client's
-// configured Timeout).
+// as min(now+c.Timeout, the caller's own ctx deadline, if any) -- see
+// exchange's doc comment).
 //
 // Socket options (dossier §5.3/§5.4) are applied via the platform-specific
 // controlFunc: SO_REUSEADDR unconditionally, and -- on linux only, via a
