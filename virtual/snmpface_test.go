@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -251,6 +253,94 @@ func TestSnmpFaceWalkPoERootOnNonPoEModelIsEmptyAndClean(t *testing.T) {
 	}
 }
 
+// TestSnmpFaceGetBulkRowMajorChainingWithEndOfMibViewFill drives a single
+// raw GETBULK PDU with 1 non-repeater + 2 repeated columns and
+// max-repetitions=3 against a small, fully-enumerable seeded state, and
+// asserts the EXACT row-major response layout RFC 3416 mandates:
+// [nonRepeaterResult, rep0col1, rep0col2, rep1col1, rep1col2, rep2col1,
+// rep2col2]. snmp.GoSNMPClient.Walk never exercises this: it always sends
+// a single OID with NonRepeaters=0, so a multi-varbind, mixed
+// repeater/non-repeater GETBULK PDU is otherwise untested. Column A (the
+// pvid column, 5 real instances) chains through 3 real values; column B is
+// deliberately started AT the view's very last entry, so it hits
+// EndOfMibView on repetition 0 and every later repetition for that SAME
+// column must be FILLED with EndOfMibView rather than re-queried -- proving
+// each column's chain state is carried independently.
+func TestSnmpFaceGetBulkRowMajorChainingWithEndOfMibViewFill(t *testing.T) {
+	st := NewState("gsm7252ps")
+	st.Pvids = map[int]int{1: 10, 2: 20, 3: 30, 4: 40, 5: 50}
+	addr, _, _ := startFace(t, st)
+	g := rawClient(t, addr)
+
+	// Ground truth computed independently of MibView (the thing under
+	// test): sort every OIDMap-projected OID numerically to know exactly
+	// what "the very first entry" and "the very last entry" in the whole
+	// view are, without relying on GetNext/bisect at all.
+	oidMap := st.OIDMap()
+	all := make([][]int, 0, len(oidMap))
+	for oidStr := range oidMap {
+		ints, ok := oidToInts(oidStr)
+		if !ok {
+			t.Fatalf("bad OID %q in OIDMap", oidStr)
+		}
+		all = append(all, ints)
+	}
+	slices.SortFunc(all, slices.Compare)
+	firstOID := intsToOID(all[0])
+	lastOID := intsToOID(all[len(all)-1])
+
+	pvidOID1 := snmp.Dot1qPvid + ".1"
+	pvidOID2 := snmp.Dot1qPvid + ".2"
+	pvidOID3 := snmp.Dot1qPvid + ".3"
+
+	const nonRepReq = "0.0" // a minimal-but-valid 2-component OID before everything
+	colAReq := snmp.Dot1qPvid
+	colBReq := lastOID
+
+	pkt, err := g.GetBulk([]string{nonRepReq, colAReq, colBReq}, 1, 3)
+	if err != nil {
+		t.Fatalf("raw GetBulk() error = %v", err)
+	}
+	if pkt.Error != gosnmp.NoError {
+		t.Fatalf("GetBulk() PDU error-status = %s, want NoError (exceptions are per-varbind values)", pkt.Error)
+	}
+	if len(pkt.Variables) != 7 { // 1 non-repeater + 2 columns * 3 repetitions
+		t.Fatalf("GetBulk() returned %d varbinds, want 7", len(pkt.Variables))
+	}
+
+	name := func(i int) string { return strings.TrimLeft(pkt.Variables[i].Name, ".") }
+
+	if got := name(0); got != firstOID {
+		t.Errorf("non-repeater result = %s, want %s (the first entry in the whole view)", got, firstOID)
+	}
+
+	// Repetition 0: column A -> pvid.1 (real value); column B is already
+	// past the end -> EndOfMibView.
+	if got := name(1); got != pvidOID1 {
+		t.Errorf("rep0 col A = %s, want %s", got, pvidOID1)
+	}
+	if pkt.Variables[2].Type != gosnmp.EndOfMibView {
+		t.Errorf("rep0 col B type = %s, want EndOfMibView", pkt.Variables[2].Type)
+	}
+
+	// Repetition 1: column A independently chains to pvid.2; column B
+	// stays EndOfMibView (filled, not re-queried against pvid.1/.2/...).
+	if got := name(3); got != pvidOID2 {
+		t.Errorf("rep1 col A = %s, want %s", got, pvidOID2)
+	}
+	if pkt.Variables[4].Type != gosnmp.EndOfMibView {
+		t.Errorf("rep1 col B type = %s, want EndOfMibView (filled)", pkt.Variables[4].Type)
+	}
+
+	// Repetition 2: column A chains to pvid.3; column B still filled.
+	if got := name(5); got != pvidOID3 {
+		t.Errorf("rep2 col A = %s, want %s", got, pvidOID3)
+	}
+	if pkt.Variables[6].Type != gosnmp.EndOfMibView {
+		t.Errorf("rep2 col B type = %s, want EndOfMibView (filled)", pkt.Variables[6].Type)
+	}
+}
+
 // -- Type round-trips -----------------------------------------------------
 
 func TestSnmpFaceTypeRoundTrips(t *testing.T) {
@@ -438,7 +528,7 @@ func TestSnmpFaceSetMultiVarbindRollsBackOnSecondFailure(t *testing.T) {
 	}
 }
 
-// -- Community / lifecycle -------------------------------------------------
+// -- Community / drop paths ------------------------------------------------
 
 func TestSnmpFaceWrongCommunityTimesOut(t *testing.T) {
 	addr, _, _ := startFace(t, SeedGSM7252PS())
@@ -453,9 +543,115 @@ func TestSnmpFaceWrongCommunityTimesOut(t *testing.T) {
 	}
 }
 
-func TestSnmpFaceStartStopCyclesLeakNoGoroutinesOrPorts(t *testing.T) {
+// TestSnmpFaceDropsMalformedPacket writes raw garbage (not a valid BER/SNMP
+// packet at all) directly to the face's UDP port and confirms two things:
+// no response at all comes back (a short read-deadline times out, it
+// doesn't get a reply), and the face is still alive and correctly serving
+// a subsequent valid GET -- i.e. decode failure drops that one datagram
+// without derailing the serve loop.
+func TestSnmpFaceDropsMalformedPacket(t *testing.T) {
+	addr, _, _ := startFace(t, SeedGSM7252PS())
+
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		t.Fatalf("ResolveUDPAddr(%q): %v", addr, err)
+	}
+	conn, err := net.DialUDP("udp", nil, udpAddr)
+	if err != nil {
+		t.Fatalf("DialUDP: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	garbage := []byte{0xFF, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03}
+	if _, err := conn.Write(garbage); err != nil {
+		t.Fatalf("write garbage: %v", err)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	buf := make([]byte, 1024)
+	if n, err := conn.Read(buf); err == nil {
+		t.Fatalf("got a response to malformed input (%d bytes), want no response (silently dropped)", n)
+	} else {
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			t.Fatalf("Read after malformed packet error = %v, want a read-deadline timeout (no response was sent)", err)
+		}
+	}
+
+	// The serve loop must still be alive and answering correctly afterward
+	// -- one malformed datagram must not derail it.
+	client := snmp.NewGoSNMPClient(addr, "public", snmp.WithTimeout(2*time.Second))
+	rows, err := client.Get(context.Background(), []string{snmp.IfOperStatus + ".1"})
+	if err != nil {
+		t.Fatalf("Get() after malformed packet error = %v, want the face to still be serving", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("Get() after malformed packet returned %d rows, want 1", len(rows))
+	}
+}
+
+// TestSnmpFaceDropsV1Packet sends a well-formed SNMPv1 GET (via a raw
+// gosnmp handle configured for Version1) and confirms it gets no response
+// at all -- this mock is deliberately v2c-only (D-VIRT §3.6), so a v1
+// request must be silently dropped exactly like a malformed packet or a
+// community mismatch, never answered (and never a PDU-level error, which
+// would imply the face understood but rejected the version).
+func TestSnmpFaceDropsV1Packet(t *testing.T) {
+	addr, _, _ := startFace(t, SeedGSM7252PS())
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q): %v", addr, err)
+	}
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		t.Fatalf("ParseUint(%q): %v", portStr, err)
+	}
+	g := &gosnmp.GoSNMP{
+		Target:    host,
+		Port:      uint16(port),
+		Community: "public",
+		Version:   gosnmp.Version1,
+		Timeout:   200 * time.Millisecond,
+		Retries:   0,
+	}
+	if err := g.Connect(); err != nil {
+		t.Fatalf("raw v1 gosnmp Connect(): %v", err)
+	}
+	defer func() { _ = g.Close() }()
+
+	_, err = g.Get([]string{snmp.IfOperStatus + ".1"})
+	if err == nil {
+		t.Fatalf("v1 Get() error = nil, want a timeout (v1 requests are silently dropped -- this mock is v2c-only)")
+	}
+}
+
+// -- Lifecycle --------------------------------------------------------------
+
+// countOpenFDs returns the number of open file descriptors this process
+// currently holds (via /proc/self/fd, Linux-only) and whether that count
+// is available at all. On a platform without /proc, ok is false and the
+// caller skips the FD assertion rather than failing on an unsupported OS.
+func countOpenFDs(t *testing.T) (count int, ok bool) {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return 0, false
+	}
+	return len(entries), true
+}
+
+// TestSnmpFaceStartStopCyclesLeakNoGoroutinesOrFDs runs 10 start/stop
+// cycles (each with an extra idempotent second Stop) and asserts NEITHER
+// the goroutine count nor the open-file-descriptor count (each cycle's UDP
+// socket, via /proc/self/fd) grows past the pre-loop baseline -- i.e. every
+// bound port and its serve goroutine are actually released, not just that
+// Start/Stop return nil.
+func TestSnmpFaceStartStopCyclesLeakNoGoroutinesOrFDs(t *testing.T) {
 	st := SeedGSM7252PS()
-	before := runtime.NumGoroutine()
+	beforeGoroutines := runtime.NumGoroutine()
+	beforeFDs, haveFDs := countOpenFDs(t)
 
 	for i := 0; i < 10; i++ {
 		view := NewMibView(st)
@@ -478,13 +674,19 @@ func TestSnmpFaceStartStopCyclesLeakNoGoroutinesOrPorts(t *testing.T) {
 
 	// Let any just-exited goroutines actually finish unwinding.
 	for i := 0; i < 50; i++ {
-		if runtime.NumGoroutine() <= before {
+		if runtime.NumGoroutine() <= beforeGoroutines {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if after := runtime.NumGoroutine(); after > before {
-		t.Errorf("goroutine count after 10 start/stop cycles = %d, want <= %d (baseline)", after, before)
+	if after := runtime.NumGoroutine(); after > beforeGoroutines {
+		t.Errorf("goroutine count after 10 start/stop cycles = %d, want <= %d (baseline)", after, beforeGoroutines)
+	}
+
+	if haveFDs {
+		if afterFDs, ok := countOpenFDs(t); ok && afterFDs > beforeFDs {
+			t.Errorf("open FD count after 10 start/stop cycles = %d, want <= %d (baseline; every UDP socket must be released)", afterFDs, beforeFDs)
+		}
 	}
 }
 

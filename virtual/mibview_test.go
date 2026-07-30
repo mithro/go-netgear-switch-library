@@ -1,6 +1,7 @@
 package virtual
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/mithro/go-netgear-switch-library/snmp"
@@ -62,7 +63,7 @@ func TestMibViewGetNextUsesNumericOrder(t *testing.T) {
 		t.Fatalf("GetNext(ifOperStatus.2) not found")
 	}
 	want := ifOperStatusOID(10)
-	if !intsEqual(next.OID, want) {
+	if !slices.Equal(next.OID, want) {
 		t.Errorf("GetNext(ifOperStatus.2).OID = %v, want %v (.8.10, not string order)", next.OID, want)
 	}
 }
@@ -161,7 +162,7 @@ func TestMibViewExhaustiveWalkVisitsEverySeededOIDOnce(t *testing.T) {
 		}
 		seenSet[key] = true
 		if i > 0 {
-			if cmp := compareInts(seen[i-1], oid); cmp >= 0 {
+			if cmp := slices.Compare(seen[i-1], oid); cmp >= 0 {
 				t.Fatalf("walk order not strictly increasing: %v then %v", seen[i-1], oid)
 			}
 		}
@@ -198,36 +199,5 @@ func TestMibViewApplyWriteRebuildsImmediately(t *testing.T) {
 	}
 	if entry.Value != "42" {
 		t.Errorf("Get(dot1qPvid.1) after ApplyWrite = %q, want \"42\"", entry.Value)
-	}
-}
-
-func intsEqual(a, b []int) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func compareInts(a, b []int) int {
-	for i := 0; i < len(a) && i < len(b); i++ {
-		if a[i] != b[i] {
-			if a[i] < b[i] {
-				return -1
-			}
-			return 1
-		}
-	}
-	switch {
-	case len(a) < len(b):
-		return -1
-	case len(a) > len(b):
-		return 1
-	default:
-		return 0
 	}
 }
