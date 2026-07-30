@@ -106,6 +106,66 @@ func (c *stuckOffPoeClient) Set(_ context.Context, vb SetVarbind) error {
 	return nil
 }
 
+// stepPoeClient turns PoE off/on only after its underlying PoE-table walk
+// has been polled a configured number of times following the relevant Set:
+// offAfter/onAfter poll rounds see the PRE-transition state, and the
+// (offAfter+1)th / (onAfter+1)th round (and every one after it) sees the
+// transitioned state. This lets a test pin the EXACT number of poll
+// iterations -- and therefore the exact sleep count -- a phase takes
+// before its predicate is satisfied. Only Walk(PethPsePortTable) advances
+// the per-phase counter (every other walk, e.g. GetPorts' ifAdminStatus/
+// ifOperStatus/etc. walks, passes straight through unmodified), since
+// poeRearm's poll loop reads PoE status exactly once per iteration.
+type stepPoeClient struct {
+	*fakeWriteClient
+	port              int
+	offAfter, onAfter int
+
+	lastSet       int // 0 = no admin Set yet this phase; 2 = off requested; 1 = on requested
+	pollsSinceSet int
+}
+
+func newStepPoeClient(tables map[string][]Row, port, offAfter, onAfter int) *stepPoeClient {
+	return &stepPoeClient{
+		fakeWriteClient: newFakeWriteClient(tables, false),
+		port:            port,
+		offAfter:        offAfter,
+		onAfter:         onAfter,
+	}
+}
+
+func (c *stepPoeClient) Set(_ context.Context, vb SetVarbind) error {
+	c.sets = append(c.sets, vb)
+	c.calls = append(c.calls, []SetVarbind{vb})
+	if strings.HasPrefix(vb.OID, PethPsePortTable+".3.1.") {
+		c.lastSet = toIntValue(vb.Value)
+		c.pollsSinceSet = 0
+	}
+	return nil
+}
+
+func (c *stepPoeClient) Walk(ctx context.Context, base string) ([]Row, error) {
+	if base == PethPsePortTable && c.lastSet != 0 {
+		need := c.offAfter
+		if c.lastSet == 1 {
+			need = c.onAfter
+		}
+		if c.pollsSinceSet >= need {
+			admin, detect, oper := int64(2), int64(1), int64(2)
+			if c.lastSet == 1 {
+				admin, detect, oper = 1, 3, 1
+			}
+			c.tables[PethPsePortTable] = []Row{
+				NewIntRow(fmt.Sprintf("%s.3.1.%d", PethPsePortTable, c.port), admin),
+				NewIntRow(fmt.Sprintf("%s.6.1.%d", PethPsePortTable, c.port), detect),
+			}
+			c.tables[IfOperStatus] = []Row{NewIntRow(fmt.Sprintf("%s.%d", IfOperStatus, c.port), oper)}
+		}
+		c.pollsSinceSet++
+	}
+	return c.fakeWriteClient.Walk(ctx, base)
+}
+
 // incrementingClock returns a fake `now` func that jumps forward by step on
 // every call -- guarantees a bounded, deterministic test runtime with zero
 // real sleeping, instead of racing a real wall clock. Mirrors Python
@@ -169,7 +229,19 @@ func TestClearPoEFaultRecoversDetect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	timeouts := PoeCycleTimeouts{On: time.Second, Poll: 0}
+	// Start from DefaultPoeCycleTimeouts() and override just the fields
+	// under test, mirroring the pinned Python test's
+	// PoeCycleTimeouts(on_timeout=1, poll_interval=0) -- off_timeout is
+	// left at its dataclass default (30.0) there. A Go zero-value
+	// PoeCycleTimeouts{On: ..., Poll: ...} would silently leave Off at 0
+	// (an already-expired deadline) instead of mirroring that default;
+	// harmless in THIS test only because the coherent client's phase-1
+	// transition is synchronous with the SET itself, so phase 1 never
+	// even reaches its own deadline check -- but zero-value-as-default is
+	// a footgun worth avoiding on principle rather than relying on.
+	timeouts := DefaultPoeCycleTimeouts()
+	timeouts.On = time.Second
+	timeouts.Poll = 0
 	if err := w.ClearPoEFault(context.Background(), 5, timeouts, true); err != nil {
 		t.Fatalf("ClearPoEFault: %v", err)
 	}
@@ -344,6 +416,137 @@ func TestCyclePoEPollCadenceHonoured(t *testing.T) {
 	if len(sleeps) != 0 {
 		t.Errorf("sleeps = %v, want none (predicate satisfied on first check of each phase)", sleeps)
 	}
+}
+
+// --- multi-round polling: sleep is actually invoked between checks ---------
+
+func TestCyclePoEPhase1PollsMultipleRoundsBeforeSatisfied(t *testing.T) {
+	// Phase 1's predicate only becomes true on the THIRD poll round (two
+	// prior rounds see the pre-transition state): pins that poeRearm
+	// actually calls Sleep(timeouts.Poll) between failed checks, not just
+	// on the already-satisfied-first-check happy path every other test in
+	// this file exercises. Phase 2 (onAfter=0) transitions on its very
+	// first check, isolating this assertion to phase 1's sleep count.
+	client := newStepPoeClient(poeFullTables(5), 5, 2, 0)
+	var sleeps []time.Duration
+	recordSleep := func(_ context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		return nil
+	}
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"), WithClock(time.Now, recordSleep))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	timeouts := PoeCycleTimeouts{Off: 5 * time.Second, On: 5 * time.Second, Poll: 50 * time.Millisecond}
+	if err := w.CyclePoE(context.Background(), 5, timeouts, true); err != nil {
+		t.Fatalf("CyclePoE: %v", err)
+	}
+	want := []time.Duration{50 * time.Millisecond, 50 * time.Millisecond}
+	if !durationSliceEqual(sleeps, want) {
+		t.Errorf("sleeps = %v, want %v (two failed phase-1 checks, each followed by one Poll-duration sleep)", sleeps, want)
+	}
+}
+
+func TestCyclePoEPhase2PollsMultipleRoundsBeforeSatisfied(t *testing.T) {
+	// Mirror of the phase-1 test above, isolated to phase 2: offAfter=0
+	// transitions instantly (zero phase-1 sleeps), onAfter=3 means phase
+	// 2's predicate is satisfied only on the FOURTH poll round, so exactly
+	// three Sleep(timeouts.Poll) calls must have happened first.
+	client := newStepPoeClient(poeFullTables(5), 5, 0, 3)
+	var sleeps []time.Duration
+	recordSleep := func(_ context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		return nil
+	}
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"), WithClock(time.Now, recordSleep))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	timeouts := PoeCycleTimeouts{Off: 5 * time.Second, On: 5 * time.Second, Poll: 50 * time.Millisecond}
+	if err := w.CyclePoE(context.Background(), 5, timeouts, true); err != nil {
+		t.Fatalf("CyclePoE: %v", err)
+	}
+	want := []time.Duration{50 * time.Millisecond, 50 * time.Millisecond, 50 * time.Millisecond}
+	if !durationSliceEqual(sleeps, want) {
+		t.Errorf("sleeps = %v, want %v (three failed phase-2 checks, each followed by one Poll-duration sleep)", sleeps, want)
+	}
+}
+
+// --- ctx cancellation aborts a stuck poll loop ------------------------------
+
+func TestCyclePoESleepCtxCancellationAbortsPoll(t *testing.T) {
+	// A predicate that never resolves must not force the caller to wait
+	// out the full timeout: cancelling ctx mid-poll must abort the loop
+	// immediately with ctx.Err(), using the REAL defaultSleep (not a fake)
+	// so this exercises production behavior, not just a test double.
+	client := newFakeWriteClient(poeFullTables(5), false) // SET never applied -- phase 1 never satisfied
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"), WithClock(time.Now, defaultSleep))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// Off/Poll are both generous (real wall-clock values) precisely so
+	// that ctx cancellation -- not the timeout deadline -- is what
+	// terminates the poll loop; if this test ever takes anywhere near
+	// timeouts.Off to finish, that itself indicates a regression.
+	timeouts := PoeCycleTimeouts{Off: time.Hour, Poll: 10 * time.Millisecond}
+	err = w.CyclePoE(ctx, 5, timeouts, true)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CyclePoE error = %v, want context.Canceled", err)
+	}
+	var verr *model.WriteVerificationError
+	if errors.As(err, &verr) {
+		t.Errorf("CyclePoE error is a *model.WriteVerificationError, want the raw ctx.Err() to propagate as-is")
+	}
+}
+
+// --- defaultSleep: cover its select branches directly -----------------------
+
+func TestDefaultSleepReturnsCtxErrOnCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := defaultSleep(ctx, 10*time.Millisecond); !errors.Is(err, context.Canceled) {
+		t.Fatalf("defaultSleep(cancelled, 10ms) = %v, want context.Canceled", err)
+	}
+}
+
+func TestDefaultSleepZeroDurationCancelledContextReturnsCtxErr(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := defaultSleep(ctx, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("defaultSleep(cancelled, 0) = %v, want context.Canceled", err)
+	}
+}
+
+func TestDefaultSleepZeroDurationIsNoOpWhenNotCancelled(t *testing.T) {
+	if err := defaultSleep(context.Background(), 0); err != nil {
+		t.Fatalf("defaultSleep(0): %v", err)
+	}
+}
+
+func TestDefaultSleepWaitsForDurationWhenNotCancelled(t *testing.T) {
+	start := time.Now()
+	if err := defaultSleep(context.Background(), 10*time.Millisecond); err != nil {
+		t.Fatalf("defaultSleep(10ms): %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 10*time.Millisecond {
+		t.Errorf("defaultSleep(10ms) returned after %v, want >= 10ms", elapsed)
+	}
+}
+
+// durationSliceEqual reports whether a and b contain the same durations in
+// the same order.
+func durationSliceEqual(a, b []time.Duration) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // intSliceEqual reports whether a and b contain the same ints in the same
