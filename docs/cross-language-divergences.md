@@ -14,7 +14,7 @@ compare.
    device data (ASCII); cross-tests must not construct truncated-multibyte
    name/alias values expecting byte-equal output.
 2. **Reader walk order for vendor-conditional walks** (`snmp/reader.go`
-   GetPoe/GetMgmtIP): Go walks the vendor column after the standard tables;
+   GetPoE/GetMgmtIP): Go walks the vendor column after the standard tables;
    Python's statement order walks it first. Results identical; cross-tests
    compare RESULTS, never request sequences.
 3. **`dest_rows` gateway join strictness** (`snmp/parse.go` ParseMgmtIP): Go
@@ -46,3 +46,34 @@ compare.
     separate SnmpPort/NsdpPort/HTTPPort/SSHPort/TelnetPort fields; Python
     shares `self.port` between SNMP and NSDP faces (never both bound).
     Spec-mandated improvement (§8.2).
+
+## Slice 03
+
+1. **Read-method casing**: Go's public read methods are `GetVLANs`,
+   `GetPVIDs`, `GetLLDP`, `GetMACs`, `GetPoE` (spec §5 casing, matching this
+   codebase's initialism style already used by the `VLANInfo`/
+   `LLDPNeighbor`/`PoEStatus` type names) where Python's are `get_vlans`,
+   `get_pvids`, `get_lldp`, `get_macs`, `get_poe` (snake_case, no
+   initialism-casing question at all). Adjudicated at the slice-03 merge as
+   a deliberate naming convention divergence, not a parity gap: cross-tests
+   must compare behavior, never expect a literal name match across
+   languages. (`GetPorts`/`GetStats`/`GetSensors`/`GetMgmtIP`/
+   `GetSystemInfo` needed no change -- they were already spec-cased.)
+2. **`Snapshot`'s field-read evaluation order** (`snapshot.go`): Go reads
+   ports, stats, vlans, pvids, lldp, macs, poe, sensors, then mgmt_ip, in
+   that fixed sequential order (matching Python's `snapshot()` statement
+   order), but this order is inert: each field's `snapshotDegrade` call is
+   independent (no shared mutable state, no field depends on another
+   field's result), so reordering the calls would not change `SwitchData`'s
+   final contents for any input -- the only externally-observable effect of
+   the order is WHICH field's non-capability error (e.g. `ErrCredential`)
+   surfaces first when more than one would fail, and that is not a
+   parity-relevant guarantee cross-tests may depend on.
+3. **`readVia`'s reraise-last semantics**: confirmed (not a divergence) to
+   match Python exactly -- "least-preferred backend among those actually
+   tried wins" (i.e. the last one attempted chronologically, not the first
+   or most-preferred). An earlier D-FAC dossier gloss said "most preferred",
+   which was backwards; it was corrected before this slice's implementation
+   landed (see commit `9f298b5`), and `dispatch.go`'s `readVia` doc comment
+   and `TestReadVia_SkipAndReraiseLast` both pin the corrected (matches
+   Python) behavior.

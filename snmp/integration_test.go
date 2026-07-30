@@ -119,13 +119,13 @@ func TestGSM7252PSCapstoneEveryReadOpIsNonVacuousAndPinnedToSeedData(t *testing.
 		t.Error("GetStats(): no port has a non-nil RxBytes, want at least one populated")
 	}
 
-	// --- GetVlans: vlan 90 "iot", member contains port 11 but NOT port 10 ---
-	vlans, err := reader.GetVlans(ctx)
+	// --- GetVLANs: vlan 90 "iot", member contains port 11 but NOT port 10 ---
+	vlans, err := reader.GetVLANs(ctx)
 	if err != nil {
-		t.Fatalf("GetVlans() error = %v", err)
+		t.Fatalf("GetVLANs() error = %v", err)
 	}
 	if len(vlans) == 0 {
-		t.Fatal("GetVlans() returned no VLANs, want non-empty")
+		t.Fatal("GetVLANs() returned no VLANs, want non-empty")
 	}
 	vlan90 := findVlan(t, vlans, 90)
 	if vlan90.Name == nil || *vlan90.Name != "iot" {
@@ -138,13 +138,13 @@ func TestGSM7252PSCapstoneEveryReadOpIsNonVacuousAndPinnedToSeedData(t *testing.
 		t.Errorf("vlan90.MemberPorts = %v, want it to NOT contain port 10", vlan90.MemberPorts)
 	}
 
-	// --- GetPvids: non-vacuous ---
-	pvids, err := reader.GetPvids(ctx)
+	// --- GetPVIDs: non-vacuous ---
+	pvids, err := reader.GetPVIDs(ctx)
 	if err != nil {
-		t.Fatalf("GetPvids() error = %v", err)
+		t.Fatalf("GetPVIDs() error = %v", err)
 	}
 	if len(pvids) == 0 {
-		t.Fatal("GetPvids() returned no pvids, want non-empty")
+		t.Fatal("GetPVIDs() returned no pvids, want non-empty")
 	}
 
 	// --- GetMgmtIP: address/mode/base-MAC pins ---
@@ -162,13 +162,13 @@ func TestGSM7252PSCapstoneEveryReadOpIsNonVacuousAndPinnedToSeedData(t *testing.
 		t.Errorf("mgmt.BaseMac = %s, want \"E0:91:F5:0C:D6:DB\"", derefStr(mgmt.BaseMac))
 	}
 
-	// --- GetPoe: port1 delivering 3500 mW ---
-	poe, err := reader.GetPoe(ctx)
+	// --- GetPoE: port1 delivering 3500 mW ---
+	poe, err := reader.GetPoE(ctx)
 	if err != nil {
-		t.Fatalf("GetPoe() error = %v", err)
+		t.Fatalf("GetPoE() error = %v", err)
 	}
 	if len(poe) == 0 {
-		t.Fatal("GetPoe() returned no ports, want non-empty")
+		t.Fatal("GetPoE() returned no ports, want non-empty")
 	}
 	poe1 := findPoe(t, poe, 1)
 	if !poe1.Delivering() {
@@ -187,29 +187,29 @@ func TestGSM7252PSCapstoneEveryReadOpIsNonVacuousAndPinnedToSeedData(t *testing.
 		t.Fatal("GetSensors() returned no sensors, want non-empty")
 	}
 
-	// --- GetMacs: the non-identity bridge-port -> ifIndex join proof ---
+	// --- GetMACs: the non-identity bridge-port -> ifIndex join proof ---
 	// (bridge_port 10 -> ifIndex 110, D-VIRT §4.1's deliberate regression
 	// trap: a reader that forgot the dot1dBasePortIfIndex join, or fell
 	// back to the bare bridge-port number, would surface .Port == 10 here.)
-	macs, err := reader.GetMacs(ctx)
+	macs, err := reader.GetMACs(ctx)
 	if err != nil {
-		t.Fatalf("GetMacs() error = %v", err)
+		t.Fatalf("GetMACs() error = %v", err)
 	}
 	if len(macs) == 0 {
-		t.Fatal("GetMacs() returned no entries, want non-empty")
+		t.Fatal("GetMACs() returned no entries, want non-empty")
 	}
 	mac := findMac(t, macs, "C8:00:84:89:71:70")
 	if mac.Port != 110 {
 		t.Errorf("MAC C8:00:84:89:71:70 joined to port %d, want 110 (bridge_port 10 -> ifIndex 110, never the bare bridge port)", mac.Port)
 	}
 
-	// --- GetLldp: remote_port_id distinct from remote_port_desc, sys_name pin ---
-	lldp, err := reader.GetLldp(ctx)
+	// --- GetLLDP: remote_port_id distinct from remote_port_desc, sys_name pin ---
+	lldp, err := reader.GetLLDP(ctx)
 	if err != nil {
-		t.Fatalf("GetLldp() error = %v", err)
+		t.Fatalf("GetLLDP() error = %v", err)
 	}
 	if len(lldp) == 0 {
-		t.Fatal("GetLldp() returned no neighbors, want non-empty")
+		t.Fatal("GetLLDP() returned no neighbors, want non-empty")
 	}
 	nb := lldp[0]
 	if nb.RemotePortID == nil || *nb.RemotePortID != "1/xg51" {
@@ -256,20 +256,20 @@ func TestM4300_24XASCIIBaseMacEndToEnd(t *testing.T) {
 	}
 }
 
-// TestM4300_24XGetPoeIsUnsupportedCapability pins the 0-PSE-port guard
-// (D-VIRT §4.3: poe={} VERIFIED no PoE) end-to-end: GetPoe must raise
+// TestM4300_24XGetPoEIsUnsupportedCapability pins the 0-PSE-port guard
+// (D-VIRT §4.3: poe={} VERIFIED no PoE) end-to-end: GetPoE must raise
 // BEFORE any walk, consistent with the CLI/HTTP readers (never a silent
 // []), against a real live mock agent, not just a FakeClient.
-func TestM4300_24XGetPoeIsUnsupportedCapability(t *testing.T) {
+func TestM4300_24XGetPoEIsUnsupportedCapability(t *testing.T) {
 	sw := startSwitch(t, "m4300-24x")
 	reader, _ := readerAndClientFor(t, sw, "m4300-24x")
 
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	_, err := reader.GetPoe(ctx)
+	_, err := reader.GetPoE(ctx)
 	if !errors.Is(err, model.ErrUnsupportedCapability) {
-		t.Errorf("GetPoe() on m4300-24x (0 PSE ports) error = %v, want wrapping model.ErrUnsupportedCapability", err)
+		t.Errorf("GetPoE() on m4300-24x (0 PSE ports) error = %v, want wrapping model.ErrUnsupportedCapability", err)
 	}
 }
 
@@ -319,7 +319,7 @@ func findVlan(t *testing.T, vlans []model.VLANInfo, vlanID int) model.VLANInfo {
 			return v
 		}
 	}
-	t.Fatalf("no vlan %d in GetVlans() result", vlanID)
+	t.Fatalf("no vlan %d in GetVLANs() result", vlanID)
 	return model.VLANInfo{}
 }
 
@@ -330,7 +330,7 @@ func findPoe(t *testing.T, poe []model.PoEStatus, port int) model.PoEStatus {
 			return p
 		}
 	}
-	t.Fatalf("no PoE port %d in GetPoe() result", port)
+	t.Fatalf("no PoE port %d in GetPoE() result", port)
 	return model.PoEStatus{}
 }
 
@@ -341,7 +341,7 @@ func findMac(t *testing.T, macs []model.MacEntry, mac string) model.MacEntry {
 			return m
 		}
 	}
-	t.Fatalf("no MAC %q in GetMacs() result", mac)
+	t.Fatalf("no MAC %q in GetMACs() result", mac)
 	return model.MacEntry{}
 }
 

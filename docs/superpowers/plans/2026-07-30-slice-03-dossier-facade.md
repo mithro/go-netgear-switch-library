@@ -521,8 +521,11 @@ important piece of dispatch logic in the whole facade):
    loop. This is explicit in the module comment: "A CredentialError (e.g. a
    missing NSDP write password) is NOT swallowed — it propagates."
 6. If every applicable backend was exhausted (or none applied at all) and
-   `last is not None`, re-raise `last` (the LAST — i.e. most preferred
-   backend among those tried — error, not the first). If NO backend in
+   `last is not None`, re-raise `last` (the LAST backend tried
+   chronologically — i.e. the LEAST preferred among those attempted —
+   CORRECTED during Task 1 review against sync_api.py and its pinned
+   regression test; an earlier gloss here said "most preferred", which was
+   backwards). If NO backend in
    `_BACKEND_PREFERENCE` was even present in `model.backends` (so `last`
    stayed `None`), raise a fresh generic `UnsupportedCapabilityError` naming
    the model (not any backend-specific message).
