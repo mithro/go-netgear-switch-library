@@ -126,3 +126,18 @@ compare.
    dotted-quad address, so this is a no-op in practice; it fails fast on a
    malformed address rather than reproducing `inet_aton`'s abbreviated-form
    guessing.
+4. **`State.ApplyNsdpWrite` no-ops on a too-short value for a known tag,
+   rather than reproducing Python's uncaught `IndexError`/`struct.error`**
+   (`virtual/state.go`): Python's `apply_nsdp_write` indexes `value[0]`/calls
+   `struct.unpack_from` with no length guard; a too-short value for
+   PORT_PVID/VLAN_MEMBERS raises an exception that `faces/nsdp.py`'s
+   `_serve` does NOT catch (it only catches `ValueError` around `_handle`,
+   and neither exception type is a `ValueError`), silently killing that one
+   Python mock's serve thread permanently. An unrecovered Go panic from the
+   same index-out-of-range in this package's background serve goroutine
+   would crash the entire test process instead -- a strictly worse failure
+   mode for input only a malformed/adversarial datagram could ever produce.
+   Go instead guards the length up front and treats a too-short value as a
+   no-op, exactly like every other unrecognized/read-only write. This only
+   changes how a MALFORMED write degrades; every well-formed write's wire
+   encoding and resulting state mutation are unchanged.

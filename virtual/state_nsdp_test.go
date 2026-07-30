@@ -1,0 +1,235 @@
+package virtual
+
+// Tests for State.NsdpTlvs/ApplyNsdpWrite, mirroring
+// tests/virtual/test_nsdp_state.py's intents (D-NSDP §9.4): strict per-tag
+// gating (a PORT_STATUS-only request must not also yield MODEL), correct
+// per-port speed/VLAN/PVID/mgmt-IP projection, and write-then-read-back
+// mutation of PVID/VLAN-membership/mgmt-IP.
+
+import (
+	"reflect"
+	"slices"
+	"testing"
+
+	"github.com/mithro/go-netgear-switch-library/model"
+	"github.com/mithro/go-netgear-switch-library/nsdp"
+)
+
+// deviceFrom builds a minimal READ_RESPONSE packet around tlvs and parses
+// it, the same round-trip a real NsdpFace/UDPClient pair performs -- the
+// closest Go analogue to test_nsdp_state.py's own `_device_from` helper.
+func deviceFrom(t *testing.T, tlvs []nsdp.TLVEntry) model.NsdpDevice {
+	t.Helper()
+	pkt := nsdp.Packet{
+		Op:        nsdp.OpReadResponse,
+		ClientMAC: make([]byte, 6),
+		ServerMAC: make([]byte, 6),
+		TLVs:      tlvs,
+	}
+	dev, err := nsdp.ParseDevice(pkt)
+	if err != nil {
+		t.Fatalf("ParseDevice: %v", err)
+	}
+	return dev
+}
+
+func TestNsdpTlvsStrictTagGatingOmitsUnrequestedIdentity(t *testing.T) {
+	st := SeedGS110EMX()
+
+	// A PORT_STATUS-only request must NOT also return MODEL: NsdpTlvs
+	// answers with ONLY the tags actually requested (D-NSDP §7.1's STRICT
+	// rule -- the pinned Python source's own docstring first line claiming
+	// "MODEL/MAC/PORT_COUNT always included" is stale prose the CODE and
+	// its own test both contradict; see NsdpTlvs's doc comment).
+	tlvs := st.NsdpTlvs(map[nsdp.Tag]bool{nsdp.TagPortStatus: true})
+	for _, tlv := range tlvs {
+		if tlv.Tag == nsdp.TagModel {
+			t.Fatal("PORT_STATUS-only request unexpectedly included a MODEL TLV")
+		}
+	}
+}
+
+func TestNsdpTlvsProjectsPortsAndIdentity(t *testing.T) {
+	st := SeedGS110EMX()
+
+	tlvs := st.NsdpTlvs(map[nsdp.Tag]bool{
+		nsdp.TagModel:      true,
+		nsdp.TagPortCount:  true,
+		nsdp.TagPortStatus: true,
+	})
+	tags := map[nsdp.Tag]bool{}
+	for _, tlv := range tlvs {
+		tags[tlv.Tag] = true
+	}
+	if !tags[nsdp.TagModel] {
+		t.Error("combined request missing MODEL")
+	}
+	if !tags[nsdp.TagPortCount] {
+		t.Error("combined request missing PORT_COUNT")
+	}
+
+	dev := deviceFrom(t, tlvs)
+	ports := map[int]model.NsdpPortStatus{}
+	for _, p := range dev.PortStatus {
+		ports[p.PortID] = p
+	}
+	// Seed mirrors the real capture: 6/8/9/10 up, the rest down.
+	if ports[1].Speed != model.LinkSpeedDown {
+		t.Errorf("port 1 speed = %v, want DOWN (link is down)", ports[1].Speed)
+	}
+	if ports[8].Speed != model.LinkSpeedGigabit {
+		t.Errorf("port 8 speed = %v, want GIGABIT", ports[8].Speed)
+	}
+	if ports[9].Speed != model.LinkSpeedTenGigabit {
+		t.Errorf("port 9 speed = %v, want TEN_GIGABIT", ports[9].Speed)
+	}
+}
+
+func TestNsdpTlvsProjectsVlansAndPvidsAndMgmt(t *testing.T) {
+	st := SeedGS110EMX()
+
+	dev := deviceFrom(t, st.NsdpTlvs(map[nsdp.Tag]bool{
+		nsdp.TagModel:       true,
+		nsdp.TagPortCount:   true,
+		nsdp.TagVLANMembers: true,
+		nsdp.TagPortPVID:    true,
+		nsdp.TagIPAddress:   true,
+		nsdp.TagNetmask:     true,
+		nsdp.TagGateway:     true,
+		nsdp.TagDHCPMode:    true,
+	}))
+
+	var v90 *model.NsdpVlanMembership
+	for i := range dev.VlanMembers {
+		if dev.VlanMembers[i].VlanID == 90 {
+			v90 = &dev.VlanMembers[i]
+		}
+	}
+	if v90 == nil {
+		t.Fatal("VLAN 90 not found among projected VLAN_MEMBERS")
+	}
+	if want := []int{1, 2, 10}; !slices.Equal(v90.MemberPorts, want) {
+		t.Errorf("VLAN 90 MemberPorts = %v, want %v", v90.MemberPorts, want)
+	}
+	if want := []int{1, 2}; !slices.Equal(v90.UntaggedPorts(), want) {
+		t.Errorf("VLAN 90 UntaggedPorts() = %v, want %v", v90.UntaggedPorts(), want)
+	}
+
+	if dev.IP == nil || *dev.IP != "10.1.5.25" {
+		t.Errorf("IP = %v, want 10.1.5.25", dev.IP)
+	}
+	if dev.DhcpEnabled == nil || *dev.DhcpEnabled {
+		t.Error("DhcpEnabled should be false (this seed's mgmt mode is static)")
+	}
+
+	found := false
+	for _, p := range dev.PortPvids {
+		if p.PortID == 1 && p.VlanID == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("PortPvids = %+v, want (port=1, vlan=1) among them", dev.PortPvids)
+	}
+}
+
+func TestApplyNsdpWritePvidAndMembershipAndMgmt(t *testing.T) {
+	st := SeedGS110EMX()
+
+	// bytes([5]) + struct.pack(">H", 90)
+	st.ApplyNsdpWrite(nsdp.TagPortPVID, []byte{5, 0x00, 0x5A})
+	if st.Pvids[5] != 90 {
+		t.Errorf("Pvids[5] = %d, want 90", st.Pvids[5])
+	}
+
+	// Move port 10 to untagged on VLAN 90 (members {1,2,10}, tagged {} ->
+	// UntaggedPorts() == members, since nothing is in the tagged bitmap).
+	tlv, err := nsdp.VlanMembersTLV(90, []int{1, 2, 10}, nil, 10)
+	if err != nil {
+		t.Fatalf("VlanMembersTLV: %v", err)
+	}
+	st.ApplyNsdpWrite(nsdp.TagVLANMembers, tlv.Value)
+	want := map[int]bool{1: true, 2: true, 10: true}
+	if !reflect.DeepEqual(st.Vlans[90].Untagged, want) {
+		t.Errorf("Vlans[90].Untagged = %v, want %v", st.Vlans[90].Untagged, want)
+	}
+	if !reflect.DeepEqual(st.Vlans[90].Member, want) {
+		t.Errorf("Vlans[90].Member = %v, want %v", st.Vlans[90].Member, want)
+	}
+
+	ipTLV, err := nsdp.IPv4TLV(nsdp.TagIPAddress, "10.9.9.9")
+	if err != nil {
+		t.Fatalf("IPv4TLV: %v", err)
+	}
+	st.ApplyNsdpWrite(nsdp.TagIPAddress, ipTLV.Value)
+	if st.Mgmt.Address != "10.9.9.9" {
+		t.Errorf("Mgmt.Address = %q, want 10.9.9.9", st.Mgmt.Address)
+	}
+}
+
+// TestApplyNsdpWriteVlanMembersPreservesExistingName proves the
+// name-preservation rule D-NSDP §7.1 calls out: rewriting an EXISTING
+// VLAN's membership via NSDP must keep that VLAN's Name (never blank it),
+// since the wire's VLAN_MEMBERS TLV carries no name field at all.
+func TestApplyNsdpWriteVlanMembersPreservesExistingName(t *testing.T) {
+	st := SeedGS305EP() // VLAN 1 here is named "default"
+	if st.Vlans[1].Name != "default" {
+		t.Fatalf("precondition: Vlans[1].Name = %q, want default", st.Vlans[1].Name)
+	}
+
+	tlv, err := nsdp.VlanMembersTLV(1, []int{1, 2}, nil, 5)
+	if err != nil {
+		t.Fatalf("VlanMembersTLV: %v", err)
+	}
+	st.ApplyNsdpWrite(nsdp.TagVLANMembers, tlv.Value)
+	if st.Vlans[1].Name != "default" {
+		t.Errorf("Vlans[1].Name = %q after write, want preserved default", st.Vlans[1].Name)
+	}
+}
+
+// TestApplyNsdpWriteUnknownAndReadOnlyTagsAreNoOps pins the "REBOOT /
+// FACTORY_RESET / unknown: deliberate no-op" rule: a write TLV for any of
+// these tags must leave State entirely unchanged.
+func TestApplyNsdpWriteUnknownAndReadOnlyTagsAreNoOps(t *testing.T) {
+	st := SeedGS110EMX()
+	before := st.Snapshot()
+
+	st.ApplyNsdpWrite(nsdp.TagReboot, nil)
+	st.ApplyNsdpWrite(nsdp.TagFactoryReset, nil)
+	st.ApplyNsdpWrite(nsdp.Tag(0xBEEF), []byte{1, 2, 3}) // wholly unrecognized tag
+
+	if !reflect.DeepEqual(st, before) {
+		t.Error("REBOOT/FACTORY_RESET/unknown write mutated state, want a no-op")
+	}
+}
+
+// TestApplyNsdpWriteTooShortValueIsANoOp pins this package's deliberate
+// Go-safety divergence (docs/cross-language-divergences.md, "Slice 05",
+// entry 4): a too-short value for a known tag must be a safe no-op, never
+// a panic that would crash NsdpFace's background serve goroutine.
+func TestApplyNsdpWriteTooShortValueIsANoOp(t *testing.T) {
+	st := SeedGS110EMX()
+	before := st.Snapshot()
+
+	st.ApplyNsdpWrite(nsdp.TagPortPVID, []byte{5}) // needs 3 bytes, has 1
+	st.ApplyNsdpWrite(nsdp.TagVLANMembers, []byte{0x00})
+	st.ApplyNsdpWrite(nsdp.TagIPAddress, []byte{1, 2}) // needs 4 bytes
+	st.ApplyNsdpWrite(nsdp.TagDHCPMode, nil)
+
+	if !reflect.DeepEqual(st.Pvids, before.Pvids) {
+		t.Error("too-short PORT_PVID value mutated Pvids, want a no-op")
+	}
+	if !reflect.DeepEqual(st.Vlans, before.Vlans) {
+		t.Error("too-short VLAN_MEMBERS value mutated Vlans, want a no-op")
+	}
+	if st.Mgmt.Address != before.Mgmt.Address {
+		t.Error("too-short IP_ADDRESS value mutated Mgmt.Address, want a no-op")
+	}
+	// An empty DHCP_MODE value falls to the "static" branch (matching
+	// Python's `value[:1] == b"\x01"` being false for empty value), not a
+	// no-op -- pinned separately so this test's other no-op assertions
+	// aren't misread as claiming DHCP_MODE behaves the same way.
+	if st.Mgmt.Mode != "static" {
+		t.Errorf("Mgmt.Mode after empty DHCP_MODE value = %q, want static", st.Mgmt.Mode)
+	}
+}

@@ -13,11 +13,13 @@
 package virtual
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/mithro/go-netgear-switch-library/nsdp"
 	"github.com/mithro/go-netgear-switch-library/snmp"
 )
 
@@ -765,4 +767,305 @@ func (s *State) IsWritableOID(oid string) bool {
 		return true
 	}
 	return oid == v.DHCPModeUnverified+".0"
+}
+
+// --- NsdpTlvs / ApplyNsdpWrite: the NSDP-face projection/write pair -------
+//
+// Ported field-for-field from src/netgear_switch/virtual/state.py's
+// nsdp_tlvs/apply_nsdp_write (lines 573-735 at pin 1aa1274), reproduced
+// verbatim in D-NSDP §7.1 (2026-07-30-slice-05-dossier-nsdp.md). Any
+// discrepancy between this section and that pin is a bug here.
+
+// sortedIntKeys returns m's keys in ascending order, for every NsdpTlvs
+// emission loop below that must iterate a map deterministically (mirroring
+// Python's `sorted(self.ports.items())`/`sorted(self.vlans.items())`/
+// `sorted(self.pvids.items())`, since a plain dict-iteration order is not
+// itself meaningful there either -- `sorted` is what makes it deterministic
+// in both languages).
+func sortedIntKeys[V any](m map[int]V) []int {
+	keys := make([]int, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	return keys
+}
+
+// setDifference returns the set of keys present (true) in a but absent (or
+// false) in b, mirroring Python's `frozenset.__sub__` as used by
+// nsdp_tlvs's `tagged = vsim.member - vsim.untagged`.
+func setDifference(a, b map[int]bool) map[int]bool {
+	out := make(map[int]bool, len(a))
+	for k, in := range a {
+		if in && !b[k] {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// mbpsToSpeedByte maps a negotiated Mbps rate to its NSDP LinkSpeed wire
+// byte, mirroring Python's `_mbps_to_speed_byte` helper exactly: only
+// 10/100/1000/10000 Mbps have a mapping; anything else (including 0, the
+// value PortSim.Speed holds while down) is byte 0x00 (down/unrecognized).
+func mbpsToSpeedByte(mbps int) byte {
+	switch mbps {
+	case 10:
+		return 0x02
+	case 100:
+		return 0x04
+	case 1000:
+		return 0x05
+	case 10000:
+		return 0xFF
+	default:
+		return 0x00
+	}
+}
+
+// u64OrZero dereferences p, or returns 0 for a nil counter -- the NSDP
+// PORT_STATISTICS projection reports a zeroed row for an idle port rather
+// than omitting the row (unlike OIDMap's SNMP counters, which omit an
+// absent instance entirely; see PORT_STATISTICS's own doc note below for
+// why the two protocols disagree here).
+func u64OrZero(p *uint64) uint64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// appendIPv4TLV appends an IPv4-shaped TLV (IP_ADDRESS/NETMASK/GATEWAY) for
+// dotted onto out, silently omitting it if dotted isn't a valid dotted-quad
+// address. Every Mgmt.Address/Netmask/Gateway value this package itself
+// ever sets (NewState's "0.0.0.0" default, every seed, and
+// ApplyNsdpWrite's own IP_ADDRESS/NETMASK/GATEWAY branches, which parse via
+// nsdp.ParseIPv4 first) is already valid, so this omission path is a
+// pure defensive backstop, never expected to trigger in practice -- see the
+// package-level divergence note on ApplyNsdpWrite for why this package
+// prefers "skip" over "panic"/crash for state that should be unreachable
+// but is cheap to guard against.
+func appendIPv4TLV(out []nsdp.TLVEntry, tag nsdp.Tag, dotted string) []nsdp.TLVEntry {
+	tlv, err := nsdp.IPv4TLV(tag, dotted)
+	if err != nil {
+		return out
+	}
+	return append(out, tlv)
+}
+
+// NsdpTlvs projects this State onto NSDP READ_RESPONSE TLVs for exactly the
+// requested tags, mirroring Python's nsdp_tlvs (D-NSDP §7.1).
+//
+// STRICT (the load-bearing behavior D-NSDP §7.1/§10.6#6 calls out): answers
+// with ONLY the tags actually present in tags -- real Plus hardware does
+// exactly this (a read omitting MODEL gets a MODEL-less response). This
+// deliberately does NOT special-case MODEL/MAC/PORT_COUNT as "always
+// included" despite the pinned Python source's own docstring first line
+// claiming that: the pinned CODE gates all three on `if Tag.X in tags`
+// exactly like every other tag (confirmed by an inline "STRICT" comment in
+// that source and pinned by its own
+// test_nsdp_tlvs_projects_ports_and_identity, which requires a
+// PORT_STATUS-only request to NOT also return MODEL) -- the docstring's
+// first line is stale prose, not the contract. Port the code, not that one
+// sentence.
+func (s *State) NsdpTlvs(tags map[nsdp.Tag]bool) []nsdp.TLVEntry {
+	sm := s.mustModel()
+	width := (sm.PortCount + 7) / 8
+
+	modelName := s.ModelName
+	if modelName == "" {
+		modelName = sm.DisplayName
+	}
+
+	out := make([]nsdp.TLVEntry, 0)
+
+	if tags[nsdp.TagModel] {
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagModel, Value: []byte(modelName)})
+	}
+	if tags[nsdp.TagMAC] {
+		mac := s.NsdpMac // array value copy: safe to slice, never aliases s.NsdpMac's storage
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagMAC, Value: mac[:]})
+	}
+	if tags[nsdp.TagPortCount] {
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagPortCount, Value: []byte{byte(sm.PortCount)}}) //nolint:gosec // PortCount is a registry constant, always well under 256
+	}
+	if tags[nsdp.TagSerialNumber] && s.Serial != "" {
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagSerialNumber, Value: append([]byte{0x01}, s.Serial...)})
+	}
+	if tags[nsdp.TagHostname] && s.Hostname != "" {
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagHostname, Value: []byte(s.Hostname)})
+	}
+	if tags[nsdp.TagFirmwareVer1] && s.Firmware != "" {
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagFirmwareVer1, Value: []byte(s.Firmware)})
+	}
+	if tags[nsdp.TagPortStatus] {
+		for _, port := range sortedIntKeys(s.Ports) {
+			sim := s.Ports[port]
+			speedByte := byte(0x00)
+			if sim.Link {
+				speedByte = mbpsToSpeedByte(sim.Speed)
+			}
+			out = append(out, nsdp.TLVEntry{Tag: nsdp.TagPortStatus, Value: []byte{byte(port), speedByte, 0x01}}) //nolint:gosec // port is a 1-based port number, always well under 256
+		}
+	}
+	if tags[nsdp.TagPortStatistics] {
+		// Real hardware returns a PORT_STATISTICS TLV for EVERY port, with
+		// zeroed counters on an idle port (verified on a real GS105PE, whose
+		// capture has all 5 rows) -- unlike OIDMap's SNMP counters, which
+		// omit an absent instance rather than fabricate a zero. Both are
+		// faithful to their own protocol's real behavior; they are not the
+		// same rule and must not be unified.
+		for _, port := range sortedIntKeys(s.Ports) {
+			sim := s.Ports[port]
+			value := make([]byte, 0, 49)
+			value = append(value, byte(port)) //nolint:gosec // port is a 1-based port number, always well under 256
+			value = binary.BigEndian.AppendUint64(value, u64OrZero(sim.RxOctets))
+			value = binary.BigEndian.AppendUint64(value, u64OrZero(sim.TxOctets))
+			value = binary.BigEndian.AppendUint64(value, u64OrZero(sim.RxErrors))
+			value = append(value, make([]byte, 24)...)
+			out = append(out, nsdp.TLVEntry{Tag: nsdp.TagPortStatistics, Value: value})
+		}
+	}
+	if tags[nsdp.TagVLANMembers] {
+		for _, vid := range sortedIntKeys(s.Vlans) {
+			vsim := s.Vlans[vid]
+			tagged := setDifference(vsim.Member, vsim.Untagged)
+			tlv, err := nsdp.VlanMembersTLV(vid, sliceFromPortSet(vsim.Member), sliceFromPortSet(tagged), sm.PortCount)
+			if err == nil { // vid always fits a uint16 in practice; see VlanMembersTLV's own doc comment
+				out = append(out, tlv)
+			}
+		}
+	}
+	if tags[nsdp.TagPortPVID] {
+		for _, port := range sortedIntKeys(s.Pvids) {
+			value := make([]byte, 3)
+			value[0] = byte(port)                                         //nolint:gosec // port is a 1-based port number, always well under 256
+			binary.BigEndian.PutUint16(value[1:3], uint16(s.Pvids[port])) //nolint:gosec // VLAN IDs are always well under 65536
+			out = append(out, nsdp.TLVEntry{Tag: nsdp.TagPortPVID, Value: value})
+		}
+	}
+	if tags[nsdp.TagIPAddress] {
+		out = appendIPv4TLV(out, nsdp.TagIPAddress, s.Mgmt.Address)
+	}
+	if tags[nsdp.TagNetmask] {
+		out = appendIPv4TLV(out, nsdp.TagNetmask, s.Mgmt.Netmask)
+	}
+	if tags[nsdp.TagGateway] {
+		out = appendIPv4TLV(out, nsdp.TagGateway, s.Mgmt.Gateway)
+	}
+	if tags[nsdp.TagDHCPMode] {
+		dhcpByte := byte(0x00)
+		if s.Mgmt.Mode != "static" {
+			dhcpByte = 0x01
+		}
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagDHCPMode, Value: []byte{dhcpByte}})
+	}
+	if tags[nsdp.TagQOSEngine] && s.NsdpQosEngine != nil {
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagQOSEngine, Value: []byte{byte(*s.NsdpQosEngine)}}) //nolint:gosec // seeded QoS-engine mode enum, always well under 256
+	}
+	if tags[nsdp.TagPortMirroring] && s.NsdpPortMirroringDest != nil {
+		// The source-port bitmap width is MODEL-dependent on real hardware
+		// (a 5-port GS105PE returns a 2-byte bitmap, a 10-port GS110EMX 3
+		// bytes) -- derived from port_count via `width` above, never
+		// hardcoded; see ParsePortMirroring's own doc comment for the read
+		// side of this same lesson.
+		value := append([]byte{byte(*s.NsdpPortMirroringDest)}, //nolint:gosec // dest is a 1-based port number, always well under 256
+			snmp.EncodePortBitmap(sliceFromPortSet(s.NsdpPortMirroringSources), width)...)
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagPortMirroring, Value: value})
+	}
+	if tags[nsdp.TagIGMPSnooping] && s.NsdpIgmpSnoopingEnabled != nil {
+		enabledByte := byte(0)
+		if *s.NsdpIgmpSnoopingEnabled {
+			enabledByte = 1
+		}
+		vlanByte := byte(0)
+		if s.NsdpIgmpSnoopingVlan != nil {
+			vlanByte = byte(*s.NsdpIgmpSnoopingVlan) //nolint:gosec // seeded VLAN ID test fixture, always well under 256
+		}
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagIGMPSnooping, Value: []byte{0x00, enabledByte, 0x00, vlanByte}})
+	}
+	if tags[nsdp.TagBroadcastFiltering] && s.NsdpBroadcastFiltering != nil {
+		b := byte(0)
+		if *s.NsdpBroadcastFiltering {
+			b = 1
+		}
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagBroadcastFiltering, Value: []byte{b}})
+	}
+	if tags[nsdp.TagLoopDetection] && s.NsdpLoopDetection != nil {
+		b := byte(0)
+		if *s.NsdpLoopDetection {
+			b = 1
+		}
+		out = append(out, nsdp.TLVEntry{Tag: nsdp.TagLoopDetection, Value: []byte{b}})
+	}
+	return out
+}
+
+// ApplyNsdpWrite mutates this State from one authenticated NSDP WRITE_REQUEST
+// TLV (a subsequent read, i.e. verify-after-write, observes the mutation),
+// mirroring Python's apply_nsdp_write (D-NSDP §7.1). Unknown, read-only
+// (REBOOT/FACTORY_RESET), and unrecognized tags are a deliberate no-op.
+//
+// Deliberate Go-safety divergence from the pinned Python reference: a
+// malformed VALUE for a known tag (too short to hold its fixed fields) is
+// ALSO treated as a no-op here, guarded by an explicit length check before
+// any indexing/parsing. Python's equivalent branches have no such guard
+// (`value[0]`/`struct.unpack_from` on a too-short `value` raises
+// IndexError/struct.error there), but that exception is UNCAUGHT by
+// faces/nsdp.py's `_serve` (which only catches `ValueError` around
+// `_handle`, and neither IndexError nor struct.error is a ValueError) --
+// so on real Python this would silently kill that one mock's serve thread
+// permanently. A Go panic from an unrecovered index-out-of-range in this
+// package's background serve goroutine would be strictly worse: it crashes
+// the entire process, not just one mock's request loop. See
+// docs/cross-language-divergences.md, "Slice 05", entry 4, for this
+// call-out; nothing here changes the wire encoding of any well-formed
+// write, only how a malformed one degrades.
+func (s *State) ApplyNsdpWrite(tag nsdp.Tag, value []byte) {
+	switch tag {
+	case nsdp.TagPortPVID:
+		if len(value) < 3 {
+			return
+		}
+		s.Pvids[int(value[0])] = int(binary.BigEndian.Uint16(value[1:3]))
+	case nsdp.TagVLANMembers:
+		sm := s.mustModel()
+		m, err := nsdp.ParseVlanMembers(value, sm.PortCount)
+		if err != nil {
+			return
+		}
+		name := ""
+		if existing, ok := s.Vlans[m.VlanID]; ok {
+			name = existing.Name
+		}
+		// Untagged is the COMPUTED `member - tagged` set (m.UntaggedPorts()),
+		// NOT the wire's raw second bitmap (m.TaggedPorts) -- mirroring
+		// Python's `untagged=set(m.untagged_ports)` exactly; using
+		// TaggedPorts here directly would invert every subsequent read of
+		// this VLAN's tagged/untagged split.
+		s.Vlans[m.VlanID] = &VlanSim{
+			Name:     name,
+			Member:   portSetFromSlice(m.MemberPorts),
+			Untagged: portSetFromSlice(m.UntaggedPorts()),
+		}
+	case nsdp.TagIPAddress:
+		if addr, err := nsdp.ParseIPv4(value); err == nil {
+			s.Mgmt.Address = addr
+		}
+	case nsdp.TagNetmask:
+		if addr, err := nsdp.ParseIPv4(value); err == nil {
+			s.Mgmt.Netmask = addr
+		}
+	case nsdp.TagGateway:
+		if addr, err := nsdp.ParseIPv4(value); err == nil {
+			s.Mgmt.Gateway = addr
+		}
+	case nsdp.TagDHCPMode:
+		if len(value) > 0 && value[0] == 0x01 {
+			s.Mgmt.Mode = "dhcp"
+		} else {
+			s.Mgmt.Mode = "static"
+		}
+	}
+	// REBOOT / FACTORY_RESET / unrecognized tag: deliberate no-op.
 }
