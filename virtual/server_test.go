@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mithro/go-netgear-switch-library/model"
+	"github.com/mithro/go-netgear-switch-library/nsdp"
 	"github.com/mithro/go-netgear-switch-library/snmp"
 )
 
@@ -97,29 +98,56 @@ func TestVirtualSwitchGSM7252PSStartBindsSNMPFaceAndStopIsClean(t *testing.T) {
 	}
 }
 
-// TestVirtualSwitchGS305EPStartReturnsUnsupportedCapability pins the
-// Task 13 brief's explicit intent: gs305ep is a Plus-class model whose ONLY
-// backends are NSDP+HTTP (model.Backends has no model.BackendSNMP -- see
-// model/registry.go), and this slice implements no NSDP/HTTP face yet.
-//
-// TODO(slice-05/slice-06): once the NSDP face (slice 05) and HTTP face
-// (slice 06) land, gs305ep gains a bindable face and this test's
-// expectation flips -- Start should then succeed and bind NsdpPort/HTTPPort
-// instead of erroring. See server.go's Start doc comment for the same note.
-func TestVirtualSwitchGS305EPStartReturnsUnsupportedCapability(t *testing.T) {
+// TestVirtualSwitchGS305EPStartBindsNsdpFaceNotSnmp supersedes the former
+// TestVirtualSwitchGS305EPStartReturnsUnsupportedCapability (Task 13's
+// pre-slice-05 pin): gs305ep is a Plus-class model whose ONLY backends are
+// NSDP+HTTP (model.Backends has no model.BackendSNMP -- see
+// model/registry.go). As of slice 05 this package implements the NSDP face,
+// so Start now SUCCEEDS for gs305ep -- binding NsdpPort only (HTTPPort
+// stays 0 until slice 06's HTTP face lands) and leaving SnmpPort 0 (no
+// BackendSNMP to bind at all, mirroring D-NSDP §9.6's
+// test_plus_model_binds_nsdp_not_snmp intent). This is the exact
+// expectation flip the superseded test's own doc comment anticipated.
+func TestVirtualSwitchGS305EPStartBindsNsdpFaceNotSnmp(t *testing.T) {
 	sw, err := NewVirtualSwitch("gs305ep")
 	if err != nil {
 		t.Fatalf("NewVirtualSwitch(gs305ep) error = %v", err)
 	}
-	err = sw.Start()
-	if err == nil {
-		t.Fatal("Start() on gs305ep (NSDP+HTTP only, no face this slice binds) error = nil, want ErrUnsupportedCapability")
+	if err := sw.Start(); err != nil {
+		t.Fatalf("Start() on gs305ep error = %v, want nil (NSDP face now binds for this model)", err)
 	}
-	if !errors.Is(err, model.ErrUnsupportedCapability) {
-		t.Errorf("Start() error = %v, want wrapping model.ErrUnsupportedCapability", err)
+	t.Cleanup(func() {
+		if err := sw.Stop(); err != nil {
+			t.Errorf("Stop() error = %v", err)
+		}
+	})
+
+	if sw.NsdpPort == 0 {
+		t.Fatal("NsdpPort after Start = 0, want nonzero bound port")
 	}
 	if sw.SnmpPort != 0 {
-		t.Errorf("SnmpPort after failed Start = %d, want 0", sw.SnmpPort)
+		t.Errorf("SnmpPort after Start = %d, want 0 (gs305ep has no BackendSNMP)", sw.SnmpPort)
+	}
+	if sw.HTTPPort != 0 {
+		t.Errorf("HTTPPort after Start = %d, want 0 (HTTP face is slice 06 scope)", sw.HTTPPort)
+	}
+
+	// Prove the bound face is actually live, not just a nonzero field: a
+	// real NSDP READ_REQUEST against it must succeed.
+	client, err := nsdp.NewUDPClient(sw.Host, nsdp.WithServerPort(sw.NsdpPort), nsdp.WithClientPort(0), nsdp.WithTimeout(5*time.Second))
+	if err != nil {
+		t.Fatalf("nsdp.NewUDPClient: %v", err)
+	}
+	pkt, err := client.Read(context.Background(), []nsdp.Tag{nsdp.TagModel})
+	if err != nil {
+		t.Fatalf("Read against started NSDP face: %v", err)
+	}
+	dev, err := nsdp.ParseDevice(*pkt)
+	if err != nil {
+		t.Fatalf("ParseDevice: %v", err)
+	}
+	if dev.Model != "GS305EP" {
+		t.Errorf("ParseDevice.Model = %q, want GS305EP", dev.Model)
 	}
 }
 
