@@ -43,6 +43,14 @@ type BackendReader interface {
 // model at all (e.g. the model has no SNMP backend) returns an error
 // wrapping model.ErrUnsupportedCapability; readVia treats that exactly like
 // an unregistered backend (see readerFor below).
+//
+// WARNING: readerFor holds s.mu for the entire duration of a builder call
+// (see below). A BackendBuilder MUST NOT call back into any Switch method
+// that itself acquires s.mu -- directly or transitively -- or it will
+// deadlock (sync.Mutex is not reentrant). In practice this means a builder
+// may freely READ a Switch's already-resolved fields (host, model, injected
+// client, community, etc.) but must never call s.readerFor/readVia or any
+// public read method on the same *Switch it was handed.
 type BackendBuilder func(sw *Switch) (BackendReader, error)
 
 // backendPreference is the fixed per-op backend fallback order, mirroring

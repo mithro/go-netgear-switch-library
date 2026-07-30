@@ -1,0 +1,76 @@
+// backend_snmp.go: the SNMP BackendBuilder, registered into dispatch.go's
+// registry from this package's own init() -- SNMP has no external-binary
+// dependency (gosnmp is pure Go), so it is always compiled in, unlike
+// NSDP/HTTP/SSH (slices 05-07), which register themselves from their own
+// packages' init(). Ported from src/netgear_switch/_dispatch.py's
+// build_sync_snmp_client/_require_community (the normative source; that repo
+// is read-only from here). Any discrepancy between this file and the pinned
+// Python source is a bug in this file. See D-FAC §1.5, §2.5, §2.11.
+
+package netgearswitch
+
+import (
+	"fmt"
+
+	"github.com/mithro/go-netgear-switch-library/model"
+	"github.com/mithro/go-netgear-switch-library/snmp"
+)
+
+func init() {
+	RegisterBackend(model.BackendSNMP, buildSNMPReader)
+}
+
+// requireSNMPCommunity mirrors Python's _require_community: a nil
+// (unconfigured) read community is rejected with an error wrapping
+// model.ErrCredential naming host, exactly like Python's
+// `CredentialError(f"no SNMP read community configured for {host!r}")`.
+//
+// Unlike the write-community/HTTP-password gates (D-FAC §1.5's asymmetric
+// _require_write_community/_require_http_password, which ALSO reject an
+// empty string), this read-side gate accepts "" as a configured value --
+// deliberately NOT unified with the write-side gate (D-FAC trap #1).
+func requireSNMPCommunity(host string, community *string) (string, error) {
+	if community == nil {
+		return "", fmt.Errorf("no SNMP read community configured for %q: %w", host, model.ErrCredential)
+	}
+	return *community, nil
+}
+
+// buildSNMPClient returns sw's injected snmp.Client as-is, or builds a
+// default one via snmp.NewGoSNMPClient(sw.host, community) -- mirroring
+// Python's build_sync_snmp_client(host, community). Used by BOTH the SNMP
+// BackendBuilder (buildSNMPReader, below) and Switch.Identify (D-FAC §2.11),
+// which deliberately reuses this exact same client-build path instead of a
+// separate one, just without a Reader wrapper or reader-cache entry.
+//
+// An injected client bypasses the community gate entirely (mirroring
+// Python: `if client is None: client = build_sync_snmp_client(...)` never
+// even evaluates _require_community when a client was already given).
+func buildSNMPClient(sw *Switch) (snmp.Client, error) {
+	if sw.snmpClient != nil {
+		return sw.snmpClient, nil
+	}
+	community, err := requireSNMPCommunity(sw.host, sw.snmpCommunity)
+	if err != nil {
+		return nil, err
+	}
+	return snmp.NewGoSNMPClient(sw.host, community), nil
+}
+
+// buildSNMPReader is the BackendBuilder registered for model.BackendSNMP: it
+// builds (or reuses an injected) snmp.Client via buildSNMPClient, then wraps
+// it in a *snmp.Reader via snmp.NewReader, which itself returns an error
+// wrapping model.ErrUnsupportedCapability if sw.model has no SNMP backend --
+// needing no further gate here (D-FAC §5.1). *snmp.Reader already satisfies
+// the BackendReader interface verbatim, so no adapter shim is needed.
+func buildSNMPReader(sw *Switch) (BackendReader, error) {
+	client, err := buildSNMPClient(sw)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := snmp.NewReader(client, sw.model)
+	if err != nil {
+		return nil, err
+	}
+	return reader, nil
+}

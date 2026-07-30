@@ -10,6 +10,7 @@
 package netgearswitch
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -249,4 +250,187 @@ func FromConfig(cfg SwitchConfig, opts ...SwitchOption) (*Switch, error) {
 // time, including on a Switch that never dispatched a single read.
 func (s *Switch) Close() error {
 	return nil
+}
+
+// --- Read methods --------------------------------------------------------
+//
+// Every method below is a thin readVia wrapper, mirroring Python's
+// SyncSwitch read methods (D-FAC §2.8-§2.9): the ONLY per-method logic is
+// which BackendReader method is invoked and how its result is captured, per-
+// backend-preference dispatch/skip/reraise-last semantics live entirely in
+// dispatch.go's readVia. GetMacs is the one exception with an extra guard
+// (require_mac_table, run BEFORE dispatch); see getMacsNoGate below for the
+// ungated variant snapshot.go's Snapshot uses instead of this method, per
+// D-FAC §2.12/trap #5.
+
+// GetPorts reads per-port administrative/operational status, speed, name and
+// description via whichever backend model.BackendPreference-order serves it
+// first.
+func (s *Switch) GetPorts(ctx context.Context) ([]model.PortStatus, error) {
+	var out []model.PortStatus
+	err := s.readVia(ctx, "get_ports", func(r BackendReader) error {
+		v, err := r.GetPorts(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
+// GetStats reads the per-port traffic-counter snapshot.
+func (s *Switch) GetStats(ctx context.Context) ([]model.PortStats, error) {
+	var out []model.PortStats
+	err := s.readVia(ctx, "get_stats", func(r BackendReader) error {
+		v, err := r.GetStats(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
+// GetVlans reads the static VLAN table.
+func (s *Switch) GetVlans(ctx context.Context) ([]model.VLANInfo, error) {
+	var out []model.VLANInfo
+	err := s.readVia(ctx, "get_vlans", func(r BackendReader) error {
+		v, err := r.GetVlans(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
+// GetPvids reads each physical port's default/untagged VLAN (PVID).
+func (s *Switch) GetPvids(ctx context.Context) ([]model.Pvid, error) {
+	var out []model.Pvid
+	err := s.readVia(ctx, "get_pvids", func(r BackendReader) error {
+		v, err := r.GetPvids(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
+// GetLldp reads the LLDP remote-neighbor table.
+func (s *Switch) GetLldp(ctx context.Context) ([]model.LLDPNeighbor, error) {
+	var out []model.LLDPNeighbor
+	err := s.readVia(ctx, "get_lldp", func(r BackendReader) error {
+		v, err := r.GetLldp(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
+// getMacsNoGate dispatches get_macs WITHOUT the require_mac_table guard
+// GetMacs applies below -- the exact code path Snapshot's macs field uses
+// (D-FAC §2.12: "snapshot()'s macs field does NOT call require_mac_table --
+// it just lets _read exhaust naturally to the same outcome"). Exported only
+// within this package; snapshot.go's Snapshot is its other caller.
+func (s *Switch) getMacsNoGate(ctx context.Context) ([]model.MacEntry, error) {
+	var out []model.MacEntry
+	err := s.readVia(ctx, "get_macs", func(r BackendReader) error {
+		v, err := r.GetMacs(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
+// GetMacs reads the MAC address / forwarding-database table. Unlike every
+// other read method, require_mac_table(s.model) is checked FIRST,
+// unconditionally, BEFORE any backend dispatch is attempted (D-FAC §2.9): a
+// model with no MAC table (i.e. no SNMP backend -- see
+// model.SwitchModel.HasMACTable) raises directly from this guard and never
+// even enters readVia's loop, mirroring Python's exact error text
+// (`f"model {model.key!r} has no MAC/FDB table"`).
+func (s *Switch) GetMacs(ctx context.Context) ([]model.MacEntry, error) {
+	if !s.model.HasMACTable() {
+		return nil, fmt.Errorf("model %q has no MAC/FDB table: %w", s.model.Key, model.ErrUnsupportedCapability)
+	}
+	return s.getMacsNoGate(ctx)
+}
+
+// GetPoe reads the per-port Power-over-Ethernet status. No facade-level
+// guard: each backend's own reader (e.g. snmp.Reader.GetPoe) applies its own
+// 0-PSE-port capability gate internally.
+func (s *Switch) GetPoe(ctx context.Context) ([]model.PoEStatus, error) {
+	var out []model.PoEStatus
+	err := s.readVia(ctx, "get_poe", func(r BackendReader) error {
+		v, err := r.GetPoe(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
+// GetSensors reads the switch's environmental sensors (fans, PSUs,
+// temperature).
+func (s *Switch) GetSensors(ctx context.Context) ([]model.Sensor, error) {
+	var out []model.Sensor
+	err := s.readVia(ctx, "get_sensors", func(r BackendReader) error {
+		v, err := r.GetSensors(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
+// GetMgmtIP reads the switch's own management IP configuration.
+func (s *Switch) GetMgmtIP(ctx context.Context) (model.MgmtIPConfig, error) {
+	var out model.MgmtIPConfig
+	err := s.readVia(ctx, "get_mgmt_ip", func(r BackendReader) error {
+		v, err := r.GetMgmtIP(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
+// Identify detects this switch's ACTUAL model via SNMP sysDescr/sysObjectID,
+// independent of s.model. Unlike every other read method, this deliberately
+// bypasses BOTH the per-op backend-preference dispatch (readVia/readerFor,
+// and therefore s.readerCache) AND s.model's SNMP-backend gate entirely --
+// mirroring Python's identify() (D-FAC §2.11) exactly: it exists precisely
+// to confirm/discover a switch's real model when the caller does not yet
+// trust s.model, so it reuses an injected client (or builds a default one
+// via buildSNMPClient, the SAME path buildSNMPReader uses) without ever
+// checking s.model.HasBackend(model.BackendSNMP) -- it works even when
+// s.model has no SNMP backend at all (e.g. a Plus-class model). No reader is
+// built or cached; this is a bare client plus one call to
+// snmp.ReadSystemInfo.
+func (s *Switch) Identify(ctx context.Context) (model.DetectedModel, error) {
+	if err := ctx.Err(); err != nil {
+		return model.DetectedModel{}, err
+	}
+	client, err := buildSNMPClient(s)
+	if err != nil {
+		return model.DetectedModel{}, err
+	}
+	return snmp.ReadSystemInfo(ctx, client)
 }
