@@ -582,3 +582,33 @@ func TestRestorePreservesPointerIdentity(t *testing.T) {
 		t.Errorf("holder's view after Restore does not match pre-mutation original (-want +got):\n%s", diff)
 	}
 }
+
+// TestSnapshotNilFieldsStayNil proves every per-field clone helper passes
+// a nil map/slice/pointer straight through as nil rather than fabricating
+// an empty non-nil value -- e.g. HTTPSensors' None-vs-empty-list
+// significance (see State.HTTPSensors doc) must survive a Snapshot/Restore
+// round trip unchanged.
+func TestSnapshotNilFieldsStayNil(t *testing.T) {
+	st := NewState("gsm7252ps") // HTTPSensors, NsdpQosEngine, etc. are nil.
+	snap := st.Snapshot()
+
+	if snap.HTTPSensors != nil {
+		t.Error("nil HTTPSensors must stay nil through Snapshot")
+	}
+	if snap.NsdpQosEngine != nil || snap.NsdpPortMirroringDest != nil ||
+		snap.NsdpIgmpSnoopingEnabled != nil || snap.NsdpIgmpSnoopingVlan != nil ||
+		snap.NsdpBroadcastFiltering != nil || snap.NsdpLoopDetection != nil {
+		t.Error("nil NSDP-extra pointer fields must stay nil through Snapshot")
+	}
+	if snap.UploadedCert != nil || snap.ScpCertDeploy != nil {
+		t.Error("nil HTTP/CLI-only fields must stay nil through Snapshot")
+	}
+
+	// Restore from this blank snapshot must also cleanly zero out a richer
+	// state's fields, not panic on a nil source.
+	rich := buildRichState()
+	rich.Restore(snap)
+	if rich.HTTPSensors != nil || rich.UploadedCert != nil || rich.ScpCertDeploy != nil {
+		t.Error("Restore from a blank snapshot must clear previously-set pointer/slice fields")
+	}
+}

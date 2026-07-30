@@ -12,6 +12,14 @@
 // network.
 package virtual
 
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/mithro/go-netgear-switch-library/snmp"
+)
+
 // PortSim is one switch port's link/admin/speed/name plus optional HC
 // counters. Counters are *uint64: nil means "this port does not expose this
 // counter" and must round-trip to an absent row in OIDMap (never a
@@ -433,4 +441,306 @@ func cloneScpCertDeploy(in *ScpCertDeploySim) *ScpCertDeploySim {
 		HTTPSEnabled:  in.HTTPSEnabled,
 		Saved:         in.Saved,
 	}
+}
+
+// --- ApplyWrite / IsWritableOID: device-coherence write rules ----------
+//
+// D-VIRT §1.7/§1.8. ApplyWrite dispatches on the OID's column prefix (first
+// match wins, each branch returns); an unhandled writable OID is a
+// deliberate silent no-op -- the write "succeeds" but reads back unchanged,
+// which is exactly what a verify-after-write must catch. IsWritableOID
+// mirrors the same dispatch prefixes on purpose (single set of column
+// constants from package snmp) but is a separate, stricter gate: a
+// (later-slice) SNMP face uses it to reject a SET on a genuinely unknown/
+// read-only OID with a proper SNMP notWritable error, before the
+// always-succeeding ApplyWrite would silently allow it.
+
+// columnTail returns the int suffix of oid if oid starts with base+"." and
+// the remainder is all ASCII digits, mirroring the Python reference's
+// `_tail` closure.
+func columnTail(base, oid string) (int, bool) {
+	prefix := base + "."
+	if !strings.HasPrefix(oid, prefix) {
+		return 0, false
+	}
+	rest := oid[len(prefix):]
+	if !isAllDigits(rest) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// isAllDigits reports whether s is non-empty and consists entirely of ASCII
+// digits, mirroring Python's str.isdigit() as used to validate a column
+// index suffix. Deliberately rejects a leading '-' (a column index is
+// never signed).
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// isPoeAdminColumn reports whether oid is a
+// pethPsePortAdminEnable = PethPsePortTable.3.1.<port> instance, returning
+// the port number when it is.
+func isPoeAdminColumn(oid string) (int, bool) {
+	prefix := snmp.PethPsePortTable + ".3.1."
+	if !strings.HasPrefix(oid, prefix) {
+		return 0, false
+	}
+	rest := oid[len(prefix):]
+	if !isAllDigits(rest) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// mustInt converts an ApplyWrite value to int, mirroring Python's
+// permissive int(value) on the int/bytes/str union this method accepts for
+// every integer-valued column. Panics on a value type no real call site
+// ever passes (a caller bug, not a device condition).
+func mustInt(oid string, value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	case uint:
+		return int(v)
+	case uint32:
+		return int(v)
+	case uint64:
+		return int(v)
+	case byte: // == uint8
+		return int(v)
+	case string:
+		n, err := strconv.Atoi(v)
+		if err == nil {
+			return n
+		}
+	case []byte:
+		if len(v) == 1 {
+			return int(v[0])
+		}
+	}
+	panic(fmt.Sprintf("virtual: ApplyWrite(%q): value %v (%T) is not int-convertible", oid, value, value))
+}
+
+// asBytes converts an ApplyWrite value to bytes: []byte passes through; a
+// Go string is already a raw byte sequence (no latin-1 encode step needed,
+// unlike the Python reference); an int becomes a single byte. Mirrors the
+// Python reference's `_as_bytes` helper.
+func asBytes(oid string, value any) []byte {
+	switch v := value.(type) {
+	case []byte:
+		return v
+	case string:
+		return []byte(v)
+	case int:
+		return []byte{byte(v)}
+	default:
+		panic(fmt.Sprintf("virtual: ApplyWrite(%q): value %v (%T) is not bytes-convertible", oid, value, value))
+	}
+}
+
+// asString converts an ApplyWrite value to string for the mgmt-IP/VLAN-name
+// write branches: []byte decodes byte-for-byte (Go string IS a byte
+// sequence, so this is exact, unlike Python's latin-1 decode step); any
+// other value is its default string form (mirrors Python's plain str(value)
+// for a non-bytes value).
+func asString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+// portSetFromSlice converts a snmp.DecodePortBitmap-style sorted port slice
+// into the map[int]bool set representation VlanSim.Member/Untagged use.
+func portSetFromSlice(ports []int) map[int]bool {
+	out := make(map[int]bool, len(ports))
+	for _, p := range ports {
+		out[p] = true
+	}
+	return out
+}
+
+// ApplyWrite mutates this state from one SNMP SET varbind, with device
+// coherence. Applies the same coherence a real PoE switch shows so a
+// cycle_poe operation (later slice) terminates against the mock: admin off
+// -> detect=1 (unused) + data-port link down; admin on -> detect=3
+// (delivering). See the section doc comment above for the full dispatch
+// contract.
+func (s *State) ApplyWrite(oid string, value any) {
+	v := resolveVendorOids(s.mustModel())
+
+	// 1. ifAdminStatus.<port>
+	if port, ok := columnTail(snmp.IfAdminStatus, oid); ok {
+		if p, exists := s.Ports[port]; exists {
+			iv := mustInt(oid, value)
+			p.Admin = iv == 1
+			if iv != 1 {
+				p.Link = false
+			}
+		}
+		return
+	}
+
+	// 2. pethPsePortAdminEnable = PethPsePortTable.3.1.<port>
+	if port, ok := isPoeAdminColumn(oid); ok {
+		if poe, exists := s.Poe[port]; exists {
+			on := mustInt(oid, value) == 1
+			poe.Admin = on
+			if on {
+				poe.Detect = 3 // delivering
+			} else {
+				poe.Detect = 1 // unused/disabled
+			}
+			if !on {
+				if p, exists2 := s.Ports[port]; exists2 {
+					p.Link = false
+				}
+			}
+		}
+		return
+	}
+
+	// 3. dot1qPvid.<port>: no existence check -- creates the entry
+	// unconditionally.
+	if port, ok := columnTail(snmp.Dot1qPvid, oid); ok {
+		s.Pvids[port] = mustInt(oid, value)
+		return
+	}
+
+	// 4. dot1qVlanStaticEgressPorts.<vid>
+	if vid, ok := columnTail(snmp.Dot1qVlanStaticEgress, oid); ok {
+		if vl, exists := s.Vlans[vid]; exists {
+			vl.Member = portSetFromSlice(snmp.DecodePortBitmap(asBytes(oid, value)))
+		}
+		return
+	}
+
+	// 5. dot1qVlanStaticUntaggedPorts.<vid>
+	if vid, ok := columnTail(snmp.Dot1qVlanStaticUntagged, oid); ok {
+		if vl, exists := s.Vlans[vid]; exists {
+			vl.Untagged = portSetFromSlice(snmp.DecodePortBitmap(asBytes(oid, value)))
+		}
+		return
+	}
+
+	// 6. dot1qVlanStaticRowStatus.<vid> (createAndGo=4 / destroy=6).
+	if vid, ok := columnTail(snmp.Dot1qVlanStaticRowStatus, oid); ok {
+		iv := mustInt(oid, value)
+		switch iv {
+		case snmp.RowStatusDestroy:
+			delete(s.Vlans, vid)
+		case snmp.RowStatusCreateAndGo:
+			if _, exists := s.Vlans[vid]; !exists {
+				s.Vlans[vid] = &VlanSim{Name: ""}
+			}
+		}
+		return
+	}
+
+	// 7. dot1qVlanStaticName.<vid>: a name write alone can create a row
+	// too, independent of RowStatus.
+	if vid, ok := columnTail(snmp.Dot1qVlanStaticName, oid); ok {
+		name := asString(value)
+		if vl, exists := s.Vlans[vid]; exists {
+			vl.Name = name
+		} else {
+			s.Vlans[vid] = &VlanSim{Name: name}
+		}
+		return
+	}
+
+	// 8. Vendor mgmt-IP/dhcp-mode writes -- only for a model with a vendor
+	// subtree; a no-vendor model (gs728tpp) never advertises or accepts
+	// these.
+	if v != nil {
+		switch oid {
+		case v.MgmtWriteAddrUnverified:
+			s.Mgmt.Address = asString(value)
+			return
+		case v.MgmtWriteNetmaskUnverified:
+			s.Mgmt.Netmask = asString(value)
+			return
+		case v.MgmtWriteGatewayUnverified:
+			s.Mgmt.Gateway = asString(value)
+			return
+		}
+		if oid == v.DHCPModeUnverified+".0" {
+			// 2=static, anything else=dhcp, matching OIDMap's encoding.
+			if mustInt(oid, value) == 2 {
+				s.Mgmt.Mode = "static"
+			} else {
+				s.Mgmt.Mode = "dhcp"
+			}
+			return
+		}
+	}
+
+	// 9. Unhandled writable OID: deliberate no-op (verify-after-write
+	// catches it).
+}
+
+// IsWritableOID reports whether oid is one this mock recognizes as
+// SNMP-writable. See the section doc comment above for why this is a
+// separate, stricter gate than ApplyWrite's own always-succeeding
+// dispatch.
+func (s *State) IsWritableOID(oid string) bool {
+	v := resolveVendorOids(s.mustModel())
+
+	if _, ok := columnTail(snmp.IfAdminStatus, oid); ok {
+		return true
+	}
+	if _, ok := isPoeAdminColumn(oid); ok {
+		return true
+	}
+	if _, ok := columnTail(snmp.Dot1qPvid, oid); ok {
+		return true
+	}
+	if _, ok := columnTail(snmp.Dot1qVlanStaticEgress, oid); ok {
+		return true
+	}
+	if _, ok := columnTail(snmp.Dot1qVlanStaticUntagged, oid); ok {
+		return true
+	}
+	if _, ok := columnTail(snmp.Dot1qVlanStaticRowStatus, oid); ok {
+		// Even for a not-yet-existing VLAN row: RowStatus createAndGo must
+		// be allowed through.
+		return true
+	}
+	if _, ok := columnTail(snmp.Dot1qVlanStaticName, oid); ok {
+		return true
+	}
+	// The vendor-subtree mgmt-IP/dhcp-mode write OIDs exist only for a
+	// model with a vendor subtree; a no-vendor model has none of them.
+	if v == nil {
+		return false
+	}
+	if oid == v.MgmtWriteAddrUnverified || oid == v.MgmtWriteNetmaskUnverified || oid == v.MgmtWriteGatewayUnverified {
+		return true
+	}
+	return oid == v.DHCPModeUnverified+".0"
 }
