@@ -1,0 +1,11 @@
+[switches.m4300]
+model = "m4300-24x"
+host = "10.1.5.13"
+snmp = { community = "public", write_community = "${M4300_WRITE}" }
+protected_ports = [25, 26]
+
+[switches.poe-micro1]
+model = "gs305ep"
+host = "10.1.5.28"
+http = { password = "!echo hunter2" }
+nsdp = { interface = "br-net" }
