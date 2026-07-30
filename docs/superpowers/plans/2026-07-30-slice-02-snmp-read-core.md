@@ -18,12 +18,10 @@ coding:
   below as **D-SNMP**)
 - `docs/superpowers/plans/2026-07-30-slice-02-dossier-virtual.md` (**D-VIRT**)
 
-The pinned Python source (`/home/tim/github/mithro/python-netgear-switch-library`,
-branch `fix/s3300-52x-live-verify` @ `aaab577`, read-only) is normative over
+The pinned Python source (`/home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-1aa1274` (frozen snapshot of
+python-netgear-switch-library), branch `fix/s3300-52x-live-verify` @ `1aa1274` (snapshot: /home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-1aa1274), read-only) is normative over
 both dossiers; where they disagree, the source wins and the discrepancy is
-reported in the task report. If `git -C <python repo> rev-parse HEAD` is not
-`aaab577...`, STOP and report BLOCKED (the pin moved again — orchestrator
-must re-pin first).
+reported in the task report. Pin guard: `git -C /home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-1aa1274 rev-parse HEAD` must be `1aa1274...`; else STOP/BLOCKED (orchestrator re-pins at slice boundaries only).
 
 **Tech Stack:** Go 1.26, `github.com/gosnmp/gosnmp` (client transport AND
 the fake's PDU codec via `SnmpDecodePacket`/`SnmpPacket.MarshalMsg` — the
@@ -34,7 +32,7 @@ installed on dev machine and in CI via `apt-get install -y snmp`).
 
 ## Global Constraints
 
-- Parity pin: `fix/s3300-52x-live-verify` @ `aaab577` — source normative.
+- Parity pin: `fix/s3300-52x-live-verify` @ `1aa1274` (snapshot: /home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-1aa1274) — source normative.
 - Honesty rules: unsupported ⇒ wrap `model.ErrUnsupportedCapability` at the
   earliest point; absent values ⇒ nil, never fabricated zero/""; offending
   OID appears verbatim in every parse-error message (wrap `model.ErrSNMP`).

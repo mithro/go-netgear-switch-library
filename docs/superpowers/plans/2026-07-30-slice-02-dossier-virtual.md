@@ -1,7 +1,11 @@
 # Slice 02 Dossier: Virtual-Switch Core (Python → Go porting reference)
 
 > **Source of truth:** `/home/tim/github/mithro/python-netgear-switch-library`,
-> branch `fix/live-hardware-parity` (pinned reference, read-only). All line
+> branch `fix/s3300-52x-live-verify` @ `1aa1274` — frozen snapshot worktree:
+> `/home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-1aa1274`
+> (read implementation files from the SNAPSHOT path, never the live checkout).
+> Originally written against `fix/live-hardware-parity`; the only stale
+> section on the newer pin is §4.2 (marked inline). All line
 > numbers/values below are transcribed exactly from that branch as of
 > 2026-07-30. This document targets Go engineers porting 1:1 without reading
 > the Python source themselves.
@@ -596,7 +600,7 @@ Helpers: `_port_name(port) -> f"1/0/{port}"` (FASTPATH ifName, verified);
 ### 4.2 `seed_gsm7228ps()` — **STALE SECTION — superseded on the re-pinned reference**
 
 > **Re-pin note:** on the current pin (`fix/s3300-52x-live-verify` @
-> `aaab577`), `seed_gsm7228ps` was RESEEDED from the real S3300-52X-PoE+
+> `1aa1274`), `seed_gsm7228ps` was RESEEDED from the real S3300-52X-PoE+
 > capture (`tests/fixtures/captures/gsm7228ps.json`, host 10.1.5.11,
 > sysObjectID 1.3.6.1.4.1.4526.100.10.19, captured 2026-07-30): real port
 > names/admin/link/speed, all counters, every PVID, 5 VLANs with exact

@@ -23,15 +23,19 @@ The Python library is the behavioural reference:
 - Repo: `/home/tim/github/mithro/python-netgear-switch-library`
   (`github.com/mithro/python-netgear-switch-library`)
 - **Pinned reference:** branch `fix/s3300-52x-live-verify` @
-  `aaab57751559c0b172ca61c323d4649cddfd1eae` (2026-07-30). Re-pinned from
-  `fix/live-hardware-parity` @ `b73e7519` during slice 02: the Python
-  checkout advanced mid-session and the newer branch carries live-verified
-  improvements the Go port must match (real S3300-52X capture + reseeded
-  gsm7228ps with `verified=True`, `SYSOBJECTID_MODELS` authoritative
-  sysObjectID detection tried before sysDescr, `MODEL_ALIASES`
-  s3300→gsm7228ps). Slice 1's registry already matches this state. `main`
-  was at `418312da` when this spec was written. Re-pin again to the merge
-  commit once the branch lands; parity claims are always against the pin.
+  `1aa1274254a233ddce0409160849bb6ce8f8b2e7` (2026-07-30), frozen as a
+  detached read-only snapshot worktree at
+  `/home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-1aa1274`
+  — **implementers read the snapshot path, never the live checkout**, which
+  the user actively develops (it moved twice mid-session; earlier pins:
+  `b73e7519` fix/live-hardware-parity, then `aaab577`). The branch carries
+  live-verified improvements the Go port must match (real S3300-52X capture
+  + reseeded gsm7228ps with `verified=True`, `SYSOBJECTID_MODELS`
+  authoritative sysObjectID detection tried before sysDescr,
+  `MODEL_ALIASES` s3300→gsm7228ps, S3300-52X XE_FASTPATH HTTP captures).
+  Slice 1's registry matches this state. Re-pin deliberately at slice
+  boundaries (new snapshot worktree + doc update); parity claims are always
+  against the pin.
 
 Where this spec says "same as Python", the pinned source is normative. Protocol
 constants (OID tables, NSDP tags/sizes, HTTP endpoints/login schemes/dialects,
