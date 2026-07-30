@@ -662,6 +662,7 @@ func TestParseDevicePropagatesNetmaskGatewaySerialVlanMembersPvidErrors(t *testi
 		{"port_pvid", nsdp.TagPortPVID, []byte{0x01, 0x02}, "PORT_PVID TLV must be 3 bytes, got 2"},
 		{"port_mirroring", nsdp.TagPortMirroring, []byte{}, "at least 1 byte"},
 		{"igmp_snooping", nsdp.TagIGMPSnooping, []byte{0x00}, "2 bytes"},
+		{"vlan_engine", nsdp.TagVLANEngine, []byte{0x07}, "invalid value 7"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -673,5 +674,45 @@ func TestParseDevicePropagatesNetmaskGatewaySerialVlanMembersPvidErrors(t *testi
 				t.Errorf("ParseDevice error = %v, want to contain %q", err, c.wantMsg)
 			}
 		})
+	}
+}
+
+// TestParseDeviceRejectsOutOfRangeVLANEngine pins the parity gap: unlike
+// PORT_STATUS's speed byte (model.LinkSpeedFromByte, which never errors),
+// Python's VLANEngine(tlv.value[0]) is an IntEnum that RAISES ValueError for
+// any byte outside 0-4, propagating out of parse_device and failing the
+// whole read. A VLAN_ENGINE TLV carrying byte 0x07 (out of VLANEngine's
+// Disabled(0)..Advanced8021Q(4) range) must make ParseDevice error, wrapping
+// model.ErrNSDP and naming the tag and the bad value.
+func TestParseDeviceRejectsOutOfRangeVLANEngine(t *testing.T) {
+	pkt := newTagsPacket()
+	pkt.AddTLV(nsdp.TagModel, []byte("GS110EMX"))
+	pkt.AddTLV(nsdp.TagVLANEngine, []byte{0x07})
+
+	_, err := nsdp.ParseDevice(pkt)
+	if err == nil {
+		t.Fatal("ParseDevice: expected error for out-of-range VLAN_ENGINE byte, got nil")
+	}
+	if !errors.Is(err, model.ErrNSDP) {
+		t.Errorf("ParseDevice error does not wrap model.ErrNSDP: %v", err)
+	}
+	if !strings.Contains(err.Error(), "VLAN_ENGINE") || !strings.Contains(err.Error(), "7") {
+		t.Errorf("ParseDevice error = %v, want to name VLAN_ENGINE and the bad value 7", err)
+	}
+}
+
+func TestParseDeviceAcceptsEveryValidVLANEngineByte(t *testing.T) {
+	for v := byte(0); v <= 0x04; v++ {
+		pkt := newTagsPacket()
+		pkt.AddTLV(nsdp.TagModel, []byte("GS110EMX"))
+		pkt.AddTLV(nsdp.TagVLANEngine, []byte{v})
+
+		dev, err := nsdp.ParseDevice(pkt)
+		if err != nil {
+			t.Fatalf("ParseDevice(VLAN_ENGINE=0x%02X): unexpected error: %v", v, err)
+		}
+		if dev.VlanEngine == nil || byte(*dev.VlanEngine) != v {
+			t.Errorf("ParseDevice(VLAN_ENGINE=0x%02X).VlanEngine = %v, want %d", v, dev.VlanEngine, v)
+		}
 	}
 }

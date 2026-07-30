@@ -238,6 +238,15 @@ func ParseIgmpSnooping(data []byte) (model.NsdpIgmpSnooping, error) {
 // packet (a required field), or if any individual TLV fails to parse. A
 // missing MAC tag is not an error: it falls back to parsing packet.ServerMAC
 // (the packet header field).
+//
+// VLAN_ENGINE's byte is validated against VLANEngine's 0-4 range and errors
+// on anything else -- mirroring Python's VLANEngine(tlv.value[0]), an
+// IntEnum constructor that raises ValueError for an out-of-range value,
+// propagating out of parse_device exactly like any other malformed-TLV
+// error. This is deliberately unlike PORT_STATUS's speed byte
+// (model.LinkSpeedFromByte), which never errors -- Python's LinkSpeed.from_byte
+// explicitly catches its own ValueError and returns DOWN instead, while
+// VLANEngine has no such catch.
 func ParseDevice(packet Packet) (model.NsdpDevice, error) {
 	portCount := 8
 	for _, tlv := range packet.TLVs {
@@ -321,7 +330,11 @@ func ParseDevice(packet Packet) (model.NsdpDevice, error) {
 			serialNumber = &s
 		case TagVLANEngine:
 			if len(tlv.Value) > 0 {
-				vlanEngine = model.Ptr(model.VLANEngine(tlv.Value[0]))
+				v := tlv.Value[0]
+				if v > 0x04 {
+					return model.NsdpDevice{}, errNSDP("VLAN_ENGINE TLV: invalid value %d, want 0-4", v)
+				}
+				vlanEngine = model.Ptr(model.VLANEngine(v))
 			}
 		case TagPortStatus:
 			st, err := ParsePortStatus(tlv.Value)
