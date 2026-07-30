@@ -29,14 +29,14 @@ const (
 	VlanExcluded VlanMode = "excluded"
 )
 
-// IpMode is how a switch's management IP address was configured.
-type IpMode string
+// IPMode is how a switch's management IP address was configured.
+type IPMode string
 
-// IpMode values, mirroring Python models.IpMode.
+// IPMode values, mirroring Python models.IPMode.
 const (
-	IpModeDHCP    IpMode = "dhcp"
-	IpModeStatic  IpMode = "static"
-	IpModeUnknown IpMode = "unknown"
+	IPModeDHCP    IPMode = "dhcp"
+	IPModeStatic  IPMode = "static"
+	IPModeUnknown IPMode = "unknown"
 )
 
 // Ptr returns a pointer to v; convenience for constructing optional
@@ -114,10 +114,10 @@ type PortStats struct {
 	TxErrors  *uint64 `json:"tx_errors"`
 }
 
-// MgmtIpConfig is the switch's own management IP configuration. BaseMac is
+// MgmtIPConfig is the switch's own management IP configuration. BaseMac is
 // uppercase "XX:XX:XX:XX:XX:XX" when present.
-type MgmtIpConfig struct {
-	Mode    IpMode  `json:"mode"`
+type MgmtIPConfig struct {
+	Mode    IPMode  `json:"mode"`
 	Address *string `json:"address"`
 	Netmask *string `json:"netmask"`
 	Gateway *string `json:"gateway"`
@@ -176,7 +176,7 @@ type SwitchData struct {
 	Macs    []MacEntry     `json:"macs"`
 	Sensors []Sensor       `json:"sensors"`
 	Stats   []PortStats    `json:"stats"`
-	MgmtIP  *MgmtIpConfig  `json:"mgmt_ip"`
+	MgmtIP  *MgmtIPConfig  `json:"mgmt_ip"`
 }
 
 // Canonical returns a copy of sd with every nil slice field replaced by a

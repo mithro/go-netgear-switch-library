@@ -2,27 +2,44 @@ package netgearswitch
 
 import "github.com/mithro/go-netgear-switch-library/model"
 
-// Device-data and enum types, aliased from model so callers need only
-// import this top-level package. See model/types.go and
+// Device-data and enum types below are aliased from model so callers need
+// only import this top-level package. See model/types.go and
 // model/registry.go for field-by-field documentation.
 type (
-	PoEDetect     = model.PoEDetect
-	VlanMode      = model.VlanMode
-	IpMode        = model.IpMode
-	PortStatus    = model.PortStatus
-	PoEStatus     = model.PoEStatus
-	VLANInfo      = model.VLANInfo
-	LLDPNeighbor  = model.LLDPNeighbor
-	MacEntry      = model.MacEntry
-	Sensor        = model.Sensor
-	PortStats     = model.PortStats
-	MgmtIpConfig  = model.MgmtIpConfig
+	// PoEDetect is aliased from model.PoEDetect.
+	PoEDetect = model.PoEDetect
+	// VlanMode is aliased from model.VlanMode.
+	VlanMode = model.VlanMode
+	// IPMode is aliased from model.IPMode.
+	IPMode = model.IPMode
+	// PortStatus is aliased from model.PortStatus.
+	PortStatus = model.PortStatus
+	// PoEStatus is aliased from model.PoEStatus.
+	PoEStatus = model.PoEStatus
+	// VLANInfo is aliased from model.VLANInfo.
+	VLANInfo = model.VLANInfo
+	// LLDPNeighbor is aliased from model.LLDPNeighbor.
+	LLDPNeighbor = model.LLDPNeighbor
+	// MacEntry is aliased from model.MacEntry.
+	MacEntry = model.MacEntry
+	// Sensor is aliased from model.Sensor.
+	Sensor = model.Sensor
+	// PortStats is aliased from model.PortStats.
+	PortStats = model.PortStats
+	// MgmtIPConfig is aliased from model.MgmtIPConfig.
+	MgmtIPConfig = model.MgmtIPConfig
+	// DetectedModel is aliased from model.DetectedModel.
 	DetectedModel = model.DetectedModel
-	Pvid          = model.Pvid
-	SwitchData    = model.SwitchData
-	Backend       = model.Backend
-	SwitchClass   = model.SwitchClass
-	SwitchModel   = model.SwitchModel
+	// Pvid is aliased from model.Pvid.
+	Pvid = model.Pvid
+	// SwitchData is aliased from model.SwitchData.
+	SwitchData = model.SwitchData
+	// Backend is aliased from model.Backend.
+	Backend = model.Backend
+	// SwitchClass is aliased from model.SwitchClass.
+	SwitchClass = model.SwitchClass
+	// SwitchModel is aliased from model.SwitchModel.
+	SwitchModel = model.SwitchModel
 )
 
 // WriteVerificationError is aliased from model; see model.WriteVerificationError.
@@ -44,11 +61,11 @@ const (
 	VlanExcluded = model.VlanExcluded
 )
 
-// IpMode values, re-exported from model.
+// IPMode values, re-exported from model.
 const (
-	IpModeDHCP    = model.IpModeDHCP
-	IpModeStatic  = model.IpModeStatic
-	IpModeUnknown = model.IpModeUnknown
+	IPModeDHCP    = model.IPModeDHCP
+	IPModeStatic  = model.IPModeStatic
+	IPModeUnknown = model.IPModeUnknown
 )
 
 // Backend values, re-exported from model.

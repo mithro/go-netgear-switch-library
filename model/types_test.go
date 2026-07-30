@@ -41,14 +41,14 @@ func TestVlanModeValues(t *testing.T) {
 	}
 }
 
-func TestIpModeValues(t *testing.T) {
+func TestIPModeValues(t *testing.T) {
 	cases := []struct {
-		got  model.IpMode
+		got  model.IPMode
 		want string
 	}{
-		{model.IpModeDHCP, "dhcp"},
-		{model.IpModeStatic, "static"},
-		{model.IpModeUnknown, "unknown"},
+		{model.IPModeDHCP, "dhcp"},
+		{model.IPModeStatic, "static"},
+		{model.IPModeUnknown, "unknown"},
 	}
 	for _, c := range cases {
 		if string(c.got) != c.want {

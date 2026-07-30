@@ -224,6 +224,9 @@ func TestModelsReturnsFreshCopy(t *testing.T) {
 	// not a view onto shared registry state.
 	got1[0].DisplayName = "MUTATED"
 	got1 = append(got1, nil)
+	if len(got1) != 11 {
+		t.Errorf("got1 len after append = %d, want 11", len(got1))
+	}
 
 	got2 := model.Models()
 	if got2[0].DisplayName != original {

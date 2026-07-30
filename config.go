@@ -95,14 +95,14 @@ func ResolveSecret(spec *string, env func(string) (string, bool), runner SecretR
 	case strings.HasPrefix(s, "!"):
 		args, err := shlex.Split(s[1:])
 		if err != nil {
-			return nil, fmt.Errorf("secret command %q could not be parsed: %v: %w", s, err, model.ErrCredential)
+			return nil, fmt.Errorf("secret command %q could not be parsed: %w: %w", s, err, model.ErrCredential)
 		}
 		if len(args) == 0 {
 			return nil, fmt.Errorf("empty command in secret spec: %w", model.ErrCredential)
 		}
 		out, runErr := runner(args[0], args[1:])
 		if runErr != nil {
-			return nil, fmt.Errorf("secret command %v could not be run: %v: %w", args, runErr, model.ErrCredential)
+			return nil, fmt.Errorf("secret command %v could not be run: %w: %w", args, runErr, model.ErrCredential)
 		}
 		trimmed := strings.TrimSpace(out)
 		return &trimmed, nil

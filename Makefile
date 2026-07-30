@@ -1,5 +1,5 @@
 JAIL := ./scripts/jail.sh
-GOLANGCI_VERSION := v2.3.0
+GOLANGCI_VERSION := v2.12.2
 GOLANGCI := ./bin/golangci-lint
 
 .PHONY: fmt-check vet lint test cover tools

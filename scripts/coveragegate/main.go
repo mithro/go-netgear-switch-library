@@ -14,7 +14,7 @@ import (
 
 func main() {
 	profile := flag.String("profile", "coverage.out", "cover profile path")
-	min := flag.Float64("min", 90, "minimum total coverage percent")
+	minPct := flag.Float64("min", 90, "minimum total coverage percent")
 	flag.Parse()
 	out, err := exec.Command("go", "tool", "cover", "-func="+*profile).Output()
 	if err != nil {
@@ -29,9 +29,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "coveragegate: cannot parse:", last)
 		os.Exit(2)
 	}
-	if pct < *min {
-		fmt.Fprintf(os.Stderr, "coverage %.1f%% below minimum %.1f%%\n", pct, *min)
+	if pct < *minPct {
+		fmt.Fprintf(os.Stderr, "coverage %.1f%% below minimum %.1f%%\n", pct, *minPct)
 		os.Exit(1)
 	}
-	fmt.Printf("coverage %.1f%% >= %.1f%%\n", pct, *min)
+	fmt.Printf("coverage %.1f%% >= %.1f%%\n", pct, *minPct)
 }

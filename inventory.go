@@ -107,7 +107,7 @@ func switchFromTable(name string, table map[string]any) (cfg SwitchConfig, hasLi
 
 	ports, portsErr := protectedPorts(table)
 	if portsErr != nil {
-		return SwitchConfig{}, false, fmt.Errorf("switch %q: %s: %w", name, portsErr, model.ErrConfig)
+		return SwitchConfig{}, false, fmt.Errorf("switch %q: %w: %w", name, portsErr, model.ErrConfig)
 	}
 
 	for _, field := range []struct {
