@@ -14,6 +14,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
+      # net-snmp CLI tools are the wire oracle for the virtual SNMP face tests.
+      - run: sudo apt-get update && sudo apt-get install -y snmp
       - run: make fmt-check
       - run: go vet ./...
       # JAIL= disables the local resource-jail wrapper: CI runners are
