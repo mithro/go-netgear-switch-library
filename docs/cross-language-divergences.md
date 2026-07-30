@@ -86,3 +86,10 @@ compare.
 13. **Clock/sleep injection is a Writer construction option** (`snmp.WithClock`)
     rather than Python's per-call test-only kwargs. Facade surface identical
     (timeouts only), matching Python's facade.
+14. **PoERearm timeout errors reuse last-polled status** (`snmp/writer_poe.go`
+    `SetPoERearm`): Go's verification error's `After` field carries the
+    `before`-snapshot status when a rearm times out; Python performs one extra
+    fresh read after timeout, seeing the actual post-timeout device state. Go's
+    behaviour is negligible in practice (rearm is rarely interrupted and device
+    state usually stabilizes fast) and arguably safer (stale context reuse avoids
+    extra I/O). Documented for cross-language conformance suite awareness.

@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -195,6 +196,7 @@ func (w *Writer) DeleteVlan(ctx context.Context, vlanID int, force bool) error {
 			}
 		}
 		if len(clash) > 0 {
+			sort.Ints(clash)
 			return fmt.Errorf(
 				"VLAN %d includes protected port(s) %s; pass force=True to delete it anyway: %w",
 				vlanID, formatIntList(clash), model.ErrProtectedPort,

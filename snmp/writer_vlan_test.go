@@ -400,6 +400,10 @@ func TestDeleteVlanProtectedMemberRequiresForce(t *testing.T) {
 	if !errors.Is(err, model.ErrProtectedPort) {
 		t.Fatalf("DeleteVlan error = %v, want ErrProtectedPort", err)
 	}
+	wantSubstr := "VLAN 90 includes protected port(s) [1]; pass force=True to delete it anyway"
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Fatalf("DeleteVlan() error = %q, want it to contain %q", err.Error(), wantSubstr)
+	}
 	if len(client.sets) != 0 {
 		t.Errorf("sets = %+v, want none (blocked before any SET)", client.sets)
 	}
