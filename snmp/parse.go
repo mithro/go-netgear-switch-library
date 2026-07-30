@@ -974,12 +974,15 @@ type poeKey struct{ group, port int }
 //
 // powerMw is the vendor per-port power walk (e.g. VendorOids.PoEPowerMw),
 // matched to a port by the FINAL OID suffix component only (no base-OID
-// prefix check); a row whose final suffix component or Value isn't a
-// plain int64 is SILENTLY SKIPPED (never an error) -- mirroring Python's
-// bare try/except ValueError: continue. A port without a vendor mW row
-// gets PowerMw == nil, never a fabricated 0 (this is how a no-vendor-OID
-// model such as the gs728tpp, which always passes an empty powerMw walk,
-// is represented).
+// prefix check); a row whose final suffix component isn't an integer, or
+// whose Value is neither a plain int64 NOR a numeric string (see
+// parseSensorReading, shared with ParseBoxSensors below -- the vendor mW
+// reading has the same STRING-typed-Gauge32 risk as a box-sensor reading),
+// is SILENTLY SKIPPED (never an error) -- mirroring Python's bare
+// try/except ValueError: continue around int(row.value). A port without a
+// vendor mW row gets PowerMw == nil, never a fabricated 0 (this is how a
+// no-vendor-OID model such as the gs728tpp, which always passes an empty
+// powerMw walk, is represented).
 func ParsePoe(status, powerMw []Row) ([]model.PoEStatus, error) {
 	prefix := PethPsePortTable + "."
 	cols := make(map[poeKey]map[int]int64)
@@ -1019,7 +1022,14 @@ func ParsePoe(status, powerMw []Row) ([]model.PoEStatus, error) {
 	}
 
 	// Vendor mW keyed by the FINAL suffix component only; non-int
-	// component or value is silently skipped, never an error.
+	// component or value is silently skipped, never an error. The value
+	// accepts int64 OR a numeric string via parseSensorReading (shared
+	// with ParseBoxSensors below): Python's int(row.value) coerces either
+	// transparently, and the vendor mW column has been observed on real
+	// hardware as a STRING-typed Gauge32 reading (Python's own test
+	// constructs it as SnmpRow(oid, "12800", "Gauge32")) -- the same
+	// vendor-subtree risk that forced the dual-type handling in
+	// ParseBoxSensors applies here too.
 	mw := make(map[int]int64)
 	for _, row := range powerMw {
 		parts := strings.Split(row.OID, ".")
@@ -1027,7 +1037,7 @@ func ParsePoe(status, powerMw []Row) ([]model.PoEStatus, error) {
 		if err != nil {
 			continue
 		}
-		v, ok := row.Value.(int64)
+		v, ok := parseSensorReading(row.Value)
 		if !ok {
 			continue
 		}
@@ -1083,17 +1093,23 @@ type SensorColumn struct {
 	Rows       []Row
 }
 
-// parseSensorReading extracts an integer box-sensor reading from a row's
-// Value, accepting either a plain int64 (the usual value-normalization
+// parseSensorReading extracts an integer reading from a row's Value,
+// accepting either a plain int64 (the usual value-normalization
 // representation for a Gauge32/Integer wire value) OR a numeric string.
-// Some vendor sensor readings have been observed on the wire as a
-// STRING-typed OCTET STRING containing plain decimal digits (e.g. "3500")
-// rather than an INTEGER/Gauge32 -- Python's int(value) accepts both
-// transparently (a str or an int alike); this mirrors that dual
-// acceptance explicitly, since Go's type switch can't coerce silently the
-// way Python's int() does. Returns ok=false for anything else (including
-// a non-numeric string, e.g. "warm" or the "Not Supported" placeholder
-// handled separately by the caller).
+// Some vendor readings have been observed on the wire as a STRING-typed
+// OCTET STRING containing plain decimal digits (e.g. "3500") rather than
+// an INTEGER/Gauge32 -- Python's int(value) accepts both transparently (a
+// str or an int alike); this mirrors that dual acceptance explicitly,
+// since Go's type switch can't coerce silently the way Python's int()
+// does. Returns ok=false for anything else (including a non-numeric
+// string, e.g. "warm" or the "Not Supported" placeholder handled
+// separately by ParseBoxSensors's caller).
+//
+// Shared by ParseBoxSensors (a box-sensor RPM/W/C reading) AND ParsePoe
+// (the vendor per-port mW reading) -- both vendor-subtree columns share
+// the identical STRING-typed-numeric risk, verified for mW by Python's own
+// test_parse_poe_uses_col3_admin_col6_detect_and_vendor_mw, which
+// constructs its mW rows as SnmpRow(oid, "12800", "Gauge32").
 func parseSensorReading(v any) (int64, bool) {
 	switch t := v.(type) {
 	case int64:

@@ -116,6 +116,33 @@ func TestParsePoeEmptyVendorPowerYieldsNone(t *testing.T) {
 	}
 }
 
+// TestParsePoeAcceptsStringTypedVendorMw mirrors a case implicit in the
+// Python test suite that the strict-int64 port originally missed: the
+// Python test test_parse_poe_uses_col3_admin_col6_detect_and_vendor_mw
+// constructs its vendor mW rows as SnmpRow(oid, "12800", "Gauge32") --
+// a STRING-typed numeric value, not a Python int -- and Python's
+// int(row.value) coerces it transparently. ParsePoe's vendor-mW join must
+// accept a numeric string exactly like ParseBoxSensors does (shared via
+// parseSensorReading), not silently drop the reading by requiring int64.
+func TestParsePoeAcceptsStringTypedVendorMw(t *testing.T) {
+	tbl := PethPsePortTable
+	status := []Row{
+		NewIntRow(tbl+".3.1.1", 1),
+		NewIntRow(tbl+".6.1.1", 3), // delivering
+	}
+	power := []Row{NewStrRow("1.3.6.1.4.1.4526.10.15.1.1.1.2.1.1", "12800")}
+	poe, err := ParsePoe(status, power)
+	if err != nil {
+		t.Fatalf("ParsePoe: %v", err)
+	}
+	if len(poe) != 1 {
+		t.Fatalf("len(poe) = %d, want 1", len(poe))
+	}
+	if poe[0].PowerMw == nil || *poe[0].PowerMw != 12800 {
+		t.Errorf("PowerMw = %v, want 12800", poe[0].PowerMw)
+	}
+}
+
 // --- ParseBoxSensors ---------------------------------------------------
 
 // TestParseBoxSensorsSkipsNotSupported mirrors
