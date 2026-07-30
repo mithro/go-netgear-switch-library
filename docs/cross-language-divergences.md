@@ -77,3 +77,12 @@ compare.
    landed (see commit `9f298b5`), and `dispatch.go`'s `readVia` doc comment
    and `TestReadVia_SkipAndReraiseLast` both pin the corrected (matches
    Python) behavior.
+
+## Slice 04 (SNMP write)
+
+12. **CreateVlan drops Python's unused `force` parameter** (`snmp/writer_vlan.go`,
+    facade `CreateVlan`): Python keeps `force=False` on `create_vlan` purely for
+    signature symmetry and never reads it; Go omits it. Behaviourally inert.
+13. **Clock/sleep injection is a Writer construction option** (`snmp.WithClock`)
+    rather than Python's per-call test-only kwargs. Facade surface identical
+    (timeouts only), matching Python's facade.
