@@ -25,6 +25,32 @@ package virtual
 
 import "github.com/mithro/go-netgear-switch-library/model"
 
+// withDefaultIfType backfills IfType == 6 (ethernetCsmacd, the physical-port
+// default -- see PortSim.IfType's doc comment and NewPortSim) onto every
+// port in ports whose IfType is still the Go zero value.
+//
+// Every seed function below builds its (very large) physical-port tables
+// via bare struct literals for legibility/transcription fidelity, not
+// NewPortSim, and sets IfType explicitly ONLY on each seed's genuinely
+// non-physical rows (the CPU/LAG/VLAN-interface pseudo-ports, e.g. ifIndex
+// 417/418 in SeedGSM7252PS) -- so every OTHER port literal's omitted
+// IfType field is left at Go's zero value (0), not the physical default
+// (6) NewPortSim itself would have applied. Left unfixed, every physical
+// port in every seed answers ifType 0 on the wire, which
+// snmp.physicalPorts (the reader's physical-vs-pseudo-interface filter)
+// then excludes -- silently emptying GetPorts/GetStats for every single
+// seeded model. This helper backfills exactly the default NewPortSim
+// applies, mutating and returning ports for a single-expression call site
+// at the end of each Seed function below.
+func withDefaultIfType(ports map[int]*PortSim) map[int]*PortSim {
+	for _, p := range ports {
+		if p.IfType == 0 {
+			p.IfType = 6
+		}
+	}
+	return ports
+}
+
 // SeedGSM7252PS builds a GSM7252PS (52-port, 48-PoE) State transcribed field-for-field
 // from the real hardware capture testdata/captures/gsm7252ps.json (SNMP,
 // host 10.1.5.22) via the pinned Python seed_gsm7252ps: every port's
@@ -220,7 +246,7 @@ func SeedGSM7252PS() *State {
 
 	s := NewState("gsm7252ps")
 
-	s.Ports = ports
+	s.Ports = withDefaultIfType(ports)
 
 	s.Vlans = vlans
 
@@ -438,7 +464,7 @@ func SeedGSM7228PS() *State {
 
 	s := NewState("gsm7228ps")
 
-	s.Ports = ports
+	s.Ports = withDefaultIfType(ports)
 
 	s.Vlans = vlans
 
@@ -567,7 +593,7 @@ func SeedM4300_24X() *State {
 
 	s := NewState("m4300-24x")
 
-	s.Ports = ports
+	s.Ports = withDefaultIfType(ports)
 
 	s.Vlans = vlans
 
@@ -694,7 +720,7 @@ func SeedM4300_16X() *State {
 
 	s := NewState("m4300-16x")
 
-	s.Ports = ports
+	s.Ports = withDefaultIfType(ports)
 
 	s.Vlans = vlans
 
@@ -868,7 +894,7 @@ func SeedGS728TPP() *State {
 
 	s := NewState("gs728tpp")
 
-	s.Ports = ports
+	s.Ports = withDefaultIfType(ports)
 
 	s.Vlans = vlans
 
