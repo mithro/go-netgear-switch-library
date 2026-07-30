@@ -1009,16 +1009,22 @@ func (s *State) NsdpTlvs(tags map[nsdp.Tag]bool) []nsdp.TLVEntry {
 // Deliberate Go-safety divergence from the pinned Python reference: a
 // malformed VALUE for a known tag (too short to hold its fixed fields) is
 // ALSO treated as a no-op here, guarded by an explicit length check before
-// any indexing/parsing. Python's equivalent branches have no such guard
-// (`value[0]`/`struct.unpack_from` on a too-short `value` raises
-// IndexError/struct.error there), but that exception is UNCAUGHT by
-// faces/nsdp.py's `_serve` (which only catches `ValueError` around
-// `_handle`, and neither IndexError nor struct.error is a ValueError) --
-// so on real Python this would silently kill that one mock's serve thread
-// permanently. A Go panic from an unrecovered index-out-of-range in this
-// package's background serve goroutine would be strictly worse: it crashes
-// the entire process, not just one mock's request loop. See
-// docs/cross-language-divergences.md, "Slice 05", entry 4, for this
+// any indexing/parsing. Python's equivalent branches have no such guard and
+// are themselves inconsistent about what happens: PORT_PVID's `value[0]`/
+// `struct.unpack_from` raises IndexError/struct.error, and IP_ADDRESS/
+// NETMASK/GATEWAY's `socket.inet_ntoa` raises OSError on a wrong-length
+// value -- none of those three are a ValueError, so faces/nsdp.py's
+// `_serve` (which only catches ValueError around `_handle`) does NOT catch
+// them, silently killing that one Python mock's serve thread permanently.
+// VLAN_MEMBERS is the one exception that's already safe in Python:
+// parse_vlan_members explicitly raises a plain ValueError for a too-short
+// buffer, which `_serve` DOES catch (response silently dropped, thread
+// survives). A Go panic from an unrecovered out-of-range access in this
+// package's background serve goroutine would be strictly worse than even
+// the thread-killing cases above: it crashes the entire process, not just
+// one mock's request loop. Go therefore guards every branch uniformly
+// rather than mirroring Python's per-tag mix. See
+// docs/cross-language-divergences.md, "Slice 05", entry 4, for the full
 // call-out; nothing here changes the wire encoding of any well-formed
 // write, only how a malformed one degrades.
 func (s *State) ApplyNsdpWrite(tag nsdp.Tag, value []byte) {

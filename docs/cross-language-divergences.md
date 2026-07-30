@@ -126,18 +126,34 @@ compare.
    dotted-quad address, so this is a no-op in practice; it fails fast on a
    malformed address rather than reproducing `inet_aton`'s abbreviated-form
    guessing.
-4. **`State.ApplyNsdpWrite` no-ops on a too-short value for a known tag,
-   rather than reproducing Python's uncaught `IndexError`/`struct.error`**
-   (`virtual/state.go`): Python's `apply_nsdp_write` indexes `value[0]`/calls
-   `struct.unpack_from` with no length guard; a too-short value for
-   PORT_PVID/VLAN_MEMBERS raises an exception that `faces/nsdp.py`'s
-   `_serve` does NOT catch (it only catches `ValueError` around `_handle`,
-   and neither exception type is a `ValueError`), silently killing that one
-   Python mock's serve thread permanently. An unrecovered Go panic from the
-   same index-out-of-range in this package's background serve goroutine
-   would crash the entire test process instead -- a strictly worse failure
-   mode for input only a malformed/adversarial datagram could ever produce.
-   Go instead guards the length up front and treats a too-short value as a
-   no-op, exactly like every other unrecognized/read-only write. This only
-   changes how a MALFORMED write degrades; every well-formed write's wire
-   encoding and resulting state mutation are unchanged.
+4. **`State.ApplyNsdpWrite` uniformly no-ops on a too-short value for a
+   known tag; Python's equivalent branches are inconsistent, and for TWO
+   tags specifically that inconsistency is an uncaught, thread-killing bug**
+   (`virtual/state.go`): Python's `apply_nsdp_write` has no length guard
+   before indexing/parsing, and its branches disagree on what a too-short
+   `value` does:
+   - **PORT_PVID**: `self.pvids[value[0]] = struct.unpack_from(">H", value, 1)[0]`
+     raises `IndexError` (empty `value`) or `struct.error` (1-2 bytes) --
+     neither is a `ValueError`, so `faces/nsdp.py`'s `_serve` (which only
+     catches `ValueError` around `_handle`) does NOT catch it, silently
+     killing that one Python mock's serve thread permanently.
+   - **IP_ADDRESS/NETMASK/GATEWAY**: `socket.inet_ntoa(value)` on anything
+     but exactly 4 bytes raises `OSError` ("packed IP wrong length for
+     inet_ntoa") -- also not a `ValueError`, also uncaught, also kills the
+     thread.
+   - **VLAN_MEMBERS** is the one exception that behaves safely already:
+     `parse_vlan_members` explicitly `raise`s a plain `ValueError` for a
+     too-short buffer, which `_serve`'s `except ValueError: continue` DOES
+     catch -- the write response is silently dropped (client sees a
+     timeout) but the thread survives.
+
+   An unrecovered Go panic from the same out-of-range access in this
+   package's background serve goroutine would be strictly worse than even
+   the PORT_PVID/IP_ADDRESS case: it crashes the entire process, not just
+   one mock's request loop. Go therefore guards every branch's length up
+   front and treats a too-short value as a no-op uniformly, regardless of
+   which tag -- simpler, and strictly safer than Python's per-branch mix of
+   "silently drops the response" (VLAN_MEMBERS) and "kills the thread"
+   (PORT_PVID, IP_ADDRESS/NETMASK/GATEWAY). This only changes how a
+   MALFORMED write degrades; every well-formed write's wire encoding and
+   resulting state mutation are unchanged.
