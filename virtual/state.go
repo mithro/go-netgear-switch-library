@@ -14,6 +14,7 @@ package virtual
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -56,7 +57,7 @@ func NewPortSim(name string, admin, link bool, speed int) *PortSim {
 
 // VlanSim is one dot1q VLAN: display name plus egress-member and untagged
 // port sets. Member/Untagged represent sets: a port is a member iff its map
-// value is true (see EncodePortBitmap).
+// value is true (see sliceFromPortSet, snmp.EncodePortBitmap).
 type VlanSim struct {
 	Name     string
 	Member   map[int]bool
@@ -588,6 +589,21 @@ func portSetFromSlice(ports []int) map[int]bool {
 	for _, p := range ports {
 		out[p] = true
 	}
+	return out
+}
+
+// sliceFromPortSet is portSetFromSlice's inverse: it converts the
+// map[int]bool set representation VlanSim.Member/Untagged use into a
+// snmp.EncodePortBitmap-style sorted []int, keeping only ports whose map
+// value is true (a false-valued or absent key is never a member).
+func sliceFromPortSet(ports map[int]bool) []int {
+	out := make([]int, 0, len(ports))
+	for p, present := range ports {
+		if present {
+			out = append(out, p)
+		}
+	}
+	sort.Ints(out)
 	return out
 }
 

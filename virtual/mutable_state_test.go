@@ -75,9 +75,9 @@ func TestApplyWriteIfAdminAndPvid(t *testing.T) {
 func TestApplyWriteVlanMembershipRMWAndRowStatus(t *testing.T) {
 	st := newWritableFixture()
 
-	newEgress := EncodePortBitmap(map[int]bool{1: true, 2: true, 10: true, 25: true}, 8)
+	newEgress := snmp.EncodePortBitmap([]int{1, 2, 10, 25}, 8)
 	st.ApplyWrite(fmt.Sprintf("%s.90", snmp.Dot1qVlanStaticEgress), newEgress)
-	memberBitmap := EncodePortBitmap(st.Vlans[90].Member, 8)
+	memberBitmap := snmp.EncodePortBitmap(sliceFromPortSet(st.Vlans[90].Member), 8)
 	got := snmp.DecodePortBitmap(memberBitmap)
 	if diff := cmp.Diff([]int{1, 2, 10, 25}, got); diff != "" {
 		t.Errorf("vlan 90 member mismatch after RMW (-want +got):\n%s", diff)
