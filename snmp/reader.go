@@ -41,7 +41,7 @@ func ReadSystemInfo(ctx context.Context, c Client) (model.DetectedModel, error) 
 // Reader is a model-driven SNMP reader: every method below joins one or more
 // walk-discovered MIB columns via the corresponding Parse* function in
 // parse.go. Vendor OIDs (see GetVendorOids) are resolved lazily, only inside
-// the three methods that need the vendor subtree (GetPoe/GetSensors/
+// the three methods that need the vendor subtree (GetPoE/GetSensors/
 // GetMgmtIP) -- constructing a Reader never touches vendor OIDs.
 type Reader struct {
 	client Client
@@ -113,12 +113,12 @@ func (r *Reader) GetStats(ctx context.Context) ([]model.PortStats, error) {
 	})
 }
 
-// GetVlans reads the static VLAN table (name + member/tagged/untagged port
+// GetVLANs reads the static VLAN table (name + member/tagged/untagged port
 // sets).
 //
 // Walks, in order: Dot1qVlanStaticName, Dot1qVlanStaticEgress,
 // Dot1qVlanStaticUntagged.
-func (r *Reader) GetVlans(ctx context.Context) ([]model.VLANInfo, error) {
+func (r *Reader) GetVLANs(ctx context.Context) ([]model.VLANInfo, error) {
 	cols, err := walkAll(ctx, r.client, Dot1qVlanStaticName, Dot1qVlanStaticEgress, Dot1qVlanStaticUntagged)
 	if err != nil {
 		return nil, err
@@ -126,10 +126,10 @@ func (r *Reader) GetVlans(ctx context.Context) ([]model.VLANInfo, error) {
 	return ParseVlans(cols[0], cols[1], cols[2])
 }
 
-// GetPvids reads each physical port's default/untagged VLAN (PVID).
+// GetPVIDs reads each physical port's default/untagged VLAN (PVID).
 //
 // Walks, in order: Dot1qPvid, IfType.
-func (r *Reader) GetPvids(ctx context.Context) ([]model.Pvid, error) {
+func (r *Reader) GetPVIDs(ctx context.Context) ([]model.Pvid, error) {
 	cols, err := walkAll(ctx, r.client, Dot1qPvid, IfType)
 	if err != nil {
 		return nil, err
@@ -137,10 +137,10 @@ func (r *Reader) GetPvids(ctx context.Context) ([]model.Pvid, error) {
 	return ParsePvids(cols[0], cols[1])
 }
 
-// GetLldp reads the LLDP remote-neighbor table.
+// GetLLDP reads the LLDP remote-neighbor table.
 //
 // Walks: LldpRemTable (one walk).
-func (r *Reader) GetLldp(ctx context.Context) ([]model.LLDPNeighbor, error) {
+func (r *Reader) GetLLDP(ctx context.Context) ([]model.LLDPNeighbor, error) {
 	rows, err := r.client.Walk(ctx, LldpRemTable)
 	if err != nil {
 		return nil, err
@@ -148,11 +148,11 @@ func (r *Reader) GetLldp(ctx context.Context) ([]model.LLDPNeighbor, error) {
 	return ParseLldp(rows)
 }
 
-// GetMacs reads the MAC address / forwarding-database table.
+// GetMACs reads the MAC address / forwarding-database table.
 //
 // Walks, in order: Dot1qTpFdbPort, Dot1dBasePortIfIndex. No has_mac_table
 // guard here: NewReader's SNMP-backend gate already enforced it.
-func (r *Reader) GetMacs(ctx context.Context) ([]model.MacEntry, error) {
+func (r *Reader) GetMACs(ctx context.Context) ([]model.MacEntry, error) {
 	cols, err := walkAll(ctx, r.client, Dot1qTpFdbPort, Dot1dBasePortIfIndex)
 	if err != nil {
 		return nil, err
@@ -160,7 +160,7 @@ func (r *Reader) GetMacs(ctx context.Context) ([]model.MacEntry, error) {
 	return ParseMacs(cols[0], cols[1])
 }
 
-// GetPoe reads the per-port PoE (Power-over-Ethernet) status.
+// GetPoE reads the per-port PoE (Power-over-Ethernet) status.
 //
 // A model with zero PSE ports (e.g. m4300-24x) has no PoE at all: this
 // raises an error wrapping model.ErrUnsupportedCapability BEFORE any walk,
@@ -171,7 +171,7 @@ func (r *Reader) GetMacs(ctx context.Context) ([]model.MacEntry, error) {
 // delivered-power (mW) column ONLY when the model has a vendor OID subtree
 // (HasVendorOids); a model with none (e.g. gs728tpp) leaves power_mw
 // honestly nil for every port.
-func (r *Reader) GetPoe(ctx context.Context) ([]model.PoEStatus, error) {
+func (r *Reader) GetPoE(ctx context.Context) ([]model.PoEStatus, error) {
 	if r.model.PoEPortCount == 0 {
 		return nil, fmt.Errorf("model %q has no PoE (no PSE ports): %w", r.model.Key, model.ErrUnsupportedCapability)
 	}

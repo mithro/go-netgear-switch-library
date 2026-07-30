@@ -1,8 +1,17 @@
 // backend_snmp.go: the SNMP BackendBuilder, registered into dispatch.go's
-// registry from this package's own init() -- SNMP has no external-binary
-// dependency (gosnmp is pure Go), so it is always compiled in, unlike
-// NSDP/HTTP/SSH (slices 05-07), which register themselves from their own
-// packages' init(). Ported from src/netgear_switch/_dispatch.py's
+// registry from THIS file's own init(). This is the pattern every backend
+// follows (see dispatch.go's RegisterBackend doc): a root-package
+// (netgearswitch) shim file per backend whose init() registers a
+// BackendBuilder that calls into that backend's own protocol package (here,
+// snmp/) to do the real work -- necessarily in THIS package, not snmp/ or
+// some external package, because a builder needs Switch's unexported fields
+// (snmpClient, snmpCommunity, host, ...), which only code inside this
+// package can read. Slices 05-07 will add nsdp_backend.go/http_backend.go/
+// ssh_backend.go alongside this file, each following the same shape. Per
+// dispatch.go's BackendBuilder contract, buildSNMPReader below performs no
+// blocking I/O -- it only constructs a lazy, not-yet-connected client/reader
+// (mirroring Python's transports), since it runs while readerFor holds
+// s.mu. Ported from src/netgear_switch/_dispatch.py's
 // build_sync_snmp_client/_require_community (the normative source; that repo
 // is read-only from here). Any discrepancy between this file and the pinned
 // Python source is a bug in this file. See D-FAC §1.5, §2.5, §2.11.

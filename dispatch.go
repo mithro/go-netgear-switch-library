@@ -26,11 +26,11 @@ import (
 type BackendReader interface {
 	GetPorts(ctx context.Context) ([]model.PortStatus, error)
 	GetStats(ctx context.Context) ([]model.PortStats, error)
-	GetVlans(ctx context.Context) ([]model.VLANInfo, error)
-	GetPvids(ctx context.Context) ([]model.Pvid, error)
-	GetLldp(ctx context.Context) ([]model.LLDPNeighbor, error)
-	GetMacs(ctx context.Context) ([]model.MacEntry, error)
-	GetPoe(ctx context.Context) ([]model.PoEStatus, error)
+	GetVLANs(ctx context.Context) ([]model.VLANInfo, error)
+	GetPVIDs(ctx context.Context) ([]model.Pvid, error)
+	GetLLDP(ctx context.Context) ([]model.LLDPNeighbor, error)
+	GetMACs(ctx context.Context) ([]model.MacEntry, error)
+	GetPoE(ctx context.Context) ([]model.PoEStatus, error)
 	GetSensors(ctx context.Context) ([]model.Sensor, error)
 	GetMgmtIP(ctx context.Context) (model.MgmtIPConfig, error)
 }
@@ -74,15 +74,30 @@ var (
 )
 
 // RegisterBackend installs build as the reader constructor for backend b,
-// overwriting any builder previously registered for the same backend. Meant
-// to be called from an importing package's init() -- slices 05-07 register
-// their NSDP/HTTP/SSH backends this way -- or explicitly from a caller's
-// main() (a blank `_` import of the backend package is Go's standard
-// plugin-registration idiom), never implicitly from inside this package, so
-// "which backends are compiled in" stays an explicit, grep-able decision
-// (mirroring Python's function-local lazy transport imports: "import
-// netgear_switch never requires net-snmp binaries or pysnmp"). Safe for
-// concurrent use with itself and with any in-flight Switch dispatch.
+// overwriting any builder previously registered for the same backend.
+//
+// The actual registration pattern (see backend_snmp.go): a new root-package
+// (netgearswitch) shim file per backend, whose own init() calls
+// RegisterBackend, with the BackendBuilder itself calling into that
+// backend's protocol package (snmp/, and later nsdp/, http/, ssh/ in slices
+// 05-07) to do the real work. This lives in the root package, NOT in the
+// protocol package or some external package reached via a blank `_` import,
+// because Switch's fields a builder needs (snmpClient, snmpCommunity,
+// nsdpInterface, httpPassword, host, model, ...) are all unexported: an
+// out-of-package BackendBuilder could not read them, so an
+// out-of-package builder is not possible. (This also means there is no
+// "which backends are compiled in" toggle via import graph -- every backend
+// shim in this module's own source tree registers itself unconditionally.)
+//
+// A BackendBuilder MUST NOT perform blocking I/O: readerFor (below) calls it
+// while holding s.mu for the entire call, so a builder that dials out
+// (rather than merely constructing a lazy, not-yet-connected client/session,
+// mirroring Python's transports) would serialize and stall every concurrent
+// Switch dispatch on that same *Switch. Building a *snmp.Reader or an
+// injected client wrapper is fine; opening a socket is not.
+//
+// Safe for concurrent use with itself and with any in-flight Switch
+// dispatch.
 func RegisterBackend(b model.Backend, build BackendBuilder) {
 	backendRegistryMu.Lock()
 	defer backendRegistryMu.Unlock()

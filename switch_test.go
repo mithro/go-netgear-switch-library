@@ -26,11 +26,11 @@ func (f *fakeReader) GetPorts(context.Context) ([]model.PortStatus, error) {
 	return nil, f.getPortsErr
 }
 func (f *fakeReader) GetStats(context.Context) ([]model.PortStats, error)   { return nil, nil }
-func (f *fakeReader) GetVlans(context.Context) ([]model.VLANInfo, error)    { return nil, nil }
-func (f *fakeReader) GetPvids(context.Context) ([]model.Pvid, error)        { return nil, nil }
-func (f *fakeReader) GetLldp(context.Context) ([]model.LLDPNeighbor, error) { return nil, nil }
-func (f *fakeReader) GetMacs(context.Context) ([]model.MacEntry, error)     { return nil, nil }
-func (f *fakeReader) GetPoe(context.Context) ([]model.PoEStatus, error)     { return nil, nil }
+func (f *fakeReader) GetVLANs(context.Context) ([]model.VLANInfo, error)    { return nil, nil }
+func (f *fakeReader) GetPVIDs(context.Context) ([]model.Pvid, error)        { return nil, nil }
+func (f *fakeReader) GetLLDP(context.Context) ([]model.LLDPNeighbor, error) { return nil, nil }
+func (f *fakeReader) GetMACs(context.Context) ([]model.MacEntry, error)     { return nil, nil }
+func (f *fakeReader) GetPoE(context.Context) ([]model.PoEStatus, error)     { return nil, nil }
 func (f *fakeReader) GetSensors(context.Context) ([]model.Sensor, error)    { return nil, nil }
 func (f *fakeReader) GetMgmtIP(context.Context) (model.MgmtIPConfig, error) {
 	return model.MgmtIPConfig{}, nil
@@ -630,6 +630,22 @@ func TestClose_IsSafeWithNoHTTPClientEverBuilt(t *testing.T) {
 	}
 	if err := sw.Close(); err != nil {
 		t.Fatalf("Close() error = %v, want nil", err)
+	}
+}
+
+// --- Model()/Host() accessors --------------------------------------------
+
+func TestModelAndHost_ReturnConstructionValues(t *testing.T) {
+	m := fakeModel("fake", model.BackendSNMP)
+	sw, err := New(m, "10.0.0.1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if got := sw.Model(); got != m {
+		t.Fatalf("Model() = %v, want %v (the exact model New was given)", got, m)
+	}
+	if got := sw.Host(); got != "10.0.0.1" {
+		t.Fatalf("Host() = %q, want %q", got, "10.0.0.1")
 	}
 }
 

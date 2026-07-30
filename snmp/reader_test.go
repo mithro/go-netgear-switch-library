@@ -180,17 +180,17 @@ func TestGetStatsWalksSevenOIDsInOrderAndJoinsFields(t *testing.T) {
 	}
 }
 
-// --- GetVlans / GetPvids -----------------------------------------------
+// --- GetVLANs / GetPVIDs -----------------------------------------------
 
-func TestGetVlansWalksThreeOIDsInOrderAndJoinsFields(t *testing.T) {
+func TestGetVLANsWalksThreeOIDsInOrderAndJoinsFields(t *testing.T) {
 	fc := newFakeReaderClient(fullReaderTables(t))
 	r, err := NewReader(fc, mustModel(t, "gsm7252ps"))
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	vlans, err := r.GetVlans(context.Background())
+	vlans, err := r.GetVLANs(context.Background())
 	if err != nil {
-		t.Fatalf("GetVlans: %v", err)
+		t.Fatalf("GetVLANs: %v", err)
 	}
 	want := []string{Dot1qVlanStaticName, Dot1qVlanStaticEgress, Dot1qVlanStaticUntagged}
 	if diff := cmp.Diff(want, fc.walked); diff != "" {
@@ -214,15 +214,15 @@ func TestGetVlansWalksThreeOIDsInOrderAndJoinsFields(t *testing.T) {
 	}
 }
 
-func TestGetPvidsWalksTwoOIDsInOrderAndJoinsFields(t *testing.T) {
+func TestGetPVIDsWalksTwoOIDsInOrderAndJoinsFields(t *testing.T) {
 	fc := newFakeReaderClient(fullReaderTables(t))
 	r, err := NewReader(fc, mustModel(t, "gsm7252ps"))
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	pvids, err := r.GetPvids(context.Background())
+	pvids, err := r.GetPVIDs(context.Background())
 	if err != nil {
-		t.Fatalf("GetPvids: %v", err)
+		t.Fatalf("GetPVIDs: %v", err)
 	}
 	want := []string{Dot1qPvid, IfType}
 	if diff := cmp.Diff(want, fc.walked); diff != "" {
@@ -233,17 +233,17 @@ func TestGetPvidsWalksTwoOIDsInOrderAndJoinsFields(t *testing.T) {
 	}
 }
 
-// --- GetLldp / GetMacs ---------------------------------------------------
+// --- GetLLDP / GetMACs ---------------------------------------------------
 
-func TestGetLldpWalksOneOIDAndJoinsColumns(t *testing.T) {
+func TestGetLLDPWalksOneOIDAndJoinsColumns(t *testing.T) {
 	fc := newFakeReaderClient(fullReaderTables(t))
 	r, err := NewReader(fc, mustModel(t, "gsm7252ps"))
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	neighbors, err := r.GetLldp(context.Background())
+	neighbors, err := r.GetLLDP(context.Background())
 	if err != nil {
-		t.Fatalf("GetLldp: %v", err)
+		t.Fatalf("GetLLDP: %v", err)
 	}
 	if diff := cmp.Diff([]string{LldpRemTable}, fc.walked); diff != "" {
 		t.Errorf("walked OIDs mismatch (-want +got):\n%s", diff)
@@ -261,15 +261,15 @@ func TestGetLldpWalksOneOIDAndJoinsColumns(t *testing.T) {
 	}
 }
 
-func TestGetMacsWalksTwoOIDsInOrderAndJoinsFields(t *testing.T) {
+func TestGetMACsWalksTwoOIDsInOrderAndJoinsFields(t *testing.T) {
 	fc := newFakeReaderClient(fullReaderTables(t))
 	r, err := NewReader(fc, mustModel(t, "gsm7252ps"))
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	macs, err := r.GetMacs(context.Background())
+	macs, err := r.GetMACs(context.Background())
 	if err != nil {
-		t.Fatalf("GetMacs: %v", err)
+		t.Fatalf("GetMACs: %v", err)
 	}
 	want := []string{Dot1qTpFdbPort, Dot1dBasePortIfIndex}
 	if diff := cmp.Diff(want, fc.walked); diff != "" {
@@ -284,9 +284,9 @@ func TestGetMacsWalksTwoOIDsInOrderAndJoinsFields(t *testing.T) {
 	}
 }
 
-// --- GetPoe: the zero-PSE guard is the parity-critical case -------------
+// --- GetPoE: the zero-PSE guard is the parity-critical case -------------
 
-func TestGetPoeWalksTableThenVendorMwAndJoins(t *testing.T) {
+func TestGetPoEWalksTableThenVendorMwAndJoins(t *testing.T) {
 	fc := newFakeReaderClient(fullReaderTables(t))
 	m := mustModel(t, "gsm7252ps")
 	r, err := NewReader(fc, m)
@@ -297,9 +297,9 @@ func TestGetPoeWalksTableThenVendorMwAndJoins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetVendorOids: %v", err)
 	}
-	poe, err := r.GetPoe(context.Background())
+	poe, err := r.GetPoE(context.Background())
 	if err != nil {
-		t.Fatalf("GetPoe: %v", err)
+		t.Fatalf("GetPoE: %v", err)
 	}
 	want := []string{PethPsePortTable, vendor.PoEPowerMw}
 	if diff := cmp.Diff(want, fc.walked); diff != "" {
@@ -316,12 +316,12 @@ func TestGetPoeWalksTableThenVendorMwAndJoins(t *testing.T) {
 	}
 }
 
-// TestGetPoeRaisesForZeroPSEModelBeforeAnyWalk mirrors
+// TestGetPoERaisesForZeroPSEModelBeforeAnyWalk mirrors
 // test_get_poe_raises_for_zero_pse_model: m4300-24x has PoEPortCount == 0.
-// GetPoe MUST raise UnsupportedCapabilityError -- consistent with the
+// GetPoE MUST raise UnsupportedCapabilityError -- consistent with the
 // CLI/HTTP readers -- and it must raise BEFORE walking, so even a fake that
 // would happily answer the PoE table never gets asked.
-func TestGetPoeRaisesForZeroPSEModelBeforeAnyWalk(t *testing.T) {
+func TestGetPoERaisesForZeroPSEModelBeforeAnyWalk(t *testing.T) {
 	tables := map[string][]Row{
 		PethPsePortTable: {NewIntRow(PethPsePortTable+".3.1.1", 1)},
 	}
@@ -330,20 +330,20 @@ func TestGetPoeRaisesForZeroPSEModelBeforeAnyWalk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	_, err = r.GetPoe(context.Background())
+	_, err = r.GetPoE(context.Background())
 	if !errors.Is(err, model.ErrUnsupportedCapability) {
-		t.Fatalf("GetPoe error = %v, want ErrUnsupportedCapability", err)
+		t.Fatalf("GetPoE error = %v, want ErrUnsupportedCapability", err)
 	}
 	if len(fc.walked) != 0 {
 		t.Errorf("walked = %v, want no walks at all (guard must fire before I/O)", fc.walked)
 	}
 }
 
-// TestGetPoeNoVendorOidsLeavesPowerHonestlyNil mirrors the gs728tpp code
+// TestGetPoENoVendorOidsLeavesPowerHonestlyNil mirrors the gs728tpp code
 // path: a model WITH PoE but no vendor OID subtree walks only the standard
 // table, never a vendor mW column, and every port's PowerMw is nil rather
 // than fabricated.
-func TestGetPoeNoVendorOidsLeavesPowerHonestlyNil(t *testing.T) {
+func TestGetPoENoVendorOidsLeavesPowerHonestlyNil(t *testing.T) {
 	tables := map[string][]Row{
 		PethPsePortTable: {
 			NewIntRow(PethPsePortTable+".3.1.1", 1),
@@ -355,9 +355,9 @@ func TestGetPoeNoVendorOidsLeavesPowerHonestlyNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	poe, err := r.GetPoe(context.Background())
+	poe, err := r.GetPoE(context.Background())
 	if err != nil {
-		t.Fatalf("GetPoe: %v", err)
+		t.Fatalf("GetPoE: %v", err)
 	}
 	if diff := cmp.Diff([]string{PethPsePortTable}, fc.walked); diff != "" {
 		t.Errorf("walked OIDs mismatch (-want +got):\n%s", diff)
@@ -671,25 +671,25 @@ func TestReaderFullTablesEndToEnd(t *testing.T) {
 	if err != nil || len(stats) == 0 {
 		t.Fatalf("GetStats: stats=%v err=%v", stats, err)
 	}
-	vlans, err := r.GetVlans(ctx)
+	vlans, err := r.GetVLANs(ctx)
 	if err != nil || len(vlans) == 0 {
-		t.Fatalf("GetVlans: vlans=%v err=%v", vlans, err)
+		t.Fatalf("GetVLANs: vlans=%v err=%v", vlans, err)
 	}
-	pvids, err := r.GetPvids(ctx)
+	pvids, err := r.GetPVIDs(ctx)
 	if err != nil || len(pvids) == 0 {
-		t.Fatalf("GetPvids: pvids=%v err=%v", pvids, err)
+		t.Fatalf("GetPVIDs: pvids=%v err=%v", pvids, err)
 	}
-	lldp, err := r.GetLldp(ctx)
+	lldp, err := r.GetLLDP(ctx)
 	if err != nil || len(lldp) == 0 {
-		t.Fatalf("GetLldp: lldp=%v err=%v", lldp, err)
+		t.Fatalf("GetLLDP: lldp=%v err=%v", lldp, err)
 	}
-	macs, err := r.GetMacs(ctx)
+	macs, err := r.GetMACs(ctx)
 	if err != nil || len(macs) == 0 {
-		t.Fatalf("GetMacs: macs=%v err=%v", macs, err)
+		t.Fatalf("GetMACs: macs=%v err=%v", macs, err)
 	}
-	poe, err := r.GetPoe(ctx)
+	poe, err := r.GetPoE(ctx)
 	if err != nil || len(poe) == 0 {
-		t.Fatalf("GetPoe: poe=%v err=%v", poe, err)
+		t.Fatalf("GetPoE: poe=%v err=%v", poe, err)
 	}
 	sensors, err := r.GetSensors(ctx)
 	if err != nil || len(sensors) == 0 {

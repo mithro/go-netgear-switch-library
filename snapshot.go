@@ -47,8 +47,8 @@ func snapshotDegrade[T any](fn func() (T, error)) (T, error) {
 //   - mgmt_ip is the one field that is NOT tuple-shaped (a single
 //     model.MgmtIPConfig, not a slice): it degrades to a nil pointer instead
 //     of an empty slice, via the same snapshotDegrade helper.
-//   - macs deliberately calls getMacsNoGate, NOT the public GetMacs: it does
-//     NOT apply GetMacs's require_mac_table guard first, instead letting the
+//   - macs deliberately calls getMACsNoGate, NOT the public GetMACs: it does
+//     NOT apply GetMACs's require_mac_table guard first, instead letting the
 //     dispatch loop exhaust naturally to the same
 //     model.ErrUnsupportedCapability outcome for a MAC-table-less model
 //     (D-FAC §2.12/trap #5 -- do not "fix" this to call the guard too; it
@@ -72,19 +72,19 @@ func (s *Switch) Snapshot(ctx context.Context) (model.SwitchData, error) {
 	if data.Stats, err = snapshotDegrade(func() ([]model.PortStats, error) { return s.GetStats(ctx) }); err != nil {
 		return model.SwitchData{}, err
 	}
-	if data.Vlans, err = snapshotDegrade(func() ([]model.VLANInfo, error) { return s.GetVlans(ctx) }); err != nil {
+	if data.Vlans, err = snapshotDegrade(func() ([]model.VLANInfo, error) { return s.GetVLANs(ctx) }); err != nil {
 		return model.SwitchData{}, err
 	}
-	if data.Pvids, err = snapshotDegrade(func() ([]model.Pvid, error) { return s.GetPvids(ctx) }); err != nil {
+	if data.Pvids, err = snapshotDegrade(func() ([]model.Pvid, error) { return s.GetPVIDs(ctx) }); err != nil {
 		return model.SwitchData{}, err
 	}
-	if data.Lldp, err = snapshotDegrade(func() ([]model.LLDPNeighbor, error) { return s.GetLldp(ctx) }); err != nil {
+	if data.Lldp, err = snapshotDegrade(func() ([]model.LLDPNeighbor, error) { return s.GetLLDP(ctx) }); err != nil {
 		return model.SwitchData{}, err
 	}
-	if data.Macs, err = snapshotDegrade(func() ([]model.MacEntry, error) { return s.getMacsNoGate(ctx) }); err != nil {
+	if data.Macs, err = snapshotDegrade(func() ([]model.MacEntry, error) { return s.getMACsNoGate(ctx) }); err != nil {
 		return model.SwitchData{}, err
 	}
-	if data.PoE, err = snapshotDegrade(func() ([]model.PoEStatus, error) { return s.GetPoe(ctx) }); err != nil {
+	if data.PoE, err = snapshotDegrade(func() ([]model.PoEStatus, error) { return s.GetPoE(ctx) }); err != nil {
 		return model.SwitchData{}, err
 	}
 	if data.Sensors, err = snapshotDegrade(func() ([]model.Sensor, error) { return s.GetSensors(ctx) }); err != nil {

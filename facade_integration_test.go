@@ -144,10 +144,10 @@ func TestFacadeIntegration_GSM7252PSEveryReadMatchesSNMPCapstonePins(t *testing.
 		t.Error("GetStats(): no port has a non-nil RxBytes, want at least one populated")
 	}
 
-	// --- GetVlans: vlan 90 "iot", member contains port 11 but NOT port 10 ---
-	vlans, err := sw.GetVlans(ctx)
+	// --- GetVLANs: vlan 90 "iot", member contains port 11 but NOT port 10 ---
+	vlans, err := sw.GetVLANs(ctx)
 	if err != nil {
-		t.Fatalf("GetVlans() error = %v", err)
+		t.Fatalf("GetVLANs() error = %v", err)
 	}
 	var vlan90 *netgearswitch.VLANInfo
 	for i := range vlans {
@@ -156,7 +156,7 @@ func TestFacadeIntegration_GSM7252PSEveryReadMatchesSNMPCapstonePins(t *testing.
 		}
 	}
 	if vlan90 == nil {
-		t.Fatal("no vlan 90 in GetVlans() result")
+		t.Fatal("no vlan 90 in GetVLANs() result")
 	}
 	if vlan90.Name == nil || *vlan90.Name != "iot" {
 		t.Errorf("vlan90.Name = %s, want \"iot\"", derefStr(vlan90.Name))
@@ -168,13 +168,13 @@ func TestFacadeIntegration_GSM7252PSEveryReadMatchesSNMPCapstonePins(t *testing.
 		t.Errorf("vlan90.MemberPorts = %v, want it to NOT contain port 10", vlan90.MemberPorts)
 	}
 
-	// --- GetPvids: non-vacuous ---
-	pvids, err := sw.GetPvids(ctx)
+	// --- GetPVIDs: non-vacuous ---
+	pvids, err := sw.GetPVIDs(ctx)
 	if err != nil {
-		t.Fatalf("GetPvids() error = %v", err)
+		t.Fatalf("GetPVIDs() error = %v", err)
 	}
 	if len(pvids) == 0 {
-		t.Fatal("GetPvids() returned no pvids, want non-empty")
+		t.Fatal("GetPVIDs() returned no pvids, want non-empty")
 	}
 
 	// --- GetMgmtIP: address/mode/base-MAC pins ---
@@ -192,10 +192,10 @@ func TestFacadeIntegration_GSM7252PSEveryReadMatchesSNMPCapstonePins(t *testing.
 		t.Errorf("mgmt.BaseMac = %s, want \"E0:91:F5:0C:D6:DB\"", derefStr(mgmt.BaseMac))
 	}
 
-	// --- GetPoe: port1 delivering 3500 mW ---
-	poe, err := sw.GetPoe(ctx)
+	// --- GetPoE: port1 delivering 3500 mW ---
+	poe, err := sw.GetPoE(ctx)
 	if err != nil {
-		t.Fatalf("GetPoe() error = %v", err)
+		t.Fatalf("GetPoE() error = %v", err)
 	}
 	var poe1 *netgearswitch.PoEStatus
 	for i := range poe {
@@ -204,7 +204,7 @@ func TestFacadeIntegration_GSM7252PSEveryReadMatchesSNMPCapstonePins(t *testing.
 		}
 	}
 	if poe1 == nil {
-		t.Fatal("no PoE port 1 in GetPoe() result")
+		t.Fatal("no PoE port 1 in GetPoE() result")
 	}
 	if !poe1.Delivering() {
 		t.Errorf("poe1.Detect = %v, want Delivering", poe1.Detect)
@@ -222,10 +222,10 @@ func TestFacadeIntegration_GSM7252PSEveryReadMatchesSNMPCapstonePins(t *testing.
 		t.Fatal("GetSensors() returned no sensors, want non-empty")
 	}
 
-	// --- GetMacs: the non-identity bridge-port -> ifIndex join proof ---
-	macs, err := sw.GetMacs(ctx)
+	// --- GetMACs: the non-identity bridge-port -> ifIndex join proof ---
+	macs, err := sw.GetMACs(ctx)
 	if err != nil {
-		t.Fatalf("GetMacs() error = %v", err)
+		t.Fatalf("GetMACs() error = %v", err)
 	}
 	var mac *netgearswitch.MacEntry
 	for i := range macs {
@@ -234,19 +234,19 @@ func TestFacadeIntegration_GSM7252PSEveryReadMatchesSNMPCapstonePins(t *testing.
 		}
 	}
 	if mac == nil {
-		t.Fatal("no MAC C8:00:84:89:71:70 in GetMacs() result")
+		t.Fatal("no MAC C8:00:84:89:71:70 in GetMACs() result")
 	}
 	if mac.Port != 110 {
 		t.Errorf("MAC C8:00:84:89:71:70 joined to port %d, want 110 (bridge_port 10 -> ifIndex 110, never the bare bridge port)", mac.Port)
 	}
 
-	// --- GetLldp: remote_port_id distinct from remote_port_desc, sys_name pin ---
-	lldp, err := sw.GetLldp(ctx)
+	// --- GetLLDP: remote_port_id distinct from remote_port_desc, sys_name pin ---
+	lldp, err := sw.GetLLDP(ctx)
 	if err != nil {
-		t.Fatalf("GetLldp() error = %v", err)
+		t.Fatalf("GetLLDP() error = %v", err)
 	}
 	if len(lldp) == 0 {
-		t.Fatal("GetLldp() returned no neighbors, want non-empty")
+		t.Fatal("GetLLDP() returned no neighbors, want non-empty")
 	}
 	nb := lldp[0]
 	if nb.RemotePortID == nil || *nb.RemotePortID != "1/xg51" {
@@ -325,24 +325,24 @@ func TestFacadeIntegration_GSM7252PSSnapshotFullyPopulated(t *testing.T) {
 	}
 }
 
-// TestFacadeIntegration_M4300_24XSnapshotDegradesPoEWhileGetPoeErrors proves
+// TestFacadeIntegration_M4300_24XSnapshotDegradesPoEWhileGetPoEErrors proves
 // the D-FAC §2.12 degrade contract on a REAL (if partial-capability) model:
-// m4300-24x has 0 PSE ports, so GetPoe() itself must fail wrapping
+// m4300-24x has 0 PSE ports, so GetPoE() itself must fail wrapping
 // ErrUnsupportedCapability (mirroring snmp/integration_test.go's
-// TestM4300_24XGetPoeIsUnsupportedCapability one layer up, through the
+// TestM4300_24XGetPoEIsUnsupportedCapability one layer up, through the
 // facade), while Snapshot -- which calls the SAME dispatch path internally --
 // must degrade that one field to an empty slice and still return every OTHER
 // field populated, with no error at all.
-func TestFacadeIntegration_M4300_24XSnapshotDegradesPoEWhileGetPoeErrors(t *testing.T) {
+func TestFacadeIntegration_M4300_24XSnapshotDegradesPoEWhileGetPoEErrors(t *testing.T) {
 	vsw := startVirtualSwitch(t, "m4300-24x")
 	sw := facadeFor(t, vsw, "m4300-24x")
 
 	ctx, cancel := context.WithTimeout(context.Background(), facadeTestTimeout)
 	defer cancel()
 
-	_, err := sw.GetPoe(ctx)
+	_, err := sw.GetPoE(ctx)
 	if !errors.Is(err, netgearswitch.ErrUnsupportedCapability) {
-		t.Fatalf("GetPoe() on m4300-24x (0 PSE ports) error = %v, want wrapping ErrUnsupportedCapability", err)
+		t.Fatalf("GetPoE() on m4300-24x (0 PSE ports) error = %v, want wrapping ErrUnsupportedCapability", err)
 	}
 
 	data, err := sw.Snapshot(ctx)

@@ -1,5 +1,5 @@
 // switch_read_test.go: tests for the SNMP BackendBuilder (backend_snmp.go),
-// the read methods + GetMacs's require_mac_table gate + Identify's dispatch
+// the read methods + GetMACs's require_mac_table gate + Identify's dispatch
 // bypass (switch.go), and Snapshot's per-field degrade semantics
 // (snapshot.go). See D-FAC §1.5, §2.5, §2.9, §2.11, §2.12 for the exact
 // semantics under test; reuses switch_test.go's fakeModel/
@@ -57,31 +57,31 @@ func (s *stubReader) GetStats(context.Context) ([]model.PortStats, error) {
 	}
 	return s.stats, nil
 }
-func (s *stubReader) GetVlans(context.Context) ([]model.VLANInfo, error) {
+func (s *stubReader) GetVLANs(context.Context) ([]model.VLANInfo, error) {
 	if s.vlansErr != nil {
 		return nil, s.vlansErr
 	}
 	return s.vlans, nil
 }
-func (s *stubReader) GetPvids(context.Context) ([]model.Pvid, error) {
+func (s *stubReader) GetPVIDs(context.Context) ([]model.Pvid, error) {
 	if s.pvidsErr != nil {
 		return nil, s.pvidsErr
 	}
 	return s.pvids, nil
 }
-func (s *stubReader) GetLldp(context.Context) ([]model.LLDPNeighbor, error) {
+func (s *stubReader) GetLLDP(context.Context) ([]model.LLDPNeighbor, error) {
 	if s.lldpErr != nil {
 		return nil, s.lldpErr
 	}
 	return s.lldp, nil
 }
-func (s *stubReader) GetMacs(context.Context) ([]model.MacEntry, error) {
+func (s *stubReader) GetMACs(context.Context) ([]model.MacEntry, error) {
 	if s.macsErr != nil {
 		return nil, s.macsErr
 	}
 	return s.macs, nil
 }
-func (s *stubReader) GetPoe(context.Context) ([]model.PoEStatus, error) {
+func (s *stubReader) GetPoE(context.Context) ([]model.PoEStatus, error) {
 	if s.poeErr != nil {
 		return nil, s.poeErr
 	}
@@ -148,7 +148,7 @@ func sysInfoTable(t *testing.T, modelKey string) map[string][]snmp.Row {
 	}
 }
 
-// --- GetPorts/GetStats/GetVlans/GetPvids/GetLldp/GetPoe/GetSensors/GetMgmtIP: plain delegation ---
+// --- GetPorts/GetStats/GetVLANs/GetPVIDs/GetLLDP/GetPoE/GetSensors/GetMgmtIP: plain delegation ---
 
 func TestSwitch_GetPorts_DelegatesToBackend(t *testing.T) {
 	clearBackendRegistry(t)
@@ -208,7 +208,7 @@ func TestSwitch_GetStats_PropagatesBackendError(t *testing.T) {
 	}
 }
 
-func TestSwitch_GetVlans_DelegatesToBackend(t *testing.T) {
+func TestSwitch_GetVLANs_DelegatesToBackend(t *testing.T) {
 	clearBackendRegistry(t)
 	want := []model.VLANInfo{{VlanID: 5}}
 	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
@@ -216,28 +216,28 @@ func TestSwitch_GetVlans_DelegatesToBackend(t *testing.T) {
 	})
 	sw := mustSwitch(t, fakeModel("fake", model.BackendSNMP), "10.0.0.1")
 
-	got, err := sw.GetVlans(context.Background())
+	got, err := sw.GetVLANs(context.Background())
 	if err != nil {
-		t.Fatalf("GetVlans() error = %v", err)
+		t.Fatalf("GetVLANs() error = %v", err)
 	}
 	if len(got) != 1 || got[0].VlanID != 5 {
-		t.Fatalf("GetVlans() = %v, want %v", got, want)
+		t.Fatalf("GetVLANs() = %v, want %v", got, want)
 	}
 }
 
-func TestSwitch_GetVlans_PropagatesBackendError(t *testing.T) {
+func TestSwitch_GetVLANs_PropagatesBackendError(t *testing.T) {
 	clearBackendRegistry(t)
 	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
 		return &stubReader{vlansErr: wrapCredential("boom")}, nil
 	})
 	sw := mustSwitch(t, fakeModel("fake", model.BackendSNMP), "10.0.0.1")
 
-	if _, err := sw.GetVlans(context.Background()); !errors.Is(err, model.ErrCredential) {
-		t.Fatalf("GetVlans() error = %v, want wrapping ErrCredential", err)
+	if _, err := sw.GetVLANs(context.Background()); !errors.Is(err, model.ErrCredential) {
+		t.Fatalf("GetVLANs() error = %v, want wrapping ErrCredential", err)
 	}
 }
 
-func TestSwitch_GetPvids_DelegatesToBackend(t *testing.T) {
+func TestSwitch_GetPVIDs_DelegatesToBackend(t *testing.T) {
 	clearBackendRegistry(t)
 	want := []model.Pvid{{Port: 1, Vlan: 5}}
 	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
@@ -245,28 +245,28 @@ func TestSwitch_GetPvids_DelegatesToBackend(t *testing.T) {
 	})
 	sw := mustSwitch(t, fakeModel("fake", model.BackendSNMP), "10.0.0.1")
 
-	got, err := sw.GetPvids(context.Background())
+	got, err := sw.GetPVIDs(context.Background())
 	if err != nil {
-		t.Fatalf("GetPvids() error = %v", err)
+		t.Fatalf("GetPVIDs() error = %v", err)
 	}
 	if len(got) != 1 || got[0] != (model.Pvid{Port: 1, Vlan: 5}) {
-		t.Fatalf("GetPvids() = %v, want %v", got, want)
+		t.Fatalf("GetPVIDs() = %v, want %v", got, want)
 	}
 }
 
-func TestSwitch_GetPvids_PropagatesBackendError(t *testing.T) {
+func TestSwitch_GetPVIDs_PropagatesBackendError(t *testing.T) {
 	clearBackendRegistry(t)
 	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
 		return &stubReader{pvidsErr: wrapCredential("boom")}, nil
 	})
 	sw := mustSwitch(t, fakeModel("fake", model.BackendSNMP), "10.0.0.1")
 
-	if _, err := sw.GetPvids(context.Background()); !errors.Is(err, model.ErrCredential) {
-		t.Fatalf("GetPvids() error = %v, want wrapping ErrCredential", err)
+	if _, err := sw.GetPVIDs(context.Background()); !errors.Is(err, model.ErrCredential) {
+		t.Fatalf("GetPVIDs() error = %v, want wrapping ErrCredential", err)
 	}
 }
 
-func TestSwitch_GetLldp_DelegatesToBackend(t *testing.T) {
+func TestSwitch_GetLLDP_DelegatesToBackend(t *testing.T) {
 	clearBackendRegistry(t)
 	want := []model.LLDPNeighbor{{LocalPort: 1, RemoteSysName: model.Ptr("neighbor")}}
 	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
@@ -274,16 +274,16 @@ func TestSwitch_GetLldp_DelegatesToBackend(t *testing.T) {
 	})
 	sw := mustSwitch(t, fakeModel("fake", model.BackendSNMP), "10.0.0.1")
 
-	got, err := sw.GetLldp(context.Background())
+	got, err := sw.GetLLDP(context.Background())
 	if err != nil {
-		t.Fatalf("GetLldp() error = %v", err)
+		t.Fatalf("GetLLDP() error = %v", err)
 	}
 	if len(got) != 1 || *got[0].RemoteSysName != "neighbor" {
-		t.Fatalf("GetLldp() = %v, want %v", got, want)
+		t.Fatalf("GetLLDP() = %v, want %v", got, want)
 	}
 }
 
-func TestSwitch_GetPoe_DelegatesToBackend(t *testing.T) {
+func TestSwitch_GetPoE_DelegatesToBackend(t *testing.T) {
 	clearBackendRegistry(t)
 	want := []model.PoEStatus{{Port: 1, Detect: model.PoEDetectDelivering}}
 	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
@@ -291,12 +291,12 @@ func TestSwitch_GetPoe_DelegatesToBackend(t *testing.T) {
 	})
 	sw := mustSwitch(t, fakeModel("fake", model.BackendSNMP), "10.0.0.1")
 
-	got, err := sw.GetPoe(context.Background())
+	got, err := sw.GetPoE(context.Background())
 	if err != nil {
-		t.Fatalf("GetPoe() error = %v", err)
+		t.Fatalf("GetPoE() error = %v", err)
 	}
 	if len(got) != 1 || !got[0].Delivering() {
-		t.Fatalf("GetPoe() = %v, want %v", got, want)
+		t.Fatalf("GetPoE() = %v, want %v", got, want)
 	}
 }
 
@@ -334,9 +334,9 @@ func TestSwitch_GetMgmtIP_DelegatesToBackend(t *testing.T) {
 	}
 }
 
-// --- GetMacs: require_mac_table gate ---------------------------------------
+// --- GetMACs: require_mac_table gate ---------------------------------------
 
-func TestSwitch_GetMacs_NoMacTable_GatesBeforeDispatch(t *testing.T) {
+func TestSwitch_GetMACs_NoMacTable_GatesBeforeDispatch(t *testing.T) {
 	clearBackendRegistry(t)
 	withRegisteredBackend(t, model.BackendNSDP, func(_ *Switch) (BackendReader, error) {
 		t.Fatal("NSDP builder invoked: require_mac_table must gate BEFORE dispatch")
@@ -351,16 +351,16 @@ func TestSwitch_GetMacs_NoMacTable_GatesBeforeDispatch(t *testing.T) {
 	m := fakeModel("gs305ep-like", model.BackendNSDP, model.BackendHTTP)
 	sw := mustSwitch(t, m, "10.0.0.1")
 
-	_, err := sw.GetMacs(context.Background())
+	_, err := sw.GetMACs(context.Background())
 	if !errors.Is(err, model.ErrUnsupportedCapability) {
-		t.Fatalf("GetMacs() error = %v, want wrapping ErrUnsupportedCapability", err)
+		t.Fatalf("GetMACs() error = %v, want wrapping ErrUnsupportedCapability", err)
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "mac") {
-		t.Fatalf("GetMacs() error = %q, want it to mention the MAC/FDB table", err.Error())
+		t.Fatalf("GetMACs() error = %q, want it to mention the MAC/FDB table", err.Error())
 	}
 }
 
-func TestSwitch_GetMacs_HasMacTable_Dispatches(t *testing.T) {
+func TestSwitch_GetMACs_HasMacTable_Dispatches(t *testing.T) {
 	clearBackendRegistry(t)
 	want := []model.MacEntry{{Mac: "00:11:22:33:44:55", Port: 1}}
 	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
@@ -370,12 +370,12 @@ func TestSwitch_GetMacs_HasMacTable_Dispatches(t *testing.T) {
 	m := fakeModel("fake", model.BackendSNMP)
 	sw := mustSwitch(t, m, "10.0.0.1")
 
-	got, err := sw.GetMacs(context.Background())
+	got, err := sw.GetMACs(context.Background())
 	if err != nil {
-		t.Fatalf("GetMacs() error = %v", err)
+		t.Fatalf("GetMACs() error = %v", err)
 	}
 	if len(got) != 1 || got[0].Mac != want[0].Mac {
-		t.Fatalf("GetMacs() = %v, want %v", got, want)
+		t.Fatalf("GetMACs() = %v, want %v", got, want)
 	}
 }
 
@@ -480,7 +480,7 @@ func TestSnapshot_PropagatesCredentialErrorInsteadOfDegrading(t *testing.T) {
 // error from a field OTHER than the first one built (ports) still aborts
 // Snapshot -- not just a builder-construction failure (the sibling test
 // above), but an op-level error from a field several fields into the
-// sequence (macs, which uses the ungated getMacsNoGate path).
+// sequence (macs, which uses the ungated getMACsNoGate path).
 func TestSnapshot_LaterFieldCredentialErrorPropagates(t *testing.T) {
 	clearBackendRegistry(t)
 	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
@@ -512,13 +512,13 @@ func TestSnapshot_MgmtIPCredentialErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestSnapshot_MacsFieldBypassesMacTableGateUnlikeGetMacs(t *testing.T) {
+func TestSnapshot_MacsFieldBypassesMacTableGateUnlikeGetMACs(t *testing.T) {
 	clearBackendRegistry(t)
 	// A model with only NSDP (no SNMP): HasMACTable() is false, so the
-	// public GetMacs() must gate. But Snapshot's macs field calls the
-	// UNGATED path (getMacsNoGate), so if the (fake, hypothetical) NSDP
+	// public GetMACs() must gate. But Snapshot's macs field calls the
+	// UNGATED path (getMACsNoGate), so if the (fake, hypothetical) NSDP
 	// reader actually answers get_macs, Snapshot must reflect that answer --
-	// proving Snapshot never applies GetMacs's require_mac_table guard
+	// proving Snapshot never applies GetMACs's require_mac_table guard
 	// (D-FAC §2.12/trap #5).
 	macs := []model.MacEntry{{Mac: "AA:BB:CC:DD:EE:FF", Port: 2}}
 	withRegisteredBackend(t, model.BackendNSDP, func(_ *Switch) (BackendReader, error) {
@@ -528,8 +528,8 @@ func TestSnapshot_MacsFieldBypassesMacTableGateUnlikeGetMacs(t *testing.T) {
 	m := fakeModel("no-snmp", model.BackendNSDP)
 	sw := mustSwitch(t, m, "10.0.0.1")
 
-	if _, err := sw.GetMacs(context.Background()); !errors.Is(err, model.ErrUnsupportedCapability) {
-		t.Fatalf("GetMacs() error = %v, want wrapping ErrUnsupportedCapability (gated, no MAC table)", err)
+	if _, err := sw.GetMACs(context.Background()); !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("GetMACs() error = %v, want wrapping ErrUnsupportedCapability (gated, no MAC table)", err)
 	}
 
 	data, err := sw.Snapshot(context.Background())
