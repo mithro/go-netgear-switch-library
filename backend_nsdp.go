@@ -116,12 +116,13 @@ func buildNSDPWriteClient(sw *Switch) (nsdp.WriteClient, error) {
 
 // buildNSDPWriter is the WriteBackendBuilder registered for
 // model.BackendNSDP: it builds (or reuses an injected) nsdp.WriteClient via
-// buildNSDPWriteClient, resolves the SHARED httpPassword resolveOnce cell
-// (D-NSDP §8.2 -- Plus switches share ONE web-admin password across HTTP and
-// NSDP v1 write auth, so there is no separate NSDP-only password field/
-// option: reusing sw.httpPassword here mirrors Python's from_config wiring
-// the exact same cfg.http_password(env) closure into both
-// http_password_resolver and nsdp_password_resolver), gates a nil resolved
+// buildNSDPWriteClient, resolves sw's OWN nsdpPassword resolveOnce cell --
+// INDEPENDENT of sw.httpPassword (D-NSDP §8.2 correction: Python's
+// SyncSwitch keeps nsdp_password/nsdp_password_resolver as a separate
+// constructor param + resolve-once cell from http_password/
+// http_password_resolver; only from_config happens to feed both from the
+// same cfg.http_password(env) spec via two independent closures -- see
+// Switch.nsdpPassword's doc comment in switch.go) -- gates a nil resolved
 // password via requireNSDPPassword, then wraps the client+password+
 // protected-ports in a *nsdp.Writer (nsdp.NewWriter), itself wrapped in
 // nsdpWriterAdapter to fill the two BackendWriter methods package nsdp's
@@ -131,7 +132,7 @@ func buildNSDPWriter(sw *Switch) (BackendWriter, error) {
 	if err != nil {
 		return nil, err
 	}
-	password, err := sw.httpPassword.resolve()
+	password, err := sw.nsdpPassword.resolve()
 	if err != nil {
 		return nil, err
 	}

@@ -223,13 +223,16 @@ func TestBuildNSDPWriter_PropagatesCredentialErrorWhenNoPasswordConfigured(t *te
 	}
 }
 
-func TestBuildNSDPWriter_ResolvesSharedHTTPPasswordCell(t *testing.T) {
-	// D-NSDP §8.2: the SAME httpPassword resolveOnce cell feeds NSDP v1
-	// write auth -- no separate NSDP-only password option exists.
+func TestBuildNSDPWriter_ResolvesFromNSDPPasswordCell(t *testing.T) {
+	// D-NSDP §8.2 (corrected): buildNSDPWriter resolves sw's OWN nsdpPassword
+	// cell, NOT httpPassword -- these are independent, mirroring Python's
+	// separate nsdp_password_resolver/http_password_resolver constructor
+	// params. Only FromConfig happens to feed both from the same spec (see
+	// TestFromConfig_FeedsBothPasswordCellsFromSameHTTPPasswordSpec).
 	injected := &fakeNsdpRWClient{}
 	sw, err := New(nsdpModel("fake"), "10.0.0.1",
 		WithNSDPClient(injected),
-		WithHTTPPasswordResolver(func() (*string, error) {
+		WithNSDPPasswordResolver(func() (*string, error) {
 			p := "admin"
 			return &p, nil
 		}),
@@ -252,7 +255,40 @@ func TestBuildNSDPWriter_ResolvesSharedHTTPPasswordCell(t *testing.T) {
 		t.Fatalf("writeCalls = %d, want 1", len(injected.writeCalls))
 	}
 	if injected.writeCalls[0].password != "admin" {
-		t.Errorf("write password = %q, want %q (resolved from the shared httpPassword cell)", injected.writeCalls[0].password, "admin")
+		t.Errorf("write password = %q, want %q (resolved from the nsdpPassword cell)", injected.writeCalls[0].password, "admin")
+	}
+}
+
+func TestBuildNSDPWriter_IndependentFromHTTPPassword(t *testing.T) {
+	// The core of the coordinator's correction: WithNSDPPassword must win
+	// for NSDP writes regardless of what (if anything) WithHTTPPasswordResolver
+	// configured -- the two cells never read each other.
+	injected := &fakeNsdpRWClient{}
+	sw, err := New(nsdpModel("fake"), "10.0.0.1",
+		WithNSDPClient(injected),
+		WithNSDPPassword("nsdp-secret"),
+		WithHTTPPasswordResolver(func() (*string, error) {
+			p := "http-secret"
+			return &p, nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	writer, err := buildNSDPWriter(sw)
+	if err != nil {
+		t.Fatalf("buildNSDPWriter() error = %v, want nil", err)
+	}
+	if err := writer.SetPVID(context.Background(), 1, 90, false); err != nil {
+		t.Fatalf("SetPVID() error = %v, want nil", err)
+	}
+	if len(injected.writeCalls) != 1 {
+		t.Fatalf("writeCalls = %d, want 1", len(injected.writeCalls))
+	}
+	if injected.writeCalls[0].password != "nsdp-secret" {
+		t.Errorf("write password = %q, want %q (WithNSDPPassword, independent of WithHTTPPasswordResolver's \"http-secret\")",
+			injected.writeCalls[0].password, "nsdp-secret")
 	}
 }
 
@@ -262,11 +298,10 @@ func TestBuildNSDPWriter_NoNSDPBackendModelErrors(t *testing.T) {
 	// requireNSDPPassword rejecting an unconfigured password first --
 	// mirroring Python's own check order (password resolved/gated BEFORE
 	// NsdpWriter's constructor runs its backend guard).
-	password := "admin"
 	m := fakeModel("fake") // no backends at all
 	sw, err := New(m, "10.0.0.1",
 		WithNSDPClient(&fakeNsdpRWClient{}),
-		WithHTTPPasswordResolver(func() (*string, error) { return &password, nil }),
+		WithNSDPPassword("admin"),
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -279,10 +314,9 @@ func TestBuildNSDPWriter_NoNSDPBackendModelErrors(t *testing.T) {
 }
 
 func TestBuildNSDPWriter_CyclePoEAndClearPoEFaultReturnUnsupported(t *testing.T) {
-	password := "admin"
 	sw, err := New(nsdpModel("fake"), "10.0.0.1",
 		WithNSDPClient(&fakeNsdpRWClient{}),
-		WithHTTPPasswordResolver(func() (*string, error) { return &password, nil }),
+		WithNSDPPassword("admin"),
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

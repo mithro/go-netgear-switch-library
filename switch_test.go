@@ -565,6 +565,50 @@ func TestFromConfig_NeverResolvesSecretsOrDialsNetwork(t *testing.T) {
 	if _, err := sw.httpPassword.resolve(); !errors.Is(err, model.ErrCredential) {
 		t.Fatalf("resolving http-password spec = %v, want wrapping ErrCredential (only on first USE, not construction)", err)
 	}
+	// nsdpPassword is a SEPARATE cell FromConfig also wires (from the same
+	// HTTPPasswordSpec, via its own independent closure -- see
+	// TestFromConfig_FeedsBothPasswordCellsFromSameHTTPPasswordSpec).
+	if sw.nsdpPassword == nil {
+		t.Fatal("nsdpPassword resolver cell not wired by FromConfig")
+	}
+	if _, err := sw.nsdpPassword.resolve(); !errors.Is(err, model.ErrCredential) {
+		t.Fatalf("resolving nsdp-password spec = %v, want wrapping ErrCredential (only on first USE, not construction)", err)
+	}
+}
+
+// TestFromConfig_FeedsBothPasswordCellsFromSameHTTPPasswordSpec proves the
+// D-NSDP §8.2 (corrected) contract directly: FromConfig wires nsdpPassword
+// and httpPassword as TWO INDEPENDENT resolveOnce cells (mirroring Python's
+// SyncSwitch.__init__ keeping nsdp_password_resolver/http_password_resolver
+// as separate constructor params/cells), but both happen to read the SAME
+// underlying cfg.HTTPPasswordSpec -- so a config-file user gets one shared
+// password out of FromConfig, exactly like Python's from_config, even
+// though the two cells never reference each other internally.
+func TestFromConfig_FeedsBothPasswordCellsFromSameHTTPPasswordSpec(t *testing.T) {
+	m := fakeModel("fake", model.BackendNSDP)
+	literal := "s3cr3t"
+	cfg := SwitchConfig{Model: m, Host: "10.0.0.5", HTTPPasswordSpec: &literal}
+
+	sw, err := FromConfig(cfg)
+	if err != nil {
+		t.Fatalf("FromConfig() error = %v", err)
+	}
+
+	gotHTTP, err := sw.httpPassword.resolve()
+	if err != nil {
+		t.Fatalf("httpPassword.resolve() error = %v, want nil", err)
+	}
+	if gotHTTP == nil || *gotHTTP != literal {
+		t.Fatalf("httpPassword.resolve() = %v, want %q", gotHTTP, literal)
+	}
+
+	gotNSDP, err := sw.nsdpPassword.resolve()
+	if err != nil {
+		t.Fatalf("nsdpPassword.resolve() error = %v, want nil", err)
+	}
+	if gotNSDP == nil || *gotNSDP != literal {
+		t.Fatalf("nsdpPassword.resolve() = %v, want %q (same spec as httpPassword)", gotNSDP, literal)
+	}
 }
 
 func TestFromConfig_WriteCommunityResolvesToLiteralOnFirstUse(t *testing.T) {

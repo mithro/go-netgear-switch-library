@@ -57,16 +57,16 @@ func nsdpFacadeFor(t *testing.T, vsw *virtual.VirtualSwitch, modelKey string, op
 	return sw
 }
 
-// withNSDPPassword resolves the SHARED httpPassword cell to password --
+// withNSDPPassword is a thin wrapper over netgearswitch.WithNSDPPassword --
 // this is what backend_nsdp.go's buildNSDPWriter consumes for NSDP v1 write
-// auth (D-NSDP §8.2: the ONE web-admin password feeds both HTTP and NSDP,
-// so there is no separate WithNSDPPassword option -- see backend_nsdp_test.go
-// for the unit-level proof of that wiring).
+// auth. Per D-NSDP §8.2 (corrected), this cell is INDEPENDENT of any HTTP
+// password: only netgearswitch.FromConfig feeds both from the same
+// underlying secret spec (see backend_nsdp_test.go's
+// TestBuildNSDPWriter_IndependentFromHTTPPassword and switch_test.go's
+// TestFromConfig_FeedsBothPasswordCellsFromSameHTTPPasswordSpec for the
+// unit-level proof of both halves of that contract).
 func withNSDPPassword(password string) netgearswitch.SwitchOption {
-	return netgearswitch.WithHTTPPasswordResolver(func() (*string, error) {
-		p := password
-		return &p, nil
-	})
+	return netgearswitch.WithNSDPPassword(password)
 }
 
 // --- gs110emx: every supported read, non-vacuous vs SeedGS110EMX() --------

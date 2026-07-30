@@ -116,11 +116,26 @@ type Switch struct {
 	// nothing to split.
 	nsdpClient nsdp.Client
 
-	// httpPassword resolves the HTTP (and, per D-FAC §2.16, NSDP-shared)
-	// admin password lazily; consumed by slice 06's HTTP writer and, as of
-	// slice 05, backend_nsdp.go's buildNSDPWriter (the ONE web-admin
-	// password Plus switches share across HTTP and NSDP v1 write auth --
-	// there is no separate NSDP-only password field/option, D-NSDP §8.2).
+	// nsdpPassword resolves the NSDP v1 write-auth admin password lazily,
+	// INDEPENDENT of httpPassword below -- mirroring Python's
+	// SyncSwitch.__init__ exactly: nsdp_password/nsdp_password_resolver is a
+	// SEPARATE constructor param and _resolved_nsdp_password a SEPARATE
+	// resolve-once cell from http_password/http_password_resolver/
+	// _resolved_http_password. Only SyncSwitch.from_config happens to feed
+	// both from the same cfg.http_password(env) spec (via two independent
+	// closures, each re-resolving that spec on its own first use) -- a
+	// deliberate, source-commented choice ("the facade already accepts a
+	// distinct nsdp_password/nsdp_password_resolver ... if a deployment
+	// ever needs to split them; do NOT add a separate config key now") that
+	// preserves the option for a New()+options caller to supply a genuinely
+	// different NSDP password than the HTTP one, without an API break.
+	// Consumed by backend_nsdp.go's buildNSDPWriter.
+	nsdpPassword *resolveOnce
+
+	// httpPassword resolves the HTTP admin password lazily; consumed by
+	// slice 06's HTTP writer. See nsdpPassword's doc comment above for why
+	// this is a SEPARATE cell, not a shared one, despite FromConfig feeding
+	// both from the same underlying secret spec.
 	httpPassword *resolveOnce
 
 	// protectedPorts is stored sorted ascending with duplicates removed
@@ -197,6 +212,26 @@ func WithNSDPClient(c nsdp.Client) SwitchOption {
 	return func(sw *Switch) { sw.nsdpClient = c }
 }
 
+// WithNSDPPassword sets the NSDP v1 write-auth admin password literally (a
+// plain string, not a secret spec), mirroring Python's nsdp_password
+// constructor parameter. INDEPENDENT of any HTTP password configured via
+// WithHTTPPasswordResolver -- see Switch.nsdpPassword's doc comment.
+func WithNSDPPassword(s string) SwitchOption {
+	return func(sw *Switch) {
+		sw.nsdpPassword = newResolveOnce(func() (*string, error) { return &s, nil })
+	}
+}
+
+// WithNSDPPasswordResolver stashes r as the NSDP v1 write-auth admin-
+// password resolver, invoked at most once, lazily, on first NSDP write --
+// mirroring Python's nsdp_password_resolver constructor parameter. Passing
+// this option never causes r to run during New/FromConfig. INDEPENDENT of
+// any HTTP password resolver configured via WithHTTPPasswordResolver -- see
+// Switch.nsdpPassword's doc comment.
+func WithNSDPPasswordResolver(r func() (*string, error)) SwitchOption {
+	return func(sw *Switch) { sw.nsdpPassword = newResolveOnce(r) }
+}
+
 // WithHTTPPasswordResolver stashes r as the HTTP admin-password resolver,
 // invoked at most once, lazily, on first HTTP session use (slice 06).
 // Passing this option never causes r to run during New/FromConfig.
@@ -235,6 +270,7 @@ func New(m *model.SwitchModel, host string, opts ...SwitchOption) (*Switch, erro
 		model:              m,
 		host:               host,
 		snmpWriteCommunity: newResolveOnce(nil),
+		nsdpPassword:       newResolveOnce(nil),
 		httpPassword:       newResolveOnce(nil),
 		protectedPorts:     []int{},
 		readerCache:        make(map[model.Backend]BackendReader),
@@ -256,20 +292,26 @@ func New(m *model.SwitchModel, host string, opts ...SwitchOption) (*Switch, erro
 //     cfg.SNMPWriteCommunity(os.LookupEnv, nil) -- LAZY, never invoked here.
 //   - cfg.NSDPInterface, if set, maps to WithNSDPInterface (an interface
 //     name, not a secret; not resolved).
-//   - cfg.HTTPPasswordSpec becomes a resolver closure calling
-//     cfg.HTTPPassword(os.LookupEnv, nil) -- LAZY, never invoked here. Per
-//     D-FAC §2.16/D-NSDP §8.2, this SAME resolveOnce cell also feeds NSDP v1
-//     write auth (backend_nsdp.go's buildNSDPWriter resolves sw.httpPassword
-//     directly) -- there is no separate NSDP-only password field/option,
-//     mirroring Python's from_config reusing this same spec for both
-//     http_password_resolver and nsdp_password_resolver.
+//   - cfg.HTTPPasswordSpec becomes TWO INDEPENDENT resolver closures, each
+//     calling cfg.HTTPPassword(os.LookupEnv, nil) -- LAZY, never invoked
+//     here -- one wired via WithHTTPPasswordResolver into httpPassword, the
+//     other via WithNSDPPasswordResolver into the SEPARATE nsdpPassword
+//     cell. Per D-FAC §2.16/D-NSDP §8.2, this mirrors Python's from_config
+//     exactly: it feeds the SAME underlying cfg.http_password(env) spec to
+//     BOTH _resolve_http_password and _resolve_nsdp_password, but those
+//     remain two distinct closures/cells (SyncSwitch.__init__ itself takes
+//     genuinely separate nsdp_password/nsdp_password_resolver and
+//     http_password/http_password_resolver params) -- a New()+options caller
+//     (unlike a FromConfig caller) CAN supply a different NSDP password via
+//     WithNSDPPassword/WithNSDPPasswordResolver, since nothing here forces
+//     the two cells to share a value, only FromConfig's shared spec does.
 //   - cfg.ProtectedPorts maps to WithProtectedPorts.
 //
 // opts, if given, are applied AFTER the config-derived options, so a caller
 // can override any config-mapped field (e.g. inject a fake snmp.Client in
 // tests) without FromConfig needing its own escape hatch per field.
 func FromConfig(cfg SwitchConfig, opts ...SwitchOption) (*Switch, error) {
-	configOpts := make([]SwitchOption, 0, 6+len(opts))
+	configOpts := make([]SwitchOption, 0, 7+len(opts))
 
 	if cfg.SNMPCommunity != nil {
 		configOpts = append(configOpts, WithSNMPCommunity(*cfg.SNMPCommunity))
@@ -280,6 +322,14 @@ func FromConfig(cfg SwitchConfig, opts ...SwitchOption) (*Switch, error) {
 	if cfg.NSDPInterface != nil {
 		configOpts = append(configOpts, WithNSDPInterface(*cfg.NSDPInterface))
 	}
+	// TWO independent closures over the SAME cfg.HTTPPassword spec, wired
+	// into TWO independent resolveOnce cells -- mirroring Python's
+	// from_config, which defines _resolve_nsdp_password and
+	// _resolve_http_password as separate functions that both happen to call
+	// cfg.http_password(env=_env) (see nsdpPassword's doc comment on Switch).
+	configOpts = append(configOpts, WithNSDPPasswordResolver(func() (*string, error) {
+		return cfg.HTTPPassword(os.LookupEnv, nil)
+	}))
 	configOpts = append(configOpts, WithHTTPPasswordResolver(func() (*string, error) {
 		return cfg.HTTPPassword(os.LookupEnv, nil)
 	}))
