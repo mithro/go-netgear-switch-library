@@ -350,3 +350,193 @@ func uint64PtrIfPresent(m map[int]int64, p int) *uint64 {
 	}
 	return model.Ptr(uint64(v))
 }
+
+// DecodePortBitmap decodes a VLAN port bitmap (dot1qVlanStaticEgressPorts/
+// dot1qVlanStaticUntaggedPorts OCTET STRING): bit 7 (the high bit) of byte 0
+// is port 1, bit 6 of byte 0 is port 2, and so on -- port = byteIdx*8+bit+1
+// for bit counted 0 (MSB) through 7 (LSB). An empty (including nil) bitmap
+// is a legitimately absent value, not an error, and yields an empty, non-nil
+// slice.
+//
+// The result is sorted ascending by construction: iterating bytes
+// low-to-high and, within a byte, MSB-to-LSB visits ports in strictly
+// increasing order, so no separate sort is needed.
+//
+// Unlike the Python reference's decode_port_bitmap (bytes | str, with a
+// latin-1 str encode step that can fail on a non-latin-1 codepoint and
+// raise SnmpError), this Go port only accepts []byte: a Go string is
+// already a byte sequence (unlike Python's Unicode str), so a string-typed
+// bitmap row converts to []byte directly with no encoding step and no
+// possibility of a decode error -- see vlanBitmapMap, which does that
+// conversion before calling here.
+func DecodePortBitmap(bitmap []byte) []int {
+	ports := make([]int, 0)
+	for byteIdx, byteVal := range bitmap {
+		for bit := 0; bit < 8; bit++ {
+			if byteVal&(0x80>>uint(bit)) != 0 {
+				ports = append(ports, byteIdx*8+bit+1)
+			}
+		}
+	}
+	return ports
+}
+
+// isAllDigits reports whether s is non-empty and consists entirely of ASCII
+// digits, mirroring Python's str.isdigit() as used to validate a VLAN index
+// suffix. This deliberately rejects a leading '-' (e.g. "-5"): a bare
+// strconv.Atoi check would accept that as a valid negative integer, but a
+// VLAN index suffix is never signed.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// vlanBitmapMap maps a VLAN bitmap column walk (dot1qVlanStaticEgressPorts/
+// dot1qVlanStaticUntaggedPorts) to {vlan_id: bitmap bytes}.
+//
+// A row absent from the column (OID doesn't start with baseOID+".") is
+// skipped. A row present under baseOID whose VLAN index suffix is not all
+// ASCII digits, or whose value is neither []byte nor string (wrong SNMP
+// type on the wire), is drift -- present but malformed, not absent -- and
+// returns an error wrapping model.ErrSNMP naming the offending OID rather
+// than silently dropping present-but-malformed data. A string value is
+// converted to []byte directly (see DecodePortBitmap's docstring).
+func vlanBitmapMap(rows []Row, baseOID string) (map[int][]byte, error) {
+	out := make(map[int][]byte)
+	for _, row := range rows {
+		s, ok := suffix(row, baseOID)
+		if !ok {
+			continue
+		}
+		if !isAllDigits(s) {
+			return nil, errOID(row.OID, "malformed VLAN index %q", s)
+		}
+		var data []byte
+		switch v := row.Value.(type) {
+		case []byte:
+			data = v
+		case string:
+			data = []byte(v)
+		default:
+			return nil, errOID(row.OID, "malformed VLAN port bitmap type")
+		}
+		idx, err := strconv.Atoi(s)
+		if err != nil {
+			// Unreachable: isAllDigits already guarantees s parses cleanly.
+			return nil, errOID(row.OID, "malformed VLAN index %q", s)
+		}
+		out[idx] = data
+	}
+	return out, nil
+}
+
+// intSliceDiff returns the elements of a not present in b, preserving a's
+// order. Since ParseVlans always calls this with a sorted-ascending a (the
+// output of DecodePortBitmap), the result stays sorted ascending too. The
+// result is a non-nil slice even when empty.
+func intSliceDiff(a, b []int) []int {
+	exclude := make(map[int]struct{}, len(b))
+	for _, v := range b {
+		exclude[v] = struct{}{}
+	}
+	out := make([]int, 0, len(a))
+	for _, v := range a {
+		if _, skip := exclude[v]; !skip {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// ParseVlans builds the switch's VLAN table from the dot1qVlanStaticName/
+// dot1qVlanStaticEgressPorts/dot1qVlanStaticUntaggedPorts column walks.
+//
+// VLANs are enumerated names-walk-only: only a VLAN ID present in the names
+// walk becomes a VLANInfo, even if it also has an egress/untagged bitmap --
+// a bitmap-only VLAN (no name row) is silently dropped. MemberPorts is the
+// decoded egress bitmap; UntaggedPorts is the decoded untagged bitmap;
+// TaggedPorts is always derived as MemberPorts minus UntaggedPorts, never
+// read from a separate source. A VLAN with a name but no egress/untagged
+// row at all (absent, not malformed) gets empty, non-nil port sets. Name is
+// nil for an empty-string dot1qVlanStaticName value, consistent with the
+// nil-for-absent-or-empty convention used throughout this package.
+func ParseVlans(names, egress, untagged []Row) ([]model.VLANInfo, error) {
+	nameMap, err := IndexStrColumn(names, Dot1qVlanStaticName)
+	if err != nil {
+		return nil, err
+	}
+	egressMap, err := vlanBitmapMap(egress, Dot1qVlanStaticEgress)
+	if err != nil {
+		return nil, err
+	}
+	untagMap, err := vlanBitmapMap(untagged, Dot1qVlanStaticUntagged)
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]int, 0, len(nameMap))
+	for id := range nameMap {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+
+	result := make([]model.VLANInfo, 0, len(ids))
+	for _, vid := range ids {
+		member := DecodePortBitmap(egressMap[vid])
+		untag := DecodePortBitmap(untagMap[vid])
+		var name *string
+		if n := nameMap[vid]; n != "" {
+			name = model.Ptr(n)
+		}
+		result = append(result, model.VLANInfo{
+			VlanID:        vid,
+			Name:          name,
+			MemberPorts:   member,
+			TaggedPorts:   intSliceDiff(member, untag),
+			UntaggedPorts: untag,
+		})
+	}
+	return result, nil
+}
+
+// ParsePvids builds the (port, VLAN) PVID table from a dot1qPvid column
+// walk, optionally physical-filtered by an ifType walk.
+//
+// dot1qPvid is keyed by dot1dBasePort. On every real Netgear switch the
+// bridge-port and ifIndex spaces COINCIDE for physical ports (SNMP-verified
+// on the M4300: PVIDs matched the ifIndex physical set with no
+// translation), so filtering the PVID keys directly against the physical
+// ifIndex set (via ifTypes) drops LAG/CPU/VLAN PVIDs correctly. A
+// dot1dBasePortIfIndex translation was tried in the Python reference but is
+// WRONG here: it couples PVIDs to the independently-populated FDB
+// base-port map (which can point a physical port's base-port at an
+// unrelated ifIndex), silently dropping real physical PVIDs. Do not "fix"
+// this by adding a translation when touching this function.
+//
+// Results are sorted by (port, vlan). An empty ifTypes walk keeps every
+// port (no filtering), matching every other physical-filtered parser in
+// this package.
+func ParsePvids(rows, ifTypes []Row) ([]model.Pvid, error) {
+	pvidMap, err := IndexIntColumn(rows, Dot1qPvid)
+	if err != nil {
+		return nil, err
+	}
+	physical, err := physicalPorts(ifTypes)
+	if err != nil {
+		return nil, err
+	}
+
+	ports := filterPhysical(sortedUnion(pvidMap), physical)
+	result := make([]model.Pvid, 0, len(ports))
+	for _, p := range ports {
+		result = append(result, model.Pvid{Port: p, Vlan: int(pvidMap[p])})
+	}
+	return result, nil
+}
