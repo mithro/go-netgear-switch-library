@@ -1,0 +1,7 @@
+/tmp/
+/bin/
+coverage.out
+coverage.html
+dist/
+.superpowers/
+.claude/worktrees/
