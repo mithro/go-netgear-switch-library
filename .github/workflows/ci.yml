@@ -1,0 +1,23 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - run: make fmt-check
+      - run: go vet ./...
+      # JAIL= disables the local resource-jail wrapper: CI runners are
+      # already isolated and lack systemd user scopes.
+      - run: make lint JAIL=
+      - run: go test -race -coverprofile=coverage.out ./...
+      - run: go run ./scripts/coveragegate -profile coverage.out -min 90
