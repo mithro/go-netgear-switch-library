@@ -306,8 +306,15 @@ func (f *HTTPFace) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.renderMu.Lock()
-	page := f.dispatchRender(path, map[string]string{})
+	page, implemented := f.dispatchRender(path, map[string]string{})
 	f.renderMu.Unlock()
+	if !implemented {
+		// TASK 9/10 SEAM: this model's HTMLDialect has no renderer wired yet
+		// (see dispatchRender's doc comment) -- an honest 404, never the
+		// STANDARD-dialect fallback rendering the wrong shape.
+		f.send(w, notFoundBody, http.StatusNotFound, false)
+		return
+	}
 	f.send(w, page, http.StatusOK, false)
 }
 
@@ -365,8 +372,14 @@ func (f *HTTPFace) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.renderMu.Lock()
-	page := f.dispatchApplyAndRender(path, form)
+	page, implemented := f.dispatchApplyAndRender(path, form)
 	f.renderMu.Unlock()
+	if !implemented {
+		// TASK 9/10 SEAM: see handleGet's matching branch / dispatchRender's
+		// doc comment.
+		f.send(w, notFoundBody, http.StatusNotFound, false)
+		return
+	}
 	f.send(w, page, http.StatusOK, false)
 }
 
@@ -691,7 +704,7 @@ func (f *HTTPFace) handleCertUpload(contentType string, raw []byte) (int, string
 // Must be called with f.renderMu held.
 //
 // TODO(slice-06 Tasks 9/10): insert, IN THIS EXACT PRIORITY ORDER (dossier
-// §3.3 steps 1-7), before the renderStandardPage fallback:
+// §3.3 steps 1-7), before the dialect-gated renderStandardPage branch below:
 //  1. the shared FASTPATH "VLAN Membership" page (web_fastpath_vlan) --
 //     checked first because it is served byte-shape-identically across
 //     three dialects (M4300/S3300/XE_FASTPATH), independent of html_dialect;
@@ -709,8 +722,25 @@ func (f *HTTPFace) handleCertUpload(contentType string, raw []byte) (int, string
 //
 // Getting this ordering wrong breaks any model whose written page is not
 // itself present in f.known -- see dossier §3.9's routing-precedence note.
-func (f *HTTPFace) dispatchRender(path string, form map[string]string) string {
-	return f.renderStandardPage(path, form)
+//
+// UNTIL those land, this function is DIALECT-GATED, not a blanket fallback:
+// only HTMLDialectStandard (gs305ep) reaches renderStandardPage. Every other
+// dialect's ok=false tells the caller to answer an honest 404 -- exactly the
+// same "never fabricate a page this model's spec didn't earn" treatment
+// goaheadGet's wcd branch already gives GoAhead. A GS110EMX/GS105PE/M4300/
+// S3300/XE_FASTPATH read must NOT silently fall through to the STANDARD
+// renderer: that would render a plausible-looking page in the WRONG dialect
+// shape, built from REAL seeded data, which is worse than a 404 -- it would
+// false-green a caller's integration against a page the mock cannot
+// actually produce yet (principles 1/5: the fake must match hardware, never
+// paper over a gap). See TestHTTPFaceNonStandardDialectReadPagesAreHonestly404
+// in httpface_test.go, a deliberate tripwire Tasks 9/10 MUST update (not
+// silently leave green) once each dialect's real renderer lands.
+func (f *HTTPFace) dispatchRender(path string, form map[string]string) (page string, implemented bool) {
+	if f.spec.HTMLDialect == webui.HTMLDialectStandard {
+		return f.renderStandardPage(path, form), true
+	}
+	return "", false
 }
 
 // dispatchApplyAndRender applies form to path then re-renders, mirroring
@@ -721,10 +751,15 @@ func (f *HTTPFace) dispatchRender(path string, form map[string]string) string {
 // Tasks 9/10 add does its own apply-then-render internally instead (mirrored
 // from Python, where e.g. _render_fastpath_xui_page applies the form before
 // building its return value). Must be called with f.renderMu held. See
-// dispatchRender's doc comment for the exact Task 9/10 insertion order.
-func (f *HTTPFace) dispatchApplyAndRender(path string, form map[string]string) string {
-	f.applyStandardForm(path, form)
-	return f.renderStandardPage(path, form)
+// dispatchRender's doc comment for the exact Task 9/10 insertion order AND
+// for why this is dialect-gated (ok=false -> caller 404s) rather than a
+// blanket STANDARD-dialect fallback for every model.
+func (f *HTTPFace) dispatchApplyAndRender(path string, form map[string]string) (page string, implemented bool) {
+	if f.spec.HTMLDialect == webui.HTMLDialectStandard {
+		f.applyStandardForm(path, form)
+		return f.renderStandardPage(path, form), true
+	}
+	return "", false
 }
 
 // hashInput is web.py's _hash_input(): the constant CSRF `hash` field

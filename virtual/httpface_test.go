@@ -115,6 +115,72 @@ func TestHTTPFaceRefererMissingIs403(t *testing.T) {
 	}
 }
 
+// TestHTTPFaceSecurePOSTRequiresOriginHeader covers the m4300-16x-specific
+// extra rule (dossier §3.4): a "secure" (HTTPS/:49152) NeedsReferer model
+// answers 403 to a POST that carries Referer WITHOUT Origin, even though a
+// GET (or a POST on a NON-secure NeedsReferer model, e.g. m4300-24x, already
+// covered by TestHTTPFaceRefererMissingIs403) only ever requires Referer.
+// Deliberately raw net/http (not webui.HTTPClient, which always attaches
+// both headers together for a NeedsReferer+Secure spec) and deliberately
+// plain http:// against the mock (this face never implements TLS -- spec.
+// Secure only changes what scheme webui.HTTPClient itself would pick), so
+// this test exercises refererOK's `isPost && spec.Secure` branch directly
+// rather than asserting on a client that would never omit Origin in the
+// first place.
+func TestHTTPFaceSecurePOSTRequiresOriginHeader(t *testing.T) {
+	m, err := model.GetModel("m4300-16x")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	if !spec.Secure || !spec.NeedsReferer {
+		t.Fatalf("m4300-16x spec.Secure=%v/NeedsReferer=%v, want both true (test fixture assumption broken)", spec.Secure, spec.NeedsReferer)
+	}
+	addr, _ := startHTTPFace(t, NewState("m4300-16x"), spec, "password")
+
+	postPath := spec.LoginPostPath
+	if postPath == "" {
+		postPath = spec.LoginPath
+	}
+	referer := "http://" + addr + "/"
+
+	newPOST := func(t *testing.T, withOrigin bool) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, "http://"+addr+postPath, strings.NewReader("")) //nolint:noctx // test-only.
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Header.Set("Referer", referer)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if withOrigin {
+			req.Header.Set("Origin", "http://"+addr)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST %s: %v", postPath, err)
+		}
+		return resp
+	}
+
+	t.Run("Referer without Origin is 403", func(t *testing.T) {
+		resp := newPOST(t, false)
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("POST %s with Referer but no Origin status = %d, want 403", postPath, resp.StatusCode)
+		}
+	})
+	t.Run("Referer with Origin passes the referer gate", func(t *testing.T) {
+		resp := newPOST(t, true)
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == http.StatusForbidden {
+			t.Errorf("POST %s with both Referer and Origin status = 403, want NOT 403 (blocked only by the referer/origin gate, not this check)", postPath)
+		}
+	})
+}
+
 // -- 404 for any path not in the model's HttpModelSpec (dossier §3.7) ---
 
 func TestHTTPFace404ForUnspeccedPath(t *testing.T) {
@@ -135,6 +201,71 @@ func TestHTTPFace404ForUnspeccedPath(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("GET unspecced path status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestHTTPFaceNonStandardDialectReadPagesAreHonestly404 is a deliberate
+// tripwire (dispatchRender's doc comment / principles 1 & 5): every dialect
+// OTHER than HTMLDialectStandard has no renderer wired in this task, so a
+// known, spec-advertised read page must 404 honestly rather than silently
+// falling through to the STANDARD-dialect fallback (which would render a
+// plausible-looking page in the WRONG shape, built from real seeded data --
+// worse than a 404, since it would false-green a caller's integration
+// against a page this mock cannot actually produce yet).
+//
+// Tasks 9/10 MUST update this test (per model, as its real renderer lands)
+// to assert a genuine render instead -- a green run of this test after
+// Tasks 9/10 land a dialect's renderer means that dialect's own tripwire
+// case was never removed, not that the renderer is still missing.
+func TestHTTPFaceNonStandardDialectReadPagesAreHonestly404(t *testing.T) {
+	tests := []struct {
+		name     string
+		modelKey string
+		dialect  webui.HTMLDialect
+	}{
+		{"GS110EMX/gs110emx", "gs110emx", webui.HTMLDialectGS110EMX},
+		{"GS105PE/gs105pe", "gs105pe", webui.HTMLDialectGS105PE},
+		{"M4300/m4300-24x", "m4300-24x", webui.HTMLDialectM4300},
+		{"M4300/m4300-16x", "m4300-16x", webui.HTMLDialectM4300},
+		{"XEFastpath/gsm7252ps", "gsm7252ps", webui.HTMLDialectXEFastpath},
+		{"S3300/gsm7228ps", "gsm7228ps", webui.HTMLDialectS3300},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := model.GetModel(tt.modelKey)
+			if err != nil {
+				t.Fatalf("model.GetModel(%q): %v", tt.modelKey, err)
+			}
+			spec, err := webui.HTTPSpec(m)
+			if err != nil {
+				t.Fatalf("webui.HTTPSpec(%q): %v", tt.modelKey, err)
+			}
+			if spec.HTMLDialect != tt.dialect {
+				t.Fatalf("spec.HTMLDialect = %v, want %v (test table/registry drifted)", spec.HTMLDialect, tt.dialect)
+			}
+			addr, _ := startHTTPFace(t, NewState(tt.modelKey), spec, "password")
+
+			// Raw net/http, with a Referer/Origin header whenever this
+			// model's spec demands one, so the request reaches the dialect
+			// gate at all (not rejected earlier by the unrelated referer
+			// check -- see TestHTTPFaceRefererMissingIs403/
+			// TestHTTPFaceSecurePOSTRequiresOriginHeader for THAT gate).
+			req, err := http.NewRequest(http.MethodGet, "http://"+addr+spec.DashboardPath, nil) //nolint:noctx // test-only.
+			if err != nil {
+				t.Fatalf("NewRequest: %v", err)
+			}
+			if spec.NeedsReferer {
+				req.Header.Set("Referer", "http://"+addr+"/")
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("GET %s: %v", spec.DashboardPath, err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Errorf("GET %s (dialect %v, no renderer wired yet) status = %d, want 404", spec.DashboardPath, spec.HTMLDialect, resp.StatusCode)
+			}
+		})
 	}
 }
 
