@@ -554,6 +554,16 @@ func ParseXEPoE(htmlStr string) ([]model.PoEStatus, error) {
 	if len(rows) == 0 {
 		return nil, errUnexpectedPage("poeInterfaceConfiguration.html: no XE PoE rows (no v_%s status cells) found", xePoeStatus)
 	}
+	// detectKeys: sorted so the substring scan below runs in a fixed,
+	// deterministic order (Go map iteration order is randomized) -- belt and
+	// braces only, since the 4 detectText keys are mutually exclusive in
+	// practice and so don't actually change which one matches first.
+	detectKeys := make([]string, 0, len(detectText))
+	for k := range detectText {
+		detectKeys = append(detectKeys, k)
+	}
+	sort.Strings(detectKeys)
+
 	out := make([]model.PoEStatus, 0, len(rows))
 	for _, r := range rows {
 		port, ok := xePortFromIface(r[xePoeIface])
@@ -562,9 +572,9 @@ func ParseXEPoE(htmlStr string) ([]model.PoEStatus, error) {
 		}
 		status := strings.ToLower(r[xePoeStatus])
 		detect := model.PoEDetectUnknown
-		for k, v := range detectText {
+		for _, k := range detectKeys {
 			if strings.Contains(status, k) {
-				detect = v
+				detect = detectText[k]
 				break
 			}
 		}
