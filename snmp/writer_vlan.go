@@ -45,15 +45,17 @@ func (w *Writer) vlan(ctx context.Context, vlanID int) (*model.VLANInfo, error) 
 // rawBitmap returns vlanID's RAW device octets for the baseOID column
 // (Dot1qVlanStaticEgress or Dot1qVlanStaticUntagged) -- the exact bytes the
 // device reported, width intact -- or nil if the walk did not report this
-// VLAN as an octet string. Ported from Python's SnmpWriter._raw_bitmap
-// (D-REC Topic B, reconciliation issue #3): VLANInfo carries DECODED port
-// sets, so re-encoding a bitmap from it would size the buffer to the
-// highest port in use rather than to the width the device actually uses.
-// Netgear switches report a PortList covering LAG and CPU pseudo-ports too
-// -- measured live, 79 bytes on a GSM7252PS and 131 bytes on an M4300-24X,
-// both far wider than max(8, ceil(port_count/8)) -- so only a fresh walk of
-// the raw column (not the already-decoded `before` snapshot) can recover
-// that width.
+// VLAN at all. Ported from Python's SnmpWriter._raw_bitmap (D-REC Topic B,
+// reconciliation issue #3): VLANInfo carries DECODED port sets, so
+// re-encoding a bitmap from it would size the buffer to the highest port in
+// use rather than to the width the device actually uses. Netgear switches
+// report a PortList covering LAG and CPU pseudo-ports too -- measured live,
+// 79 bytes on a GSM7252PS and 131 bytes on an M4300-24X, both far wider than
+// max(8, ceil(port_count/8)) -- so only a fresh walk of the raw column (not
+// the already-decoded `before` snapshot) can recover that width. Accepts
+// both a []byte and a string-typed OCTET STRING value (see the type switch
+// below) -- a deliberate hardening beyond the pinned Python source, which
+// (like this function until now) only handled the []byte case.
 func (w *Writer) rawBitmap(ctx context.Context, baseOID string, vlanID int) ([]byte, error) {
 	rows, err := w.client.Walk(ctx, baseOID)
 	if err != nil {
@@ -62,8 +64,22 @@ func (w *Writer) rawBitmap(ctx context.Context, baseOID string, vlanID int) ([]b
 	suffix := fmt.Sprintf(".%d", vlanID)
 	for _, row := range rows {
 		if strings.HasSuffix(row.OID, suffix) {
-			if b, ok := row.Value.([]byte); ok {
-				return b, nil
+			switch v := row.Value.(type) {
+			case []byte:
+				return v, nil
+			case string:
+				// Deliberate hardening beyond the pinned Python source:
+				// Python's SnmpWriter._raw_bitmap only handles the bytes
+				// case too (the same []byte-only asymmetry versus the
+				// reader exists there), but vlanBitmapMap (parse.go) --
+				// this same column, read for GetVLANs -- already accepts
+				// a string-typed OCTET STRING off the wire (some
+				// SNMP libraries/devices surface it that way) and
+				// converts it directly to []byte. Mirror that here so a
+				// string-typed raw column still preserves the device's
+				// real wire width instead of silently falling through to
+				// the caller's narrower vlanEncodeWidth re-encode.
+				return []byte(v), nil
 			}
 		}
 	}

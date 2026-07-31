@@ -30,11 +30,14 @@ import (
 // pin each enum-ish alias's TYPE (not just its constants' values) into this
 // package-level surface, since a bare "var _ = netgearswitch.VlanTagged"
 // would type-check the value without ever naming netgearswitch.VlanMode
-// itself.
-func acceptVlanMode(netgearswitch.VlanMode)       {}
-func acceptIPMode(netgearswitch.IPMode)           {}
-func acceptBackend(netgearswitch.Backend)         {}
-func acceptSwitchClass(netgearswitch.SwitchClass) {}
+// itself. acceptSwitchOption/acceptReadOption do the same job for the
+// backend-selection functional-option types (D-REC A.10.3/A.10.4).
+func acceptVlanMode(netgearswitch.VlanMode)         {}
+func acceptIPMode(netgearswitch.IPMode)             {}
+func acceptBackend(netgearswitch.Backend)           {}
+func acceptSwitchClass(netgearswitch.SwitchClass)   {}
+func acceptSwitchOption(netgearswitch.SwitchOption) {}
+func acceptReadOption(netgearswitch.ReadOption)     {}
 
 // mustModel looks up a real registered model via the top-level GetModel,
 // proving the registry lookup itself is part of the single-import surface.
@@ -79,6 +82,17 @@ func TestPublicAPI_ModelTypesReachableWithoutImportingModelPackage(t *testing.T)
 	_ = netgearswitch.DetectedModel{}
 	_ = netgearswitch.Pvid{}
 	_ = netgearswitch.SwitchData{}
+
+	// Backend-selection surface (D-REC A.10.3/A.10.4) must be reachable
+	// by name from the single top-level import too: WithBackend (a
+	// SwitchOption pinning a per-Switch default), ReadOption/
+	// WithReadBackend (the per-read-call override), and Write.Backend
+	// (the write-side twin) all exist and type-check without ever
+	// requiring a "model." qualifier.
+	acceptSwitchOption(netgearswitch.WithBackend(netgearswitch.BackendSNMP))
+	acceptReadOption(netgearswitch.WithReadBackend(netgearswitch.BackendSNMP))
+	snmpBackend := netgearswitch.BackendSNMP
+	_ = netgearswitch.Write{Force: true, Backend: &snmpBackend}
 
 	// Error sentinels must errors.Is-match without importing model.
 	sentinels := []error{
@@ -198,4 +212,38 @@ func TestPublicAPI_ReadMethodsAndIdentifyAndSnapshotReachable(t *testing.T) {
 	assertCredentialError("Identify()", err)
 	_, err = sw.Snapshot(ctx)
 	assertCredentialError("Snapshot()", err)
+
+	if _, err = sw.ResolveBackend(); err != nil {
+		t.Errorf("ResolveBackend() error = %v, want nil (gsm7252ps declares SNMP, no I/O involved)", err)
+	}
+}
+
+// TestPublicAPI_SnapshotDegradesAllFieldsWhenReadBackendUnsupported pins
+// Snapshot's per-field capability-gap degrade (D-REC A.9) from the
+// top-level import alone: WithReadBackend naming a backend the model
+// doesn't declare at all makes EVERY field's resolveBackend call fail with
+// model.ErrUnsupportedCapability, so Snapshot must return successfully
+// with every slice/pointer field at its empty/zero value -- never erroring
+// out and never falling back to a different backend for any field (the
+// exact regression D-REC documents: a snapshot must not silently answer
+// one field from a backend other than the one explicitly requested).
+func TestPublicAPI_SnapshotDegradesAllFieldsWhenReadBackendUnsupported(t *testing.T) {
+	m := mustModel(t, "gsm7252ps") // SNMP-only: has no NSDP backend at all
+	sw, err := netgearswitch.New(m, "10.0.0.9")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	data, err := sw.Snapshot(context.Background(), netgearswitch.WithReadBackend(netgearswitch.BackendNSDP))
+	if err != nil {
+		t.Fatalf("Snapshot(WithReadBackend(unsupported)) error = %v, want nil (a capability gap degrades, it does not fail Snapshot)", err)
+	}
+	if len(data.Ports) != 0 || len(data.Stats) != 0 || len(data.Vlans) != 0 ||
+		len(data.Pvids) != 0 || len(data.Lldp) != 0 || len(data.Macs) != 0 ||
+		len(data.PoE) != 0 || len(data.Sensors) != 0 || data.MgmtIP != nil {
+		t.Errorf("Snapshot(WithReadBackend(unsupported)) = %+v, want every field empty/nil", data)
+	}
+	if data.Model != m.Key || data.Host != "10.0.0.9" {
+		t.Errorf("Snapshot(WithReadBackend(unsupported)) Model/Host = %q/%q, want %q/%q (only these two are never gated)", data.Model, data.Host, m.Key, "10.0.0.9")
+	}
 }

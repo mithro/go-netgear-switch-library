@@ -386,6 +386,58 @@ func TestSetVlanMembershipRMWPreservesDeviceWidthOf79Bytes(t *testing.T) {
 	}
 }
 
+// TestSetVlanMembershipRMWPreservesWidthWithStringTypedRawRow proves
+// rawBitmap's string-typed OCTET STRING branch (writer_vlan.go) does the
+// same width-preservation job as the []byte branch already pinned by
+// TestSetVlanMembershipRMWPreservesDeviceWidthOf79Bytes: if the device's
+// egress column happens to come back as a string-typed row (some SNMP
+// libraries surface OCTET STRING that way -- vlanBitmapMap in parse.go
+// already accepts both for GetVLANs) at a real measured 79-byte width, the
+// SET must still go out at that same 79-byte width, not the narrower
+// 8-byte vlanEncodeWidth fallback a nil rawBitmap would trigger.
+func TestSetVlanMembershipRMWPreservesWidthWithStringTypedRawRow(t *testing.T) {
+	egressBitmap := EncodePortBitmap([]int{1, 2, 10}, 79)
+	untaggedBitmap := EncodePortBitmap([]int{1, 2}, 79)
+	tables := map[string][]Row{
+		Dot1qVlanStaticName: {
+			NewStrRow(fmt.Sprintf("%s.90", Dot1qVlanStaticName), "iot"),
+		},
+		Dot1qVlanStaticEgress: {
+			// String-typed, not []byte -- exercises rawBitmap's new
+			// `case string` branch instead of its `case []byte` one.
+			NewStrRow(fmt.Sprintf("%s.90", Dot1qVlanStaticEgress), string(egressBitmap)),
+		},
+		Dot1qVlanStaticUntagged: {
+			NewBytesRow(fmt.Sprintf("%s.90", Dot1qVlanStaticUntagged), untaggedBitmap),
+		},
+	}
+	client := newScriptedWriteClient(tables, applyVlanBitmaps)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetVlanMembership(context.Background(), 90, 25, model.VlanUntagged, true); err != nil {
+		t.Fatalf("SetVlanMembership: %v", err)
+	}
+	egressOID := fmt.Sprintf("%s.90", Dot1qVlanStaticEgress)
+	var egressSV *SetVarbind
+	for i := range client.sets {
+		if client.sets[i].OID == egressOID {
+			egressSV = &client.sets[i]
+		}
+	}
+	if egressSV == nil {
+		t.Fatalf("sets = %+v, want an egress varbind", client.sets)
+	}
+	if got := len(egressSV.Value.([]byte)); got != 79 {
+		t.Errorf("egress SET width = %d, want 79 (the device's own width preserved even from a string-typed raw row)", got)
+	}
+	wantEgress := []int{1, 2, 10, 25}
+	if got := DecodePortBitmap(egressSV.Value.([]byte)); !intSlicesEqual(got, wantEgress) {
+		t.Errorf("egress decoded = %v, want %v (port 25 added, others kept)", got, wantEgress)
+	}
+}
+
 func TestSetVlanMembershipGuardIsUnconditional(t *testing.T) {
 	client := newScriptedWriteClient(vlanTables(90, []int{1, 2, 10}, []int{1, 2}), applyVlanBitmaps)
 	w, err := NewWriter(client, mustModel(t, "gsm7252ps"), WithProtectedPorts(25))

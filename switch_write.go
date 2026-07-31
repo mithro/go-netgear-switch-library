@@ -1,10 +1,14 @@
 // switch_write.go: the public Switch write methods, mirroring Python's
 // SyncSwitch write methods (sync_api.py) -- every method below is a thin
-// writeVia wrapper, per-backend-preference dispatch/skip/reraise-last
-// semantics live entirely in write_dispatch.go's writeVia, exactly
-// paralleling switch.go's read methods and readVia. Ported from the pinned
-// Python source (that repo is read-only from here); any discrepancy between
-// this file and the pinned Python source is a bug in this file. See
+// writeVia wrapper. writeVia (write_dispatch.go) resolves exactly ONE
+// backend per call -- o.Backend if set, else this Switch's pinned model
+// default -- builds/reuses that single BackendWriter, and runs the op over
+// it; there is NO fallback to a second backend under any circumstance, and
+// an op that backend can't serve raises naming it (wrapping
+// model.ErrUnsupportedCapability), exactly paralleling switch.go's read
+// methods and readVia. Ported from the pinned Python source (that repo is
+// read-only from here); any discrepancy between this file and the pinned
+// Python source is a bug in this file. See
 // docs/superpowers/plans/2026-07-30-slice-04-dossier-snmp-write.md (D-WR)
 // §3 for the full semantics this file implements.
 
@@ -74,30 +78,32 @@ func cycleTimeoutsFromOptions(opts []CycleOption) snmp.PoeCycleTimeouts {
 	return timeouts
 }
 
-// SetPoE sets port's PoE admin state to on, dispatched through whichever
-// backend serves it first. The disruptive-direction protected-port guard
-// (fires only when turning PoE off) lives entirely in the BackendWriter
-// (snmp.Writer.SetPoE, D-WR §2.5); o.Force is forwarded unchanged.
+// SetPoE sets port's PoE admin state to on, dispatched through the resolved
+// backend (o.Backend, or this Switch's default). The disruptive-direction
+// protected-port guard (fires only when turning PoE off) lives entirely in
+// the BackendWriter (snmp.Writer.SetPoE, D-WR §2.5); o.Force is forwarded
+// unchanged.
 func (s *Switch) SetPoE(ctx context.Context, port int, on bool, o Write) error {
 	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.SetPoE(ctx, port, on, o.Force)
 	})
 }
 
-// SetPortEnabled sets port's ifAdminStatus, dispatched through whichever
-// backend serves it first. The disruptive-direction protected-port guard
-// (fires only when disabling) lives entirely in the BackendWriter
-// (snmp.Writer.SetPortEnabled, D-WR §2.8); o.Force is forwarded unchanged.
+// SetPortEnabled sets port's ifAdminStatus, dispatched through the resolved
+// backend (o.Backend, or this Switch's default). The disruptive-direction
+// protected-port guard (fires only when disabling) lives entirely in the
+// BackendWriter (snmp.Writer.SetPortEnabled, D-WR §2.8); o.Force is
+// forwarded unchanged.
 func (s *Switch) SetPortEnabled(ctx context.Context, port int, enabled bool, o Write) error {
 	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.SetPortEnabled(ctx, port, enabled, o.Force)
 	})
 }
 
-// SetPVID sets port's default/untagged VLAN, dispatched through whichever
-// backend serves it first. The unconditional protected-port guard lives
-// entirely in the BackendWriter (snmp.Writer.SetPVID, D-WR §2.9); o.Force is
-// forwarded unchanged.
+// SetPVID sets port's default/untagged VLAN, dispatched through the
+// resolved backend (o.Backend, or this Switch's default). The unconditional
+// protected-port guard lives entirely in the BackendWriter (snmp.Writer.
+// SetPVID, D-WR §2.9); o.Force is forwarded unchanged.
 func (s *Switch) SetPVID(ctx context.Context, port, vlan int, o Write) error {
 	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.SetPVID(ctx, port, vlan, o.Force)
@@ -105,8 +111,8 @@ func (s *Switch) SetPVID(ctx context.Context, port, vlan int, o Write) error {
 }
 
 // SetVlanMembership sets port's membership mode within vlanID, dispatched
-// through whichever backend serves it first. The unconditional
-// protected-port guard lives entirely in the BackendWriter
+// through the resolved backend (o.Backend, or this Switch's default). The
+// unconditional protected-port guard lives entirely in the BackendWriter
 // (snmp.Writer.SetVlanMembership, D-WR §2.10); o.Force is forwarded
 // unchanged.
 func (s *Switch) SetVlanMembership(ctx context.Context, vlanID, port int, mode VlanMode, o Write) error {
@@ -233,11 +239,12 @@ func formatIntList(ports []int) string {
 }
 
 // SetMgmtIP sets the switch's own management IP (address/netmask/gateway),
-// dispatched through whichever backend serves it first. The unconditional
-// force-gate (force=false ALWAYS refuses, independent of protected_ports --
-// a bad mgmt-IP write can strand the entire switch) lives entirely in the
-// BackendWriter (snmp.Writer.SetMgmtIP, D-WR §2.13); o.Force is forwarded
-// unchanged -- the facade adds no separate check of its own.
+// dispatched through the resolved backend (o.Backend, or this Switch's
+// default). The unconditional force-gate (force=false ALWAYS refuses,
+// independent of protected_ports -- a bad mgmt-IP write can strand the
+// entire switch) lives entirely in the BackendWriter (snmp.Writer.
+// SetMgmtIP, D-WR §2.13); o.Force is forwarded unchanged -- the facade adds
+// no separate check of its own.
 func (s *Switch) SetMgmtIP(ctx context.Context, address, netmask, gateway string, o Write) error {
 	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.SetMgmtIP(ctx, address, netmask, gateway, o.Force)
@@ -245,10 +252,11 @@ func (s *Switch) SetMgmtIP(ctx context.Context, address, netmask, gateway string
 }
 
 // CyclePoE power-cycles port's PoE (off, poll until off, on, poll until
-// delivering), dispatched through whichever backend serves it first. The
-// unconditional protected-port guard lives entirely in the BackendWriter
-// (snmp.Writer.CyclePoE, D-WR §2.7); o.Force is forwarded unchanged. opts
-// override the default PoE cycle timeouts (snmp.DefaultPoeCycleTimeouts).
+// delivering), dispatched through the resolved backend (o.Backend, or this
+// Switch's default). The unconditional protected-port guard lives entirely
+// in the BackendWriter (snmp.Writer.CyclePoE, D-WR §2.7); o.Force is
+// forwarded unchanged. opts override the default PoE cycle timeouts
+// (snmp.DefaultPoeCycleTimeouts).
 func (s *Switch) CyclePoE(ctx context.Context, port int, o Write, opts ...CycleOption) error {
 	timeouts := cycleTimeoutsFromOptions(opts)
 	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
@@ -258,10 +266,10 @@ func (s *Switch) CyclePoE(ctx context.Context, port int, o Write, opts ...CycleO
 
 // ClearPoEFault re-arms port's PoE the same way CyclePoE does, but with a
 // looser recovery predicate (leaving FAULT is enough; delivering is not
-// required), dispatched through whichever backend serves it first. The
-// unconditional protected-port guard lives entirely in the BackendWriter
-// (snmp.Writer.ClearPoEFault, D-WR §2.7); o.Force is forwarded unchanged.
-// opts override the default PoE cycle timeouts.
+// required), dispatched through the resolved backend (o.Backend, or this
+// Switch's default). The unconditional protected-port guard lives entirely
+// in the BackendWriter (snmp.Writer.ClearPoEFault, D-WR §2.7); o.Force is
+// forwarded unchanged. opts override the default PoE cycle timeouts.
 func (s *Switch) ClearPoEFault(ctx context.Context, port int, o Write, opts ...CycleOption) error {
 	timeouts := cycleTimeoutsFromOptions(opts)
 	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {

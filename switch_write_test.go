@@ -837,6 +837,55 @@ func TestDeleteVlan_GuardPropagatesNonUnsupportedReadError(t *testing.T) {
 	}
 }
 
+func TestDeleteVlan_GuardReadRunsOverWriteBackendOverride(t *testing.T) {
+	// D-REC A.7/A.10.7: readOptsForBackend threads Write.Backend into the
+	// guard's own GetVLANs read, so the guard checks the SAME backend the
+	// delete itself will use, not the facade's default (new plumbing versus
+	// the pre-reconciliation Go source, which always read the default
+	// backend regardless of o.Backend). Register SNMP -- the model's
+	// default, first in backendPreference -- as a reader whose VLAN 20 DOES
+	// clash with a protected port, and NSDP as a reader whose VLAN 20 does
+	// NOT. If the guard read the default (SNMP) it would block; since
+	// Write.Backend explicitly names NSDP, it must read NSDP instead and
+	// proceed.
+	clearBackendRegistry(t)
+	clearWriteBackendRegistry(t)
+	snmpReaderBuilt := false
+	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
+		snmpReaderBuilt = true
+		return &fakeVLANReader{vlans: []model.VLANInfo{{VlanID: 20, MemberPorts: []int{5}}}}, nil
+	})
+	nsdpReaderBuilt := false
+	withRegisteredBackend(t, model.BackendNSDP, func(_ *Switch) (BackendReader, error) {
+		nsdpReaderBuilt = true
+		return &fakeVLANReader{vlans: []model.VLANInfo{{VlanID: 20, MemberPorts: []int{1, 2}}}}, nil
+	})
+	fw := &fakeWriter{}
+	withRegisteredWriteBackend(t, model.BackendNSDP, func(_ *Switch) (BackendWriter, error) {
+		return fw, nil
+	})
+
+	m := fakeModel("fake", model.BackendSNMP, model.BackendNSDP)
+	sw, err := New(m, "10.0.0.1", WithProtectedPorts(5))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	nsdp := model.BackendNSDP
+	if err := sw.DeleteVlan(context.Background(), 20, Write{Backend: &nsdp}); err != nil {
+		t.Fatalf("DeleteVlan() error = %v, want nil (guard must have read NSDP's VLAN 20, which has no protected member)", err)
+	}
+	if snmpReaderBuilt {
+		t.Fatal("DeleteVlan() guard read the facade-default SNMP backend instead of the explicitly-requested NSDP backend")
+	}
+	if !nsdpReaderBuilt {
+		t.Fatal("DeleteVlan() guard never read the explicitly-requested NSDP backend")
+	}
+	if fw.deleteVlanCall == nil || fw.deleteVlanCall.vlanID != 20 {
+		t.Fatalf("DeleteVlan() writer call = %+v, want a dispatched call for vlanID=20 over NSDP", fw.deleteVlanCall)
+	}
+}
+
 // --- write-community gate (requireSNMPWriteCommunity) ---------------------
 
 func TestRequireSNMPWriteCommunity_RejectsNil(t *testing.T) {
