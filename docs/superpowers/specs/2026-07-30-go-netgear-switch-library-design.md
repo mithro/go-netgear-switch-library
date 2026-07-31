@@ -22,20 +22,37 @@ The Python library is the behavioural reference:
 
 - Repo: `/home/tim/github/mithro/python-netgear-switch-library`
   (`github.com/mithro/python-netgear-switch-library`)
-- **Pinned reference:** branch `fix/s3300-52x-live-verify` @
-  `1aa1274254a233ddce0409160849bb6ce8f8b2e7` (2026-07-30), frozen as a
+- **Pinned reference:** branch `main` @
+  `1841111c6d0b55ad3eece915e57ba115a0cfdd12` (2026-07-31), frozen as a
   detached read-only snapshot worktree at
-  `/home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-1aa1274`
+  `/home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-1841111`
   — **implementers read the snapshot path, never the live checkout**, which
-  the user actively develops (it moved twice mid-session; earlier pins:
-  `b73e7519` fix/live-hardware-parity, then `aaab577`). The branch carries
-  live-verified improvements the Go port must match (real S3300-52X capture
-  + reseeded gsm7228ps with `verified=True`, `SYSOBJECTID_MODELS`
-  authoritative sysObjectID detection tried before sysDescr,
-  `MODEL_ALIASES` s3300→gsm7228ps, S3300-52X XE_FASTPATH HTTP captures).
-  Slice 1's registry matches this state. Re-pin deliberately at slice
-  boundaries (new snapshot worktree + doc update); parity claims are always
-  against the pin.
+  the user actively develops (pin history: `b73e7519` → `aaab577` →
+  `1aa1274` → `1841111`; slices 01–05 were built against `1aa1274`, see the
+  reconciliation note below). Re-pin deliberately at slice boundaries (new
+  snapshot worktree + doc update); parity claims are always against the pin.
+- **Five non-negotiable design principles (normative):** the reference owner
+  recorded these in the reference's root `CLAUDE.md` (they bind this port
+  too, and sharpen the standing goal): (1) **fail fast and loud; never
+  switch backend mid-operation** — a caller who asks for one backend gets
+  that backend or an error, never a silent retry over another (a write
+  hazard); (2) **backends must have feature parity** — a missing op is a
+  missing implementation to build, not a device limitation, until proven
+  with captured device output; (3) **every model, not just the one in front
+  of you** — verify per-SKU; (4) **a failure is something you did wrong** —
+  debug before blaming hardware; record a limitation only with quoted device
+  output + firmware; (5) **the fake must behave like real hardware; fix the
+  fake when it differs** — seed *measured* device values, never values
+  computed with the same formula as the code under test.
+- **Reconciliation from `1aa1274` → `1841111`:** slices 01–05 faithfully
+  mirror `1aa1274` but now diverge from the current pin in several places
+  (facade backend-fallback dispatch — since forbidden by principle 1; mock
+  VLAN PortList real widths — principle 5; HTTP ops that were "unsupported"
+  now implemented; NSDP tag surface; SNMP VLAN write dialects). See
+  `docs/superpowers/specs/2026-07-31-reference-drift-and-reconciliation.md`.
+  A dedicated reconciliation slice (before HTTP) reworks the facade dispatch
+  and the mock widths; the rest fold into their owning future slices or the
+  completion-audit phase.
 
 Where this spec says "same as Python", the pinned source is normative. Protocol
 constants (OID tables, NSDP tags/sizes, HTTP endpoints/login schemes/dialects,
@@ -57,8 +74,17 @@ is what proves the port faithful.
   VLAN membership (untagged/tagged/excluded), VLAN create/delete, mgmt-IP
   (force-gated), certificate upload (HTTP multipart + GoAhead XML), certificate
   deploy via SCP+FASTPATH.
-- **Semantics carried over exactly:** backend preference SNMP→NSDP→HTTP→SSH
-  with UnsupportedCapability skip-and-re-raise-last; CredentialError never
+- **Backend selection (REVISED for `1841111`, principle 1):** each op runs on
+  exactly ONE backend — the model's default (`_BACKEND_PREFERENCE` order
+  SNMP→NSDP→HTTP→SSH picks the first the model declares) OR an
+  explicitly-requested backend (a `WithBackend`-style facade default and a
+  per-op backend override, mirroring Python's `self.backend` field + `backend=`
+  argument). **There is NO silent fallback loop**: if the chosen backend
+  cannot serve the op it raises, naming the backend and (when the backend was
+  a default, not explicitly asked) hinting which other backends the model
+  has. This REPLACES the earlier "skip-and-re-raise-last" fallback that slices
+  03–05 built against `1aa1274` (reconciliation slice reworks it).
+- **Semantics carried over exactly:** CredentialError never
   swallowed; reader/writer caching; lazy once-only secret resolution; lazy
   HTTP/CLI sessions (unsupported ops must not raise credential errors);
   `Snapshot` degrades unsupported fields to empty instead of failing;
@@ -405,14 +431,24 @@ suite 3 from the Python side. Nothing else changes in the Python repo.
      the fleet) and marked `protected_ports` before any write.
   2. Disruptive port/PoE writes only on currently link-down ports; prior state
      always restored (read → write → verify → restore → verify).
-  3. VLAN lifecycle uses dedicated VLAN 3999 (create → membership/PVID checks
-     on link-down ports → delete).
-  4. PVID changes only on link-down ports, restored after.
+  3. VLAN lifecycle uses dedicated throwaway VLAN ids in the **4001–4008**
+     range (the reference owner's convention; coordinated so concurrent
+     agents do not collide) — create → membership/PVID checks on link-down
+     ports → delete.
+  4. Writes touch only a port that is **link-down AND** whose description is
+     empty or the literal `'empty'` — never a described production port.
+     Record exact prior state, restore, and **prove the restore by
+     re-reading**. Never persist config (no `write memory` / save).
   5. **Never** mgmt-IP set, certificate upload/deploy, or reboot against real
      hardware; those paths are proven against fakes + cross-language suites.
-- **Credentials:** resolution chain of §6 with the harness-level Netgear
-  default fallbacks; missing write credentials for a device simply skip its
-  write phase with an explicit report (never silent).
+- **Credentials (per the reference owner's CLAUDE.md):** live web /
+  SNMP-write / CLI passwords resolve via
+  `sudo -n .venv/bin/gdoc2netcfg password --type password -q <host>` run from
+  `/opt/gdoc2netcfg` (wired through the inventory `!command` secret spec);
+  **never printed**. Falls back to the harness-level Netgear defaults
+  (`public`/`private`/`password`) only where gdoc2netcfg has no entry; missing
+  write credentials skip that device's write phase with an explicit report
+  (never silent).
 - Hardware suites are `-tags hwtest`, never run in CI, and emit a conformance
   report (per switch × op × backend: pass/fail/skipped+reason).
 
