@@ -144,6 +144,40 @@ type ScpCertDeploySim struct {
 	Saved         bool
 }
 
+// VlanMembershipPageSim records the MEASURED byte-shape of one managed
+// FASTPATH model's "VLAN Membership" page (dossier D-HTTP-F §5.2), mirroring
+// Python's VlanMembershipPageSim dataclass. Populated only by the four
+// managed models' Seed*() functions (gsm7252ps, gsm7228ps, m4300-24x,
+// m4300-16x) -- State.VlanMembershipPage stays nil for every other model
+// (every Plus-class/GoAhead model has no such page at all). Consumed by the
+// (slice-06 Task 9/10) FASTPATH VLAN-membership renderer, not by anything in
+// this slice's Task 8 HTTP-face skeleton.
+type VlanMembershipPageSim struct {
+	// Slots is the page's hiddenMem/hiddenTagged/hiddenUnTagged grid width in
+	// slots (physical ports plus trailing LAG pseudo-interfaces) -- a
+	// hardware-fixed constant PER MODEL, wider than the port count.
+	Slots int
+	// LagSlot is the 1-based slot number the first LAG pseudo-interface
+	// occupies (LAG slots run from here through Slots).
+	LagSlot int
+	// Grid is which firmware-generation rendering variant this model's page
+	// uses: "gif" (older XE, gsm7252ps -- toggleImageFirst()/grey_[btu].gif,
+	// 0-based hiddenMem index) or "png" (newer jQuery, gsm7228ps/both
+	// M4300s -- togImg()/switch_*.png, 1-based index).
+	Grid string
+	// TrailingComma is whether this model's hiddenMem/hiddenTagged/
+	// hiddenUnTagged strings carry a trailing comma.
+	TrailingComma bool
+	// CSRF is whether this model's page requires its own per-page CSRF token
+	// (the "virtualcsrf" literal, D-HTTP-F §4.1 -- a THIRD distinct CSRF-shaped
+	// constant from web.py's "virtualhash" and gs105pe's "18007") riding
+	// along on every apply.
+	CSRF bool
+	// Escape is whether this model's page HTML-escapes ifNames in the
+	// rendered grid (e.g. "1/0/1" -> "1&#x2F;0&#x2F;1").
+	Escape bool
+}
+
 // State is the one authoritative in-memory virtual-switch device state. A
 // mutable holder (ApplyWrite mutates it to simulate an SNMP SET); pure data
 // plus the OIDMap SNMP projection, no network here.
@@ -205,6 +239,20 @@ type State struct {
 	// here for completeness only (see ScpCertDeploySim doc comment above).
 	UploadedCert  *string
 	ScpCertDeploy *ScpCertDeploySim
+
+	// VlanMembershipPage/VlanMembershipLockedPorts are the FASTPATH "VLAN
+	// Membership" page's state (D-HTTP-F §5.2) -- see VlanMembershipPageSim's
+	// doc comment. VlanMembershipLockedPorts is the PER-PORT set of ports
+	// whose switchport mode (access/trunk) makes this model's firmware
+	// refuse an explicit VLAN-membership apply over HTTP, returning HTTP 200
+	// with err_flag=1 rather than applying -- empty (the default) means
+	// every port on this model accepts the apply. Only m4300-24x's seed
+	// populates this (every port on that live-captured unit is
+	// access/trunk); m4300-16x's ports 1-8 have no switchport mode line at
+	// all, so its seed leaves this empty, letting the apply succeed there --
+	// a deliberate live counter-example pair, not an oversight.
+	VlanMembershipPage        *VlanMembershipPageSim
+	VlanMembershipLockedPorts map[int]bool
 }
 
 // NewState builds a blank-but-valid State for modelKey, with the same
@@ -229,9 +277,10 @@ func NewState(modelKey string) *State {
 			Gateway: "0.0.0.0",
 			Mode:    "dhcp",
 		},
-		NsdpPassword:             "password",
-		NsdpMac:                  [6]byte{0x28, 0xc6, 0x8e, 0x00, 0x00, 0x01},
-		NsdpPortMirroringSources: map[int]bool{},
+		NsdpPassword:              "password",
+		NsdpMac:                   [6]byte{0x28, 0xc6, 0x8e, 0x00, 0x00, 0x01},
+		NsdpPortMirroringSources:  map[int]bool{},
+		VlanMembershipLockedPorts: map[int]bool{},
 	}
 }
 
@@ -257,37 +306,39 @@ func (s *State) SysinfoSensors() []SensorSim {
 // gob/reflection) -- see Restore.
 func (s *State) Snapshot() *State {
 	cp := &State{
-		ModelKey:                 s.ModelKey,
-		Ports:                    clonePortsMap(s.Ports),
-		Vlans:                    cloneVlansMap(s.Vlans),
-		Pvids:                    cloneIntIntMap(s.Pvids),
-		Poe:                      clonePoeMap(s.Poe),
-		Sensors:                  cloneSensorSlice(s.Sensors),
-		HTTPSensors:              cloneSensorSliceNilable(s.HTTPSensors),
-		EntityComponents:         cloneEntitySlice(s.EntityComponents),
-		Macs:                     cloneMacSlice(s.Macs),
-		BridgePorts:              cloneIntIntMap(s.BridgePorts),
-		Lldp:                     cloneLldpSlice(s.Lldp),
-		Mgmt:                     s.Mgmt,
-		ModelName:                s.ModelName,
-		Serial:                   s.Serial,
-		Firmware:                 s.Firmware,
-		Hostname:                 s.Hostname,
-		NsdpPassword:             s.NsdpPassword,
-		NsdpMac:                  s.NsdpMac,
-		SysDescr:                 s.SysDescr,
-		SysObjectID:              s.SysObjectID,
-		Dot1dBaseMacASCII:        s.Dot1dBaseMacASCII,
-		VLANPortListWidth:        cloneIntPtr(s.VLANPortListWidth),
-		NsdpQosEngine:            cloneIntPtr(s.NsdpQosEngine),
-		NsdpPortMirroringDest:    cloneIntPtr(s.NsdpPortMirroringDest),
-		NsdpPortMirroringSources: cloneIntBoolMap(s.NsdpPortMirroringSources),
-		NsdpIgmpSnoopingEnabled:  cloneBoolPtr(s.NsdpIgmpSnoopingEnabled),
-		NsdpIgmpSnoopingVlan:     cloneIntPtr(s.NsdpIgmpSnoopingVlan),
-		NsdpBroadcastFiltering:   cloneBoolPtr(s.NsdpBroadcastFiltering),
-		NsdpLoopDetection:        cloneBoolPtr(s.NsdpLoopDetection),
-		UploadedCert:             cloneStringPtr(s.UploadedCert),
-		ScpCertDeploy:            cloneScpCertDeploy(s.ScpCertDeploy),
+		ModelKey:                  s.ModelKey,
+		Ports:                     clonePortsMap(s.Ports),
+		Vlans:                     cloneVlansMap(s.Vlans),
+		Pvids:                     cloneIntIntMap(s.Pvids),
+		Poe:                       clonePoeMap(s.Poe),
+		Sensors:                   cloneSensorSlice(s.Sensors),
+		HTTPSensors:               cloneSensorSliceNilable(s.HTTPSensors),
+		EntityComponents:          cloneEntitySlice(s.EntityComponents),
+		Macs:                      cloneMacSlice(s.Macs),
+		BridgePorts:               cloneIntIntMap(s.BridgePorts),
+		Lldp:                      cloneLldpSlice(s.Lldp),
+		Mgmt:                      s.Mgmt,
+		ModelName:                 s.ModelName,
+		Serial:                    s.Serial,
+		Firmware:                  s.Firmware,
+		Hostname:                  s.Hostname,
+		NsdpPassword:              s.NsdpPassword,
+		NsdpMac:                   s.NsdpMac,
+		SysDescr:                  s.SysDescr,
+		SysObjectID:               s.SysObjectID,
+		Dot1dBaseMacASCII:         s.Dot1dBaseMacASCII,
+		VLANPortListWidth:         cloneIntPtr(s.VLANPortListWidth),
+		NsdpQosEngine:             cloneIntPtr(s.NsdpQosEngine),
+		NsdpPortMirroringDest:     cloneIntPtr(s.NsdpPortMirroringDest),
+		NsdpPortMirroringSources:  cloneIntBoolMap(s.NsdpPortMirroringSources),
+		NsdpIgmpSnoopingEnabled:   cloneBoolPtr(s.NsdpIgmpSnoopingEnabled),
+		NsdpIgmpSnoopingVlan:      cloneIntPtr(s.NsdpIgmpSnoopingVlan),
+		NsdpBroadcastFiltering:    cloneBoolPtr(s.NsdpBroadcastFiltering),
+		NsdpLoopDetection:         cloneBoolPtr(s.NsdpLoopDetection),
+		UploadedCert:              cloneStringPtr(s.UploadedCert),
+		ScpCertDeploy:             cloneScpCertDeploy(s.ScpCertDeploy),
+		VlanMembershipPage:        cloneVlanMembershipPage(s.VlanMembershipPage),
+		VlanMembershipLockedPorts: cloneIntBoolMap(s.VlanMembershipLockedPorts),
 	}
 	return cp
 }
@@ -447,6 +498,14 @@ func cloneStringPtr(p *string) *string {
 	}
 	v := *p
 	return &v
+}
+
+func cloneVlanMembershipPage(in *VlanMembershipPageSim) *VlanMembershipPageSim {
+	if in == nil {
+		return nil
+	}
+	cp := *in
+	return &cp
 }
 
 func cloneScpCertDeploy(in *ScpCertDeploySim) *ScpCertDeploySim {
