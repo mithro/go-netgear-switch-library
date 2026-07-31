@@ -143,6 +143,14 @@ type Switch struct {
 	// config.go's protectedPorts helper for the same convention).
 	protectedPorts []int
 
+	// backend, if set, pins EVERY op on this Switch to exactly one backend
+	// by default (nil = the model's highest-preference one -- see
+	// resolveBackend in dispatch.go). Set via WithBackend to restrict a
+	// whole session to one protocol ("talk to this switch over HTTP only");
+	// a per-call ReadOption/Write.Backend override still wins over this.
+	// Mirrors Python's SyncSwitch.backend (D-REC A.3).
+	backend *model.Backend
+
 	// mu guards readerCache/writerCache: readerFor/writerFor both read and
 	// populate them, and a Switch may be dispatched from multiple
 	// goroutines concurrently.
@@ -237,6 +245,17 @@ func WithNSDPPasswordResolver(r func() (*string, error)) SwitchOption {
 // Passing this option never causes r to run during New/FromConfig.
 func WithHTTPPasswordResolver(r func() (*string, error)) SwitchOption {
 	return func(sw *Switch) { sw.httpPassword = newResolveOnce(r) }
+}
+
+// WithBackend pins EVERY op on this Switch to backend by default, unless a
+// per-call ReadOption/Write.Backend override says otherwise (which still
+// wins). Absent this option, a Switch has no pinned default and each op
+// resolves to the model's own highest-preference backend (see
+// resolveBackend in dispatch.go). Mirrors Python's SyncSwitch backend=
+// constructor keyword (D-REC A.3/A.10.2) -- setting it is the session-wide
+// equivalent of passing backend= on every single call.
+func WithBackend(b model.Backend) SwitchOption {
+	return func(sw *Switch) { sw.backend = &b }
 }
 
 // sortedUniquePorts returns ports sorted ascending with duplicates removed,
@@ -369,20 +388,59 @@ func (s *Switch) Host() string {
 // --- Read methods --------------------------------------------------------
 //
 // Every method below is a thin readVia wrapper, mirroring Python's
-// SyncSwitch read methods (D-FAC §2.8-§2.9): the ONLY per-method logic is
-// which BackendReader method is invoked and how its result is captured, per-
-// backend-preference dispatch/skip/reraise-last semantics live entirely in
-// dispatch.go's readVia. GetMACs is the one exception with an extra guard
-// (require_mac_table, run BEFORE dispatch); see getMACsNoGate below for the
-// ungated variant snapshot.go's Snapshot uses instead of this method, per
-// D-FAC §2.12/trap #5.
+// SyncSwitch read methods: the ONLY per-method logic is which BackendReader
+// method is invoked and how its result is captured; single-backend
+// resolution/dispatch semantics live entirely in dispatch.go's readVia.
+// GetMACs is the one exception with an extra guard (require_mac_table, run
+// BEFORE dispatch); see getMACsNoGate below for the ungated variant
+// snapshot.go's Snapshot uses instead of this method.
+//
+// Every method takes a trailing ...ReadOption (D-REC A.10.3): pass
+// WithReadBackend(b) to run THIS ONE call over exactly b, overriding both
+// this Switch's pinned default (WithBackend) and the model's own
+// highest-preference backend. A zero-arg call costs nothing extra (Go's
+// variadic-with-no-args is free) and resolves exactly as before this
+// option existed.
+
+// readOptions carries the per-call knobs every read method's trailing
+// ...ReadOption accepts -- currently just an optional backend override.
+// Mirrors CycleOption's role for CyclePoE/ClearPoEFault (switch_write.go).
+type readOptions struct {
+	backend *model.Backend
+}
+
+// ReadOption configures one read call; see WithReadBackend.
+type ReadOption func(*readOptions)
+
+// WithReadBackend runs ONE read call over exactly backend, overriding both
+// this Switch's pinned default (WithBackend) and the model's own
+// highest-preference backend (D-REC A.10.3). The named backend must be one
+// the model declares (model.SwitchModel.Backends) or the call raises naming
+// it (resolveBackend's "no such backend" shape, dispatch.go); it need not be
+// one that can actually serve the operation -- an op the named backend
+// cannot serve still raises, just from cannotServe's "requested" branch
+// (no "try another backend" hint), never falling back to a different one.
+func WithReadBackend(b model.Backend) ReadOption {
+	return func(o *readOptions) { o.backend = &b }
+}
+
+// resolveReadOptions applies opts, in order, to a fresh readOptions,
+// mirroring cycleTimeoutsFromOptions's default-then-override shape
+// (switch_write.go).
+func resolveReadOptions(opts []ReadOption) readOptions {
+	var o readOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
 
 // GetPorts reads per-port administrative/operational status, speed, name and
-// description via whichever backend model.BackendPreference-order serves it
-// first.
-func (s *Switch) GetPorts(ctx context.Context) ([]model.PortStatus, error) {
+// description via the resolved backend (see readOptions above).
+func (s *Switch) GetPorts(ctx context.Context, opts ...ReadOption) ([]model.PortStatus, error) {
+	o := resolveReadOptions(opts)
 	var out []model.PortStatus
-	err := s.readVia(ctx, "get_ports", func(r BackendReader) error {
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
 		v, err := r.GetPorts(ctx)
 		if err != nil {
 			return err
@@ -394,9 +452,10 @@ func (s *Switch) GetPorts(ctx context.Context) ([]model.PortStatus, error) {
 }
 
 // GetStats reads the per-port traffic-counter snapshot.
-func (s *Switch) GetStats(ctx context.Context) ([]model.PortStats, error) {
+func (s *Switch) GetStats(ctx context.Context, opts ...ReadOption) ([]model.PortStats, error) {
+	o := resolveReadOptions(opts)
 	var out []model.PortStats
-	err := s.readVia(ctx, "get_stats", func(r BackendReader) error {
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
 		v, err := r.GetStats(ctx)
 		if err != nil {
 			return err
@@ -408,9 +467,10 @@ func (s *Switch) GetStats(ctx context.Context) ([]model.PortStats, error) {
 }
 
 // GetVLANs reads the static VLAN table.
-func (s *Switch) GetVLANs(ctx context.Context) ([]model.VLANInfo, error) {
+func (s *Switch) GetVLANs(ctx context.Context, opts ...ReadOption) ([]model.VLANInfo, error) {
+	o := resolveReadOptions(opts)
 	var out []model.VLANInfo
-	err := s.readVia(ctx, "get_vlans", func(r BackendReader) error {
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
 		v, err := r.GetVLANs(ctx)
 		if err != nil {
 			return err
@@ -422,9 +482,10 @@ func (s *Switch) GetVLANs(ctx context.Context) ([]model.VLANInfo, error) {
 }
 
 // GetPVIDs reads each physical port's default/untagged VLAN (PVID).
-func (s *Switch) GetPVIDs(ctx context.Context) ([]model.Pvid, error) {
+func (s *Switch) GetPVIDs(ctx context.Context, opts ...ReadOption) ([]model.Pvid, error) {
+	o := resolveReadOptions(opts)
 	var out []model.Pvid
-	err := s.readVia(ctx, "get_pvids", func(r BackendReader) error {
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
 		v, err := r.GetPVIDs(ctx)
 		if err != nil {
 			return err
@@ -436,9 +497,10 @@ func (s *Switch) GetPVIDs(ctx context.Context) ([]model.Pvid, error) {
 }
 
 // GetLLDP reads the LLDP remote-neighbor table.
-func (s *Switch) GetLLDP(ctx context.Context) ([]model.LLDPNeighbor, error) {
+func (s *Switch) GetLLDP(ctx context.Context, opts ...ReadOption) ([]model.LLDPNeighbor, error) {
+	o := resolveReadOptions(opts)
 	var out []model.LLDPNeighbor
-	err := s.readVia(ctx, "get_lldp", func(r BackendReader) error {
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
 		v, err := r.GetLLDP(ctx)
 		if err != nil {
 			return err
@@ -451,12 +513,13 @@ func (s *Switch) GetLLDP(ctx context.Context) ([]model.LLDPNeighbor, error) {
 
 // getMACsNoGate dispatches get_macs WITHOUT the require_mac_table guard
 // GetMACs applies below -- the exact code path Snapshot's macs field uses
-// (D-FAC §2.12: "snapshot()'s macs field does NOT call require_mac_table --
-// it just lets _read exhaust naturally to the same outcome"). Exported only
-// within this package; snapshot.go's Snapshot is its other caller.
-func (s *Switch) getMACsNoGate(ctx context.Context) ([]model.MacEntry, error) {
+// ("snapshot()'s macs field does NOT call require_mac_table -- it just lets
+// _read exhaust naturally to the same outcome"). Exported only within this
+// package; snapshot.go's Snapshot is its other caller.
+func (s *Switch) getMACsNoGate(ctx context.Context, opts ...ReadOption) ([]model.MacEntry, error) {
+	o := resolveReadOptions(opts)
 	var out []model.MacEntry
-	err := s.readVia(ctx, "get_macs", func(r BackendReader) error {
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
 		v, err := r.GetMACs(ctx)
 		if err != nil {
 			return err
@@ -469,24 +532,24 @@ func (s *Switch) getMACsNoGate(ctx context.Context) ([]model.MacEntry, error) {
 
 // GetMACs reads the MAC address / forwarding-database table. Unlike every
 // other read method, require_mac_table(s.model) is checked FIRST,
-// unconditionally, BEFORE any backend dispatch is attempted (D-FAC §2.9): a
-// model with no MAC table (i.e. no SNMP backend -- see
-// model.SwitchModel.HasMACTable) raises directly from this guard and never
-// even enters readVia's loop, mirroring Python's exact error text
-// (`f"model {model.key!r} has no MAC/FDB table"`).
-func (s *Switch) GetMACs(ctx context.Context) ([]model.MacEntry, error) {
+// unconditionally, BEFORE any backend dispatch is attempted: a model with no
+// MAC table (i.e. no SNMP backend -- see model.SwitchModel.HasMACTable)
+// raises directly from this guard and never even enters readVia, mirroring
+// Python's exact error text (`f"model {model.key!r} has no MAC/FDB table"`).
+func (s *Switch) GetMACs(ctx context.Context, opts ...ReadOption) ([]model.MacEntry, error) {
 	if !s.model.HasMACTable() {
 		return nil, fmt.Errorf("model %q has no MAC/FDB table: %w", s.model.Key, model.ErrUnsupportedCapability)
 	}
-	return s.getMACsNoGate(ctx)
+	return s.getMACsNoGate(ctx, opts...)
 }
 
 // GetPoE reads the per-port Power-over-Ethernet status. No facade-level
 // guard: each backend's own reader (e.g. snmp.Reader.GetPoE) applies its own
 // 0-PSE-port capability gate internally.
-func (s *Switch) GetPoE(ctx context.Context) ([]model.PoEStatus, error) {
+func (s *Switch) GetPoE(ctx context.Context, opts ...ReadOption) ([]model.PoEStatus, error) {
+	o := resolveReadOptions(opts)
 	var out []model.PoEStatus
-	err := s.readVia(ctx, "get_poe", func(r BackendReader) error {
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
 		v, err := r.GetPoE(ctx)
 		if err != nil {
 			return err
@@ -499,9 +562,10 @@ func (s *Switch) GetPoE(ctx context.Context) ([]model.PoEStatus, error) {
 
 // GetSensors reads the switch's environmental sensors (fans, PSUs,
 // temperature).
-func (s *Switch) GetSensors(ctx context.Context) ([]model.Sensor, error) {
+func (s *Switch) GetSensors(ctx context.Context, opts ...ReadOption) ([]model.Sensor, error) {
+	o := resolveReadOptions(opts)
 	var out []model.Sensor
-	err := s.readVia(ctx, "get_sensors", func(r BackendReader) error {
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
 		v, err := r.GetSensors(ctx)
 		if err != nil {
 			return err
@@ -513,9 +577,10 @@ func (s *Switch) GetSensors(ctx context.Context) ([]model.Sensor, error) {
 }
 
 // GetMgmtIP reads the switch's own management IP configuration.
-func (s *Switch) GetMgmtIP(ctx context.Context) (model.MgmtIPConfig, error) {
+func (s *Switch) GetMgmtIP(ctx context.Context, opts ...ReadOption) (model.MgmtIPConfig, error) {
+	o := resolveReadOptions(opts)
 	var out model.MgmtIPConfig
-	err := s.readVia(ctx, "get_mgmt_ip", func(r BackendReader) error {
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
 		v, err := r.GetMgmtIP(ctx)
 		if err != nil {
 			return err

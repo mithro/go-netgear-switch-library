@@ -822,6 +822,72 @@ func TestSeedM4300_16XBaseMacMatchesCaptureRawBytesForm(t *testing.T) {
 	}
 }
 
+// --- VLANPortListWidth: real per-model measured Q-BRIDGE PortList widths
+// (D-REC Topic B) -----------------------------------------------------------
+
+// TestSeededVLANPortListWidthMatchesRealMeasuredValues pins the exact
+// live-measured widths transcribed from the pinned seed.py's
+// vlan_portlist_width field for the four managed-model seeds -- 79
+// (gsm7252ps), 45 (gsm7228ps), 131 (both M4300s) -- and proves each is not
+// just a stored field but ACTUALLY the byte width OIDMap emits for
+// dot1qVlanStaticEgressPorts/UntaggedPorts (Task 3's principle-5 fidelity
+// fix: the mock must be an independent source of truth for the wire width,
+// not a re-derivation of snmp.VlanBitmapWidth's formula).
+func TestSeededVLANPortListWidthMatchesRealMeasuredValues(t *testing.T) {
+	cases := []struct {
+		name      string
+		seed      *State
+		wantWidth int
+		vlanID    int
+	}{
+		{"gsm7252ps", SeedGSM7252PS(), 79, 1},
+		{"gsm7228ps", SeedGSM7228PS(), 45, 5},
+		{"m4300-24x", SeedM4300_24X(), 131, 1},
+		{"m4300-16x", SeedM4300_16X(), 131, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.seed.VLANPortListWidth == nil {
+				t.Fatalf("VLANPortListWidth = nil, want %d", c.wantWidth)
+			}
+			if got := *c.seed.VLANPortListWidth; got != c.wantWidth {
+				t.Errorf("VLANPortListWidth = %d, want %d", got, c.wantWidth)
+			}
+			m := c.seed.OIDMap()
+			egress := m[colKey(snmp.Dot1qVlanStaticEgress, c.vlanID)]
+			if got := len(egress.Value); got != c.wantWidth {
+				t.Errorf("OIDMap egress bitmap width for vlan %d = %d, want %d", c.vlanID, got, c.wantWidth)
+			}
+			untagged := m[colKey(snmp.Dot1qVlanStaticUntagged, c.vlanID)]
+			if got := len(untagged.Value); got != c.wantWidth {
+				t.Errorf("OIDMap untagged bitmap width for vlan %d = %d, want %d", c.vlanID, got, c.wantWidth)
+			}
+		})
+	}
+}
+
+// TestSeedGS728TPPHasNoMeasuredVLANPortListWidth proves an unmeasured model
+// leaves VLANPortListWidth nil and so falls back to snmp.VlanBitmapWidth's
+// physical-port-count formula, exactly like a freshly-constructed NewState.
+func TestSeedGS728TPPHasNoMeasuredVLANPortListWidth(t *testing.T) {
+	state := SeedGS728TPP()
+	if state.VLANPortListWidth != nil {
+		t.Fatalf("VLANPortListWidth = %d, want nil (unmeasured)", *state.VLANPortListWidth)
+	}
+	mdl, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWidth := snmp.VlanBitmapWidth(mdl.PortCount)
+	m := state.OIDMap()
+	for vlanID := range state.Vlans {
+		egress := m[colKey(snmp.Dot1qVlanStaticEgress, vlanID)]
+		if got := len(egress.Value); got != wantWidth {
+			t.Errorf("OIDMap egress bitmap width for vlan %d = %d, want formula width %d", vlanID, got, wantWidth)
+		}
+	}
+}
+
 // --- gs728tpp: no committed capture JSON at this pin (see
 // testdata/captures/README.md) -- grounded directly against the values
 // transcribed into seed.go from the pinned seed.py. --------------------------

@@ -172,6 +172,21 @@ type State struct {
 	SysObjectID       string
 	Dot1dBaseMacASCII bool
 
+	// VLANPortListWidth is the model's REAL, live-measured wire byte-width
+	// of dot1qVlanStaticEgressPorts/UntaggedPorts (D-REC Topic B), nil when
+	// unmeasured. A Netgear switch's Q-BRIDGE PortList covers LAG and CPU
+	// pseudo-ports too, so its width is a hardware-fixed constant wider
+	// than max(8, ceil(port_count/8)) -- e.g. GSM7252PS = 79 bytes,
+	// GSM7228PS = 45, both M4300s = 131 (see the four managed seeds).
+	// OIDMap prefers this field over snmp.VlanBitmapWidth(port_count) so
+	// the mock is an INDEPENDENT source of truth for the wire width, not a
+	// re-derivation of the writer's own formula -- the whole point being
+	// that a mock sharing the writer's formula can never catch the writer
+	// re-encoding a bitmap at the wrong width (the historical bug this
+	// field exists to trap). nil (Plus-class models, gs728tpp) falls back
+	// to the formula. Ported from Python's State.vlan_portlist_width.
+	VLANPortListWidth *int
+
 	// NSDP-extra fields (D-VIRT §1.3), nil-able/unseeded semantics
 	// mirroring the Python dataclass exactly. NOT consumed by anything in
 	// this slice: the NsdpTlvs()/ApplyNsdpWrite() methods that project and
@@ -263,6 +278,7 @@ func (s *State) Snapshot() *State {
 		SysDescr:                 s.SysDescr,
 		SysObjectID:              s.SysObjectID,
 		Dot1dBaseMacASCII:        s.Dot1dBaseMacASCII,
+		VLANPortListWidth:        cloneIntPtr(s.VLANPortListWidth),
 		NsdpQosEngine:            cloneIntPtr(s.NsdpQosEngine),
 		NsdpPortMirroringDest:    cloneIntPtr(s.NsdpPortMirroringDest),
 		NsdpPortMirroringSources: cloneIntBoolMap(s.NsdpPortMirroringSources),

@@ -206,9 +206,11 @@ func newTestSwitch(t *testing.T, m *model.SwitchModel) *Switch {
 	return sw
 }
 
-// --- writeVia dispatch loop -----------------------------------------------
+// --- writeVia: single-backend dispatch (D-REC Topic A, write-side twin of
+// --- switch_test.go's readVia section -- see that section's header comment
+// --- for what changed and why) ----------------------------------------------
 
-func TestWriteVia_SkipsBackendsModelDoesNotHave(t *testing.T) {
+func TestWriteVia_ResolvesToFirstPreferenceBackendModelHas(t *testing.T) {
 	clearWriteBackendRegistry(t)
 	withRegisteredWriteBackend(t, model.BackendSNMP, func(_ *Switch) (BackendWriter, error) {
 		t.Fatal("SNMP builder invoked for a model with no SNMP backend")
@@ -222,65 +224,52 @@ func TestWriteVia_SkipsBackendsModelDoesNotHave(t *testing.T) {
 	m := fakeModel("gs110emx-like", model.BackendNSDP, model.BackendHTTP)
 	sw := newTestSwitch(t, m)
 
-	err := sw.writeVia(context.Background(), "set_poe", func(w BackendWriter) error {
+	err := sw.writeVia(context.Background(), nil, func(w BackendWriter) error {
 		return w.SetPoE(context.Background(), 1, true, false)
 	})
 	if err != nil {
-		t.Fatalf("writeVia() error = %v, want nil (NSDP should have served it)", err)
+		t.Fatalf("writeVia() error = %v, want nil (NSDP is the first backendPreference member this model declares)", err)
 	}
 	if len(fw.setPoECalls) != 1 {
 		t.Fatalf("NSDP writer received %d SetPoE calls, want 1", len(fw.setPoECalls))
 	}
 }
 
-func TestWriteVia_SkipAndReraiseLast(t *testing.T) {
-	clearWriteBackendRegistry(t)
-	snmpErr := fmt.Errorf("model %q has no SNMP backend: %w", "fake", model.ErrUnsupportedCapability)
-	withRegisteredWriteBackend(t, model.BackendSNMP, func(_ *Switch) (BackendWriter, error) {
-		return nil, snmpErr
-	})
-	withRegisteredWriteBackend(t, model.BackendNSDP, func(_ *Switch) (BackendWriter, error) {
-		return &fakeWriter{err: fmt.Errorf("nsdp has no set_poe: %w", model.ErrUnsupportedCapability)}, nil
-	})
-
-	m := fakeModel("fake", model.BackendSNMP, model.BackendNSDP)
-	sw := newTestSwitch(t, m)
-
-	err := sw.writeVia(context.Background(), "set_poe", func(w BackendWriter) error {
-		return w.SetPoE(context.Background(), 1, true, false)
-	})
-	if err == nil {
-		t.Fatal("writeVia() error = nil, want the last (NSDP) UnsupportedCapability error")
-	}
-	if !errors.Is(err, model.ErrUnsupportedCapability) {
-		t.Fatalf("writeVia() error = %v, want wrapping ErrUnsupportedCapability", err)
-	}
-	if !strings.Contains(err.Error(), "nsdp") {
-		t.Fatalf("writeVia() error = %q, want it to be the LAST (NSDP) error, not the first (SNMP)", err.Error())
-	}
-}
-
-func TestWriteVia_OpUnsupportedCapabilitySkipsToNextBackend(t *testing.T) {
+func TestWriteVia_NoFallbackWhenChosenBackendCannotServe(t *testing.T) {
+	// Was TestWriteVia_SkipAndReraiseLast (builder-level) AND
+	// TestWriteVia_OpUnsupportedCapabilitySkipsToNextBackend (op-level) --
+	// BOTH tested the removed fallback directly (the op-level one even had
+	// "SkipsToNextBackend" in its name). Under single-backend dispatch,
+	// SNMP (chosen) failing at the OP level must raise naming SNMP; NSDP
+	// must never be invoked even though it is registered and would have
+	// succeeded.
 	clearWriteBackendRegistry(t)
 	withRegisteredWriteBackend(t, model.BackendSNMP, func(_ *Switch) (BackendWriter, error) {
 		return &fakeWriter{err: fmt.Errorf("snmp op unsupported: %w", model.ErrUnsupportedCapability)}, nil
 	})
-	nsdpWriter := &fakeWriter{}
+	nsdpBuilt := false
 	withRegisteredWriteBackend(t, model.BackendNSDP, func(_ *Switch) (BackendWriter, error) {
-		return nsdpWriter, nil
+		nsdpBuilt = true
+		return &fakeWriter{}, nil
 	})
 
 	m := fakeModel("fake", model.BackendSNMP, model.BackendNSDP)
 	sw := newTestSwitch(t, m)
 
-	err := sw.writeVia(context.Background(), "set_poe", func(w BackendWriter) error {
+	err := sw.writeVia(context.Background(), nil, func(w BackendWriter) error {
 		return w.SetPoE(context.Background(), 1, true, false)
 	})
-	if err != nil {
-		t.Fatalf("writeVia() error = %v, want nil (NSDP should have served it after SNMP's op-level skip)", err)
+	if err == nil {
+		t.Fatal("writeVia() error = nil, want SNMP's UnsupportedCapability error (cannotServe-wrapped)")
 	}
-	if len(nsdpWriter.setPoECalls) != 1 {
-		t.Fatalf("NSDP writer received %d SetPoE calls, want 1 (op-level UnsupportedCapability must skip to the next backend, not abort)", len(nsdpWriter.setPoECalls))
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("writeVia() error = %v, want wrapping ErrUnsupportedCapability", err)
+	}
+	if !strings.Contains(err.Error(), "the default backend snmp cannot serve") {
+		t.Fatalf("writeVia() error = %q, want the cannotServe default-branch shape naming snmp", err.Error())
+	}
+	if nsdpBuilt {
+		t.Fatal("writeVia() must NOT fall through to NSDP just because it could have served the op -- no fallback, ever")
 	}
 }
 
@@ -299,14 +288,14 @@ func TestWriteVia_CredentialErrorPropagatesImmediately(t *testing.T) {
 	m := fakeModel("fake", model.BackendSNMP, model.BackendNSDP)
 	sw := newTestSwitch(t, m)
 
-	err := sw.writeVia(context.Background(), "set_poe", func(w BackendWriter) error {
+	err := sw.writeVia(context.Background(), nil, func(w BackendWriter) error {
 		return w.SetPoE(context.Background(), 1, true, false)
 	})
 	if !errors.Is(err, model.ErrCredential) {
 		t.Fatalf("writeVia() error = %v, want wrapping ErrCredential", err)
 	}
 	if nsdpCalled {
-		t.Fatal("writeVia() must abort the loop immediately on a non-UnsupportedCapability error, never try NSDP")
+		t.Fatal("writeVia() must propagate a non-UnsupportedCapability error immediately, never try NSDP")
 	}
 }
 
@@ -325,24 +314,27 @@ func TestWriteVia_OpCredentialErrorPropagatesImmediately(t *testing.T) {
 	m := fakeModel("fake", model.BackendSNMP, model.BackendNSDP)
 	sw := newTestSwitch(t, m)
 
-	err := sw.writeVia(context.Background(), "set_poe", func(w BackendWriter) error {
+	err := sw.writeVia(context.Background(), nil, func(w BackendWriter) error {
 		return w.SetPoE(context.Background(), 1, true, false)
 	})
 	if !errors.Is(err, model.ErrCredential) {
 		t.Fatalf("writeVia() error = %v, want wrapping ErrCredential", err)
 	}
 	if nsdpCalled {
-		t.Fatal("writeVia() must abort immediately when the op itself raises a non-UnsupportedCapability error")
+		t.Fatal("writeVia() must propagate immediately when the op itself raises a non-UnsupportedCapability error")
 	}
 }
 
 func TestWriteVia_UnregisteredBackendTreatedAsUnsupported(t *testing.T) {
+	// Under single-backend dispatch, only NSDP (the model's first-preference
+	// backend) is ever attempted -- the error must name NSDP as chosen, with
+	// HTTP appearing only in the hint, never as a "last tried" backend.
 	clearWriteBackendRegistry(t)
 
 	m := fakeModel("gs110emx-like", model.BackendNSDP, model.BackendHTTP)
 	sw := newTestSwitch(t, m)
 
-	err := sw.writeVia(context.Background(), "set_poe", func(w BackendWriter) error {
+	err := sw.writeVia(context.Background(), nil, func(w BackendWriter) error {
 		return w.SetPoE(context.Background(), 1, true, false)
 	})
 	if err == nil {
@@ -351,8 +343,11 @@ func TestWriteVia_UnregisteredBackendTreatedAsUnsupported(t *testing.T) {
 	if !errors.Is(err, model.ErrUnsupportedCapability) {
 		t.Fatalf("writeVia() error = %v, want wrapping ErrUnsupportedCapability", err)
 	}
-	if !strings.Contains(err.Error(), "http") {
-		t.Fatalf("writeVia() error = %q, want it to mention the last-tried unregistered backend (http)", err.Error())
+	if !strings.Contains(err.Error(), "the default backend nsdp cannot serve") {
+		t.Fatalf("writeVia() error = %q, want it to name nsdp as the (only) chosen backend", err.Error())
+	}
+	if !strings.Contains(err.Error(), "backend=Backend.<http>") {
+		t.Fatalf("writeVia() error = %q, want the hint to suggest http as an alternate", err.Error())
 	}
 }
 
@@ -370,7 +365,7 @@ func TestWriteVia_CancelledContextFailsFast(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sw.writeVia(ctx, "set_poe", func(w BackendWriter) error {
+	err := sw.writeVia(ctx, nil, func(w BackendWriter) error {
 		return w.SetPoE(ctx, 1, true, false)
 	})
 	if !errors.Is(err, context.Canceled) {
@@ -386,7 +381,7 @@ func TestWriteVia_NoApplicableBackendRaisesFreshError(t *testing.T) {
 	m := fakeModel("fake", model.BackendConsole) // not in backendPreference at all
 	sw := newTestSwitch(t, m)
 
-	err := sw.writeVia(context.Background(), "set_poe", func(w BackendWriter) error {
+	err := sw.writeVia(context.Background(), nil, func(w BackendWriter) error {
 		return w.SetPoE(context.Background(), 1, true, false)
 	})
 	if err == nil {
@@ -397,6 +392,9 @@ func TestWriteVia_NoApplicableBackendRaisesFreshError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "fake") {
 		t.Fatalf("writeVia() error = %q, want it to name the model", err.Error())
+	}
+	if !strings.Contains(err.Error(), "declares no backend this library can dispatch to") {
+		t.Fatalf("writeVia() error = %q, want resolveBackend's no-preference-match shape", err.Error())
 	}
 }
 
@@ -415,7 +413,7 @@ func TestWriteVia_WriterCacheBuilderCalledOnce(t *testing.T) {
 	sw := newTestSwitch(t, m)
 
 	for i := 0; i < 3; i++ {
-		if err := sw.writeVia(context.Background(), "set_poe", func(w BackendWriter) error {
+		if err := sw.writeVia(context.Background(), nil, func(w BackendWriter) error {
 			return w.SetPoE(context.Background(), 1, true, false)
 		}); err != nil {
 			t.Fatalf("writeVia() call %d error = %v", i, err)
@@ -445,7 +443,7 @@ func TestWriteVia_GateFailureIsNeverCached(t *testing.T) {
 	sw := newTestSwitch(t, m)
 
 	for i := 0; i < 3; i++ {
-		err := sw.writeVia(context.Background(), "set_poe", func(w BackendWriter) error {
+		err := sw.writeVia(context.Background(), nil, func(w BackendWriter) error {
 			return w.SetPoE(context.Background(), 1, true, false)
 		})
 		if !errors.Is(err, model.ErrUnsupportedCapability) {
@@ -458,37 +456,6 @@ func TestWriteVia_GateFailureIsNeverCached(t *testing.T) {
 	mu.Unlock()
 	if got != 3 {
 		t.Fatalf("builder called %d times, want exactly 3 (a gate failure must never be cached)", got)
-	}
-}
-
-func TestWriteVia_BackendOrderIsFixedNotModelOrder(t *testing.T) {
-	clearWriteBackendRegistry(t)
-	var order []string
-	record := func(name string) WriteBackendBuilder {
-		return func(_ *Switch) (BackendWriter, error) {
-			order = append(order, name)
-			return nil, fmt.Errorf("%s unsupported: %w", name, model.ErrUnsupportedCapability)
-		}
-	}
-	withRegisteredWriteBackend(t, model.BackendHTTP, record("http"))
-	withRegisteredWriteBackend(t, model.BackendNSDP, record("nsdp"))
-	withRegisteredWriteBackend(t, model.BackendSNMP, record("snmp"))
-
-	m := fakeModel("fake", model.BackendHTTP, model.BackendNSDP, model.BackendSNMP)
-	sw := newTestSwitch(t, m)
-
-	_ = sw.writeVia(context.Background(), "set_poe", func(w BackendWriter) error {
-		return w.SetPoE(context.Background(), 1, true, false)
-	})
-
-	want := []string{"snmp", "nsdp", "http"}
-	if len(order) != len(want) {
-		t.Fatalf("build order = %v, want %v", order, want)
-	}
-	for i := range want {
-		if order[i] != want[i] {
-			t.Fatalf("build order = %v, want %v", order, want)
-		}
 	}
 }
 
@@ -513,7 +480,7 @@ func TestRegisterWriteBackend_ConcurrentRegisterAndDispatch(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = sw.writeVia(context.Background(), "set_poe", func(w BackendWriter) error {
+			_ = sw.writeVia(context.Background(), nil, func(w BackendWriter) error {
 				return w.SetPoE(context.Background(), 1, true, false)
 			})
 		}()
@@ -867,6 +834,55 @@ func TestDeleteVlan_GuardPropagatesNonUnsupportedReadError(t *testing.T) {
 	}
 	if writerBuilt {
 		t.Fatal("DeleteVlan() must not dispatch to the writer when the guard's read fails with a non-UnsupportedCapability error")
+	}
+}
+
+func TestDeleteVlan_GuardReadRunsOverWriteBackendOverride(t *testing.T) {
+	// D-REC A.7/A.10.7: readOptsForBackend threads Write.Backend into the
+	// guard's own GetVLANs read, so the guard checks the SAME backend the
+	// delete itself will use, not the facade's default (new plumbing versus
+	// the pre-reconciliation Go source, which always read the default
+	// backend regardless of o.Backend). Register SNMP -- the model's
+	// default, first in backendPreference -- as a reader whose VLAN 20 DOES
+	// clash with a protected port, and NSDP as a reader whose VLAN 20 does
+	// NOT. If the guard read the default (SNMP) it would block; since
+	// Write.Backend explicitly names NSDP, it must read NSDP instead and
+	// proceed.
+	clearBackendRegistry(t)
+	clearWriteBackendRegistry(t)
+	snmpReaderBuilt := false
+	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
+		snmpReaderBuilt = true
+		return &fakeVLANReader{vlans: []model.VLANInfo{{VlanID: 20, MemberPorts: []int{5}}}}, nil
+	})
+	nsdpReaderBuilt := false
+	withRegisteredBackend(t, model.BackendNSDP, func(_ *Switch) (BackendReader, error) {
+		nsdpReaderBuilt = true
+		return &fakeVLANReader{vlans: []model.VLANInfo{{VlanID: 20, MemberPorts: []int{1, 2}}}}, nil
+	})
+	fw := &fakeWriter{}
+	withRegisteredWriteBackend(t, model.BackendNSDP, func(_ *Switch) (BackendWriter, error) {
+		return fw, nil
+	})
+
+	m := fakeModel("fake", model.BackendSNMP, model.BackendNSDP)
+	sw, err := New(m, "10.0.0.1", WithProtectedPorts(5))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	nsdp := model.BackendNSDP
+	if err := sw.DeleteVlan(context.Background(), 20, Write{Backend: &nsdp}); err != nil {
+		t.Fatalf("DeleteVlan() error = %v, want nil (guard must have read NSDP's VLAN 20, which has no protected member)", err)
+	}
+	if snmpReaderBuilt {
+		t.Fatal("DeleteVlan() guard read the facade-default SNMP backend instead of the explicitly-requested NSDP backend")
+	}
+	if !nsdpReaderBuilt {
+		t.Fatal("DeleteVlan() guard never read the explicitly-requested NSDP backend")
+	}
+	if fw.deleteVlanCall == nil || fw.deleteVlanCall.vlanID != 20 {
+		t.Fatalf("DeleteVlan() writer call = %+v, want a dispatched call for vlanID=20 over NSDP", fw.deleteVlanCall)
 	}
 }
 

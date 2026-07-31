@@ -234,6 +234,37 @@ func TestOIDMapVlanRows(t *testing.T) {
 	}
 }
 
+// TestOIDMapVlanUsesSeededVLANPortListWidthOverFormula proves State.OIDMap
+// prefers a set VLANPortListWidth over snmp.VlanBitmapWidth's port-count
+// formula (D-REC Topic B) -- mirroring Python's `vlan_portlist_width or
+// vlan_bitmap_width(model)` preference exactly. Uses a width (79) that
+// diverges sharply from the 52-port model's formula width (8) so any
+// silent fallback to the formula would fail this test loudly.
+func TestOIDMapVlanUsesSeededVLANPortListWidthOverFormula(t *testing.T) {
+	st := NewState("gsm7252ps")
+	st.VLANPortListWidth = model.Ptr(79)
+	st.Vlans[90] = &VlanSim{
+		Name:     "iot",
+		Member:   map[int]bool{1: true, 2: true, 10: true},
+		Untagged: map[int]bool{1: true},
+	}
+
+	m := st.OIDMap()
+	egress := m[colKey(snmp.Dot1qVlanStaticEgress, 90)]
+	if got := len(egress.Value); got != 79 {
+		t.Errorf("egress bitmap width = %d, want 79 (the seeded VLANPortListWidth, not the formula's 8)", got)
+	}
+	untagged := m[colKey(snmp.Dot1qVlanStaticUntagged, 90)]
+	if got := len(untagged.Value); got != 79 {
+		t.Errorf("untagged bitmap width = %d, want 79", got)
+	}
+	// Membership decodes correctly regardless of the wider width -- extra
+	// trailing zero bytes contribute no ports.
+	if diff := cmp.Diff([]int{1, 2, 10}, snmp.DecodePortBitmap([]byte(egress.Value))); diff != "" {
+		t.Errorf("egress bitmap round-trip mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestOIDMapPvidRows(t *testing.T) {
 	st := NewState("gsm7252ps")
 	st.Pvids[10] = 90
