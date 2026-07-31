@@ -10,6 +10,8 @@ package netgearswitch
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/mithro/go-netgear-switch-library/model"
@@ -420,5 +422,58 @@ func TestUploadCertificate_BypassesReadsVerifiedGate(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("UploadCertificate() error = nil, want an error from the fake's non-success page")
+	}
+}
+
+// --- PRINCIPLE-1: explicit backend=HTTP never invokes the SNMP builder ---
+
+// TestPrincipleOne_ExplicitHTTPRequestNeverInvokesSNMPBuilder is the
+// builder-invocation SPY proof that an explicit backend=HTTP request never
+// falls back to (or even TOUCHES) SNMP -- mirroring switch_test.go's own
+// TestReadVia_NoFallbackWhenChosenBackendCannotServe (the nil-requested/
+// default-backend case) but for the EXPLICIT-requested case instead: the
+// model declares BOTH SNMP and HTTP, HTTP genuinely refuses the op, and
+// SNMP -- despite being registered, declared by the model, and configured
+// to happily succeed if ever reached -- must NEVER be invoked at all. This
+// is a STRONGER guarantee than an error-text check (facade_http_integration_
+// test.go's own M430024X companion test): a regression that reintroduced
+// ANY silent-fallback code path would flip snmpBuilt to true here even if
+// it happened to produce an error message that still mentioned "http" by
+// coincidence.
+func TestPrincipleOne_ExplicitHTTPRequestNeverInvokesSNMPBuilder(t *testing.T) {
+	clearBackendRegistry(t)
+
+	snmpBuilt := false
+	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
+		snmpBuilt = true
+		return &fakeReader{}, nil // would happily serve the op if ever reached
+	})
+	httpErr := fmt.Errorf("model %q HTTP reads are UNVERIFIED-pending-capture: %w", "fake", model.ErrUnsupportedCapability)
+	withRegisteredBackend(t, model.BackendHTTP, func(_ *Switch) (BackendReader, error) {
+		return nil, httpErr
+	})
+
+	m := fakeModel("fake", model.BackendSNMP, model.BackendHTTP)
+	sw, err := New(m, "10.0.0.1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	requestedHTTP := model.BackendHTTP
+	err = sw.readVia(context.Background(), &requestedHTTP, func(r BackendReader) error {
+		_, err := r.GetPorts(context.Background())
+		return err
+	})
+	if err == nil {
+		t.Fatal("readVia(requested=HTTP) error = nil, want HTTP's UnsupportedCapability error")
+	}
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("readVia(requested=HTTP) error = %v, want wrapping ErrUnsupportedCapability", err)
+	}
+	if !strings.Contains(err.Error(), "the requested backend http cannot serve") {
+		t.Fatalf("readVia(requested=HTTP) error = %q, want the cannotServe requested-branch shape naming http", err.Error())
+	}
+	if snmpBuilt {
+		t.Fatal("readVia(requested=HTTP) invoked the SNMP builder -- an explicit backend=HTTP request must NEVER fall back to (or even touch) another backend, even one the model declares and that would have happily served the op")
 	}
 }

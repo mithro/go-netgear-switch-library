@@ -381,14 +381,23 @@ func TestFacadeHTTPIntegration_M430024XReadsNonVacuousAndSetPortEnabledRoundTrip
 	}
 }
 
-// TestFacadeHTTPIntegration_M430024XUnsupportedPoEAndPrincipleOneNoFallback
-// is the PRINCIPLE-1 capstone: m4300-24x genuinely has NO PoE hardware, so
+// TestFacadeHTTPIntegration_M430024XUnsupportedPoENamesOnlyItsOwnBackend is
+// an end-to-end (real VirtualSwitch, real dispatch) companion to the
+// PRINCIPLE-1 proofs elsewhere: m4300-24x genuinely has NO PoE hardware, so
 // BOTH its default backend (SNMP) AND an explicit backend=HTTP request
 // refuse GetPoE -- but for DIFFERENT reasons, and each error must name its
-// OWN backend. If HTTP's failure ever silently fell back to (or was
-// conflated with) SNMP's, this test would catch it: the two error messages
-// must each name their own protocol, never the other one's.
-func TestFacadeHTTPIntegration_M430024XUnsupportedPoEAndPrincipleOneNoFallback(t *testing.T) {
+// OWN backend, never the other one's. This is an ERROR-TEXT check only (an
+// op NEITHER backend can serve, so a hypothetical silent-fallback bug would
+// still error here, just with the wrong wording) -- the two OUTCOME-based
+// proofs that a fallback bug genuinely could not survive are
+// TestPrincipleOne_ExplicitHTTPRequestNeverInvokesSNMPBuilder
+// (backend_http_test.go: a builder-invocation SPY proves the SNMP builder
+// is never even CALLED) and
+// TestFacadeHTTPIntegration_ReadsVerifiedGateRefusesBeforeSessionUse (below:
+// HTTP's gate fails on an op SNMP genuinely COULD serve, so a real fallback
+// would silently SUCCEED via SNMP instead of erroring -- this test alone
+// could not catch that class of bug, which is why the other two exist).
+func TestFacadeHTTPIntegration_M430024XUnsupportedPoENamesOnlyItsOwnBackend(t *testing.T) {
 	vsw := startVirtualSwitch(t, "m4300-24x")
 	sw := httpFacadeFor(t, vsw, "m4300-24x")
 
@@ -434,15 +443,39 @@ func TestFacadeHTTPIntegration_GSM7252PSReadsNonVacuousAndPoEWriteRoundTrip(t *t
 	defer cancel()
 
 	// gsm7252ps's HTTP sysInfo sensor set is its OWN (state.SysinfoSensors(),
-	// distinct from the SNMP entity table) -- non-vacuous is the point here
-	// (the exact row count is a rendering/parsing-layer detail already
-	// pinned by webui/virtual's own test suites).
+	// distinct from the SNMP entity table), traced through
+	// webui.ParseXESensors exactly: 5 temperature rows (System=29, CPU=49,
+	// MAC="N/A" SKIPPED -- parseIntCell rejects non-numeric, MAC-A=32,
+	// MAC-B=31 -> 4 kept) + 5 fan-health rows (Fan1/PWR/Fan2/CPU/Fan3/SYS=
+	// "OK" kept, Fan4/Fan5="NA" SKIPPED by xeAbsentText -> 3 kept) + the
+	// Device-Status table's RPS/Power Module rows ("Operational" kept,
+	// filtered to exactly those two labels by xePowerRows -> 2 kept) = 9.
 	sensors, err := sw.GetSensors(ctx, overHTTP())
 	if err != nil {
 		t.Fatalf("GetSensors() error = %v", err)
 	}
-	if len(sensors) == 0 {
-		t.Error("len(GetSensors()) = 0, want non-vacuous (gsm7252ps has a live HTTP sensor table)")
+	if len(sensors) != 9 {
+		t.Fatalf("len(GetSensors()) = %d, want 9", len(sensors))
+	}
+	var foundCPUTemp, foundFan2, foundRPS bool
+	for _, s := range sensors {
+		switch {
+		case s.Name == "CPU" && s.Kind == "temperature" && s.Value == 49:
+			foundCPUTemp = true
+		case s.Name == "Fan2/CPU" && s.Kind == "fan" && s.Value == 1:
+			foundFan2 = true
+		case s.Name == "RPS" && s.Kind == "power" && s.Value == 1:
+			foundRPS = true
+		}
+	}
+	if !foundCPUTemp {
+		t.Error("GetSensors(): no CPU temperature reading of 49C")
+	}
+	if !foundFan2 {
+		t.Error("GetSensors(): no healthy (1.0) Fan2/CPU fan-state reading")
+	}
+	if !foundRPS {
+		t.Error("GetSensors(): no healthy (1.0) RPS power-state reading")
 	}
 
 	mgmt, err := sw.GetMgmtIP(ctx, overHTTP())
@@ -527,16 +560,37 @@ func TestFacadeHTTPIntegration_GS728TPPReadsAndUnsupportedStatsAndCertUpload(t *
 	ctx, cancel := context.WithTimeout(context.Background(), facadeTestTimeout)
 	defer cancel()
 
-	// gs728tpp's HTTPSensors seed (9 raw entries: power/fan/temperature) is
-	// filtered by GoAhead's own status-flag semantics before it reaches
-	// model.Sensor -- non-vacuous is the point here, not the exact row
-	// count (already pinned by webui/virtual's own dedicated test suites).
+	// gs728tpp's HTTPSensors seed (9 raw entries) is filtered by
+	// webui.ParseGoAheadSensors' status-flag semantics exactly: fan1Status/
+	// fan2Status="1" kept (healthy), fan3/4/5Status="5" SKIPPED
+	// (goaheadAbsentStatus); mainPSStatus/redundantPSStatus="1" both kept;
+	// tempSensorValue="0" fails the `temp > 0` guard (a captured 0 is not a
+	// real reading) so NO temperature entry is emitted at all -- 2 fans + 2
+	// power + 0 temperature = 4.
 	sensors, err := sw.GetSensors(ctx, overHTTP())
 	if err != nil {
 		t.Fatalf("GetSensors() error = %v", err)
 	}
-	if len(sensors) == 0 {
-		t.Error("len(GetSensors()) = 0, want non-vacuous (gs728tpp has a live HTTP sensor table)")
+	if len(sensors) != 4 {
+		t.Fatalf("len(GetSensors()) = %d, want 4", len(sensors))
+	}
+	var foundFan1, foundMainPS bool
+	for _, s := range sensors {
+		if s.Kind == "temperature" {
+			t.Errorf("GetSensors(): unexpected temperature entry %+v (tempSensorValue=0 must be excluded by the temp>0 guard)", s)
+		}
+		switch {
+		case s.Name == "Fan1" && s.Kind == "fan" && s.Value == 1:
+			foundFan1 = true
+		case s.Name == "Main PS" && s.Kind == "power" && s.Value == 1:
+			foundMainPS = true
+		}
+	}
+	if !foundFan1 {
+		t.Error("GetSensors(): no healthy (1.0) Fan1 fan-state reading")
+	}
+	if !foundMainPS {
+		t.Error("GetSensors(): no healthy (1.0) Main PS power-state reading")
 	}
 
 	ports, err := sw.GetPorts(ctx, overHTTP())
