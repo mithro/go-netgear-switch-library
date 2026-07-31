@@ -206,25 +206,26 @@ func TestHTTPFace404ForUnspeccedPath(t *testing.T) {
 
 // TestHTTPFaceNonStandardDialectReadPagesAreHonestly404 is a deliberate
 // tripwire (dispatchRender's doc comment / principles 1 & 5): every dialect
-// OTHER than HTMLDialectStandard has no renderer wired in this task, so a
-// known, spec-advertised read page must 404 honestly rather than silently
-// falling through to the STANDARD-dialect fallback (which would render a
-// plausible-looking page in the WRONG shape, built from real seeded data --
-// worse than a 404, since it would false-green a caller's integration
-// against a page this mock cannot actually produce yet).
+// OTHER than HTMLDialectStandard/HTMLDialectGS110EMX/HTMLDialectGS105PE has
+// no renderer wired yet, so a known, spec-advertised read page must 404
+// honestly rather than silently falling through to the STANDARD-dialect
+// fallback (which would render a plausible-looking page in the WRONG shape,
+// built from real seeded data -- worse than a 404, since it would
+// false-green a caller's integration against a page this mock cannot
+// actually produce yet).
 //
-// Tasks 9/10 MUST update this test (per model, as its real renderer lands)
-// to assert a genuine render instead -- a green run of this test after
-// Tasks 9/10 land a dialect's renderer means that dialect's own tripwire
-// case was never removed, not that the renderer is still missing.
+// Task 9 FLIPPED the GS110EMX/GS105PE cases (removed below -- both dialects
+// now genuinely render, see TestHTTPFaceGS110EMX*/TestHTTPFaceGS105PE*).
+// Task 10 MUST update this test the same way (per model, as its real
+// renderer lands) -- a green run of this test after Task 10 lands a
+// dialect's renderer means that dialect's own tripwire case was never
+// removed, not that the renderer is still missing.
 func TestHTTPFaceNonStandardDialectReadPagesAreHonestly404(t *testing.T) {
 	tests := []struct {
 		name     string
 		modelKey string
 		dialect  webui.HTMLDialect
 	}{
-		{"GS110EMX/gs110emx", "gs110emx", webui.HTMLDialectGS110EMX},
-		{"GS105PE/gs105pe", "gs105pe", webui.HTMLDialectGS105PE},
 		{"M4300/m4300-24x", "m4300-24x", webui.HTMLDialectM4300},
 		{"M4300/m4300-16x", "m4300-16x", webui.HTMLDialectM4300},
 		{"XEFastpath/gsm7252ps", "gsm7252ps", webui.HTMLDialectXEFastpath},
@@ -642,6 +643,462 @@ func vlanIDPresent(vlans []model.VLANInfo, vid int) bool {
 		}
 	}
 	return false
+}
+
+// -- Wired dialect (GS110EMX) end-to-end (Task 9) ------------------------
+//
+// Mirrors the Python pinned reference's test_gs110emx_http_reader_end_to_end
+// (tests/virtual/test_virtual_http_face.py) and
+// test_http_and_nsdp_reads_agree[gs110emx]
+// (tests/test_cross_backend_equivalence.py): a real webui.HTTPClient/Reader
+// against this GAMBIT-scheme mock must read back exactly the seeded State,
+// proving the byte-faithful renderGS110EMXPage dispatch round-trips through
+// the Task-2 parsers (ParseGS110EMXPortStatus/ParseInterfaceStats/
+// ParseGS110EMXPVIDs/ParseGS110EMXVlanIDs/ParseSysInfo).
+
+func gs110emxTestReader(t *testing.T, st *State) (*webui.Reader, string) {
+	t.Helper()
+	m, err := model.GetModel("gs110emx")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", spec)
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	return reader, addr
+}
+
+func TestHTTPFaceGS110EMXReadPortsMatchesSeed(t *testing.T) {
+	st := SeedGS110EMX()
+	reader, _ := gs110emxTestReader(t, st)
+	ports, err := reader.GetPorts(context.Background())
+	if err != nil {
+		t.Fatalf("GetPorts() error = %v", err)
+	}
+	if len(ports) != len(st.Ports) {
+		t.Fatalf("GetPorts() returned %d ports, want %d (seeded)", len(ports), len(st.Ports))
+	}
+	for _, p := range ports {
+		want, ok := st.Ports[p.Port]
+		if !ok {
+			t.Fatalf("GetPorts() returned unknown port %d", p.Port)
+		}
+		if p.LinkUp != want.Link {
+			t.Errorf("port %d LinkUp = %v, want %v", p.Port, p.LinkUp, want.Link)
+		}
+		if p.AdminEnabled != want.Admin {
+			t.Errorf("port %d AdminEnabled = %v, want %v", p.Port, p.AdminEnabled, want.Admin)
+		}
+		if want.Link {
+			if p.SpeedMbps == nil || *p.SpeedMbps != want.Speed {
+				t.Errorf("port %d SpeedMbps = %v, want %d", p.Port, p.SpeedMbps, want.Speed)
+			}
+		}
+		wantName := want.Name
+		if want.Description != nil {
+			wantName = *want.Description
+		}
+		if p.Name == nil || *p.Name != wantName {
+			t.Errorf("port %d Name = %v, want %q", p.Port, p.Name, wantName)
+		}
+	}
+}
+
+// TestHTTPFaceGS110EMXGetStats exercises RenderGS110EMXInterfaceStats's
+// deliberately malformed never-closed <tr class="portID"> rows read back
+// through webui.ParseInterfaceStats.
+func TestHTTPFaceGS110EMXGetStats(t *testing.T) {
+	st := SeedGS110EMX()
+	reader, _ := gs110emxTestReader(t, st)
+	stats, err := reader.GetStats(context.Background())
+	if err != nil {
+		t.Fatalf("GetStats() error = %v", err)
+	}
+	if len(stats) != len(st.Ports) {
+		t.Fatalf("GetStats() returned %d rows, want %d (seeded)", len(stats), len(st.Ports))
+	}
+	for _, s := range stats {
+		want := st.Ports[s.Port]
+		if s.RxBytes == nil || *s.RxBytes != u64OrZero(want.RxOctets) {
+			t.Errorf("port %d RxBytes = %v, want %d", s.Port, s.RxBytes, u64OrZero(want.RxOctets))
+		}
+		if s.TxBytes == nil || *s.TxBytes != u64OrZero(want.TxOctets) {
+			t.Errorf("port %d TxBytes = %v, want %d", s.Port, s.TxBytes, u64OrZero(want.TxOctets))
+		}
+		if s.RxErrors == nil || *s.RxErrors != u64OrZero(want.RxErrors) {
+			t.Errorf("port %d RxErrors = %v, want %d", s.Port, s.RxErrors, u64OrZero(want.RxErrors))
+		}
+	}
+}
+
+func TestHTTPFaceGS110EMXGetPVIDs(t *testing.T) {
+	st := SeedGS110EMX()
+	reader, _ := gs110emxTestReader(t, st)
+	pvids, err := reader.GetPVIDs(context.Background())
+	if err != nil {
+		t.Fatalf("GetPVIDs() error = %v", err)
+	}
+	got := make(map[int]int, len(pvids))
+	for _, p := range pvids {
+		got[p.Port] = p.Vlan
+	}
+	for port, want := range st.Pvids {
+		if got[port] != want {
+			t.Errorf("port %d PVID = %d, want %d (seeded)", port, got[port], want)
+		}
+	}
+}
+
+// TestHTTPFaceGS110EMXGetVLANs reads back the seeded VLAN table via the
+// GAMBIT-scheme per-VLAN vlanMembership.html POST loop, exercising
+// RenderGS110EMXCf8021q + RenderGS110EMXVlanMembership together.
+func TestHTTPFaceGS110EMXGetVLANs(t *testing.T) {
+	st := SeedGS110EMX()
+	reader, _ := gs110emxTestReader(t, st)
+	vlans, err := reader.GetVLANs(context.Background())
+	if err != nil {
+		t.Fatalf("GetVLANs() error = %v", err)
+	}
+	if len(vlans) != len(st.Vlans) {
+		t.Fatalf("GetVLANs() returned %d VLANs, want %d (seeded)", len(vlans), len(st.Vlans))
+	}
+	for _, v := range vlans {
+		wantSim, ok := st.Vlans[v.VlanID]
+		if !ok {
+			t.Fatalf("GetVLANs() returned unknown VLAN %d", v.VlanID)
+		}
+		if len(v.MemberPorts) != len(wantSim.Member) {
+			t.Errorf("VLAN %d MemberPorts = %v, want %d ports (seeded member set)", v.VlanID, v.MemberPorts, len(wantSim.Member))
+		}
+		for _, p := range v.UntaggedPorts {
+			if !wantSim.Untagged[p] {
+				t.Errorf("VLAN %d reports port %d untagged, seed does not", v.VlanID, p)
+			}
+		}
+		for _, p := range v.TaggedPorts {
+			if !wantSim.Member[p] || wantSim.Untagged[p] {
+				t.Errorf("VLAN %d reports port %d tagged, seed disagrees", v.VlanID, p)
+			}
+		}
+	}
+}
+
+// TestHTTPFaceGS110EMXGetMgmtIP exercises RenderGS110EMXSysinfo's
+// mgmt-IP/DHCP-mode fields (webui.ParseSysInfo's data-select-value
+// convention), mirroring the Python cross-backend equivalence test's
+// mgmt-IP assertion for gs110emx.
+func TestHTTPFaceGS110EMXGetMgmtIP(t *testing.T) {
+	st := SeedGS110EMX()
+	reader, _ := gs110emxTestReader(t, st)
+	mgmt, err := reader.GetMgmtIP(context.Background())
+	if err != nil {
+		t.Fatalf("GetMgmtIP() error = %v", err)
+	}
+	if mgmt.Address == nil || *mgmt.Address != st.Mgmt.Address {
+		t.Errorf("GetMgmtIP().Address = %v, want %q", mgmt.Address, st.Mgmt.Address)
+	}
+	if mgmt.Netmask == nil || *mgmt.Netmask != st.Mgmt.Netmask {
+		t.Errorf("GetMgmtIP().Netmask = %v, want %q", mgmt.Netmask, st.Mgmt.Netmask)
+	}
+	if mgmt.Gateway == nil || *mgmt.Gateway != st.Mgmt.Gateway {
+		t.Errorf("GetMgmtIP().Gateway = %v, want %q", mgmt.Gateway, st.Mgmt.Gateway)
+	}
+	if mgmt.Mode != model.IPModeStatic {
+		t.Errorf("GetMgmtIP().Mode = %v, want IPModeStatic (seed is static)", mgmt.Mode)
+	}
+	wantMac := strings.ToUpper(formatGS110EMXMac(st.NsdpMac))
+	if mgmt.BaseMac == nil || *mgmt.BaseMac != wantMac {
+		t.Errorf("GetMgmtIP().BaseMac = %v, want %q", mgmt.BaseMac, wantMac)
+	}
+}
+
+// TestHTTPFaceGS110EMXWriterSetPortEnabled drives webui.Writer.SetPortEnabled
+// end-to-end against the GS110EMX's OWN port-admin mechanism (Physical Mode
+// on port_settings.html, not the FASTPATH XUI grid) -- the one write op
+// web_gs110emx.py actually implements (ApplyGS110EMXPortSettings), mirroring
+// Python's http_write.py._set_gs110emx_port_enabled live-verified behavior.
+func TestHTTPFaceGS110EMXWriterSetPortEnabled(t *testing.T) {
+	st := SeedGS110EMX()
+	m, err := model.GetModel("gs110emx")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	if !st.Ports[3].Admin {
+		t.Fatalf("test fixture assumption broken: port 3 admin must start enabled")
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	if err := writer.SetPortEnabled(context.Background(), 3, false, false); err != nil {
+		t.Fatalf("SetPortEnabled(port=3, false) error = %v", err)
+	}
+
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	ports, err := reader.GetPorts(context.Background())
+	if err != nil {
+		t.Fatalf("GetPorts() error = %v", err)
+	}
+	for _, p := range ports {
+		if p.Port == 3 && p.AdminEnabled {
+			t.Errorf("port 3 AdminEnabled after SetPortEnabled(false) = true, want false")
+		}
+	}
+}
+
+// TestHTTPFaceGS110EMXWriterSetPVIDHasNoCSRFHash pins a documented,
+// preserved-from-Python behavior (not a Go-side bug): webui.Writer.SetPVID
+// (mirroring Python HttpWriter.set_pvid verbatim, see writer.go's package
+// doc comment) always scrapes a `name="hash"` CSRF token off the PVID page
+// before POSTing, via the SAME requireCSRF helper every Plus-CGI write op
+// uses -- but GS110EMX's vlan_pvidsetting.html carries no such field at all
+// (its session identity is the Gambit query token, not a per-page hash), so
+// this write genuinely cannot succeed against gs110emx over HTTP. No Python
+// test exercises HttpWriter.set_pvid against gs110emx either (dossier §8's
+// test inventory has no such case) -- this is a genuine capability gap of
+// the pinned reference, not something this port should paper over. (Compare
+// TestHTTPFaceGS110EMXWriterSetPortEnabled, the ONE write op gs110emx's own
+// web_gs110emx.py genuinely implements.)
+func TestHTTPFaceGS110EMXWriterSetPVIDHasNoCSRFHash(t *testing.T) {
+	st := SeedGS110EMX()
+	m, err := model.GetModel("gs110emx")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	wantUnchanged := st.Pvids[3]
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	err = writer.SetPVID(context.Background(), 3, wantUnchanged+1, false)
+	if err == nil {
+		t.Fatalf("SetPVID() against gs110emx error = nil, want an error (no CSRF hash field on this model's PVID page, see doc comment)")
+	}
+	if !errors.Is(err, model.ErrHTTP) {
+		t.Errorf("SetPVID() against gs110emx error = %v, want errors.Is(..., model.ErrHTTP)", err)
+	}
+	if st.Pvids[3] != wantUnchanged {
+		t.Errorf("state.Pvids[3] after a refused SetPVID = %d, want unchanged %d", st.Pvids[3], wantUnchanged)
+	}
+}
+
+// -- Wired dialect (GS105PE) end-to-end (Task 9) --------------------------
+//
+// Mirrors the Python pinned reference's test_http_and_nsdp_reads_agree
+// parametrization over gs105pe (tests/test_cross_backend_equivalence.py) --
+// its docstring notes gs105pe is included "because its HTTP face once
+// silently reported every port down while the seed had two ports up",
+// exactly the renderGS105PEPage dispatch this task wires (dossier §3.3 step
+// 4 / faces/http.py._render_gs105pe_page).
+
+func gs105peTestReader(t *testing.T, st *State) *webui.Reader {
+	t.Helper()
+	m, err := model.GetModel("gs105pe")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", spec)
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	return reader
+}
+
+func TestHTTPFaceGS105PEReadPortsMatchesSeed(t *testing.T) {
+	st := SeedGS105PE()
+	if st.Ports[3].Link == st.Ports[1].Link {
+		t.Fatalf("test fixture assumption broken: seed must have a mix of up/down ports")
+	}
+	reader := gs105peTestReader(t, st)
+	ports, err := reader.GetPorts(context.Background())
+	if err != nil {
+		t.Fatalf("GetPorts() error = %v", err)
+	}
+	if len(ports) != len(st.Ports) {
+		t.Fatalf("GetPorts() returned %d ports, want %d (seeded)", len(ports), len(st.Ports))
+	}
+	for _, p := range ports {
+		want, ok := st.Ports[p.Port]
+		if !ok {
+			t.Fatalf("GetPorts() returned unknown port %d", p.Port)
+		}
+		if p.LinkUp != want.Link {
+			t.Errorf("port %d LinkUp = %v, want %v (this is the exact regression web_gs105pe.go's renderGS105PEPage dispatch fixes)", p.Port, p.LinkUp, want.Link)
+		}
+		if want.Link {
+			if p.SpeedMbps == nil || *p.SpeedMbps != want.Speed {
+				t.Errorf("port %d SpeedMbps = %v, want %d", p.Port, p.SpeedMbps, want.Speed)
+			}
+		}
+	}
+}
+
+// TestHTTPFaceGS105PEGetStats exercises RenderGS105PEPortStatistics's hidden
+// (hi, lo) 32-bit counter-half quirk read back through
+// webui.ParseGS105PEStats.
+func TestHTTPFaceGS105PEGetStats(t *testing.T) {
+	st := SeedGS105PE()
+	reader := gs105peTestReader(t, st)
+	stats, err := reader.GetStats(context.Background())
+	if err != nil {
+		t.Fatalf("GetStats() error = %v", err)
+	}
+	if len(stats) != len(st.Ports) {
+		t.Fatalf("GetStats() returned %d rows, want %d (seeded)", len(stats), len(st.Ports))
+	}
+	for _, s := range stats {
+		want := st.Ports[s.Port]
+		if s.RxBytes == nil || *s.RxBytes != u64OrZero(want.RxOctets) {
+			t.Errorf("port %d RxBytes = %v, want %d", s.Port, s.RxBytes, u64OrZero(want.RxOctets))
+		}
+		if s.TxBytes == nil || *s.TxBytes != u64OrZero(want.TxOctets) {
+			t.Errorf("port %d TxBytes = %v, want %d", s.Port, s.TxBytes, u64OrZero(want.TxOctets))
+		}
+		if s.RxErrors == nil || *s.RxErrors != u64OrZero(want.RxErrors) {
+			t.Errorf("port %d RxErrors = %v, want %d", s.Port, s.RxErrors, u64OrZero(want.RxErrors))
+		}
+	}
+}
+
+func TestHTTPFaceGS105PEGetPVIDs(t *testing.T) {
+	st := SeedGS105PE()
+	reader := gs105peTestReader(t, st)
+	pvids, err := reader.GetPVIDs(context.Background())
+	if err != nil {
+		t.Fatalf("GetPVIDs() error = %v", err)
+	}
+	got := make(map[int]int, len(pvids))
+	for _, p := range pvids {
+		got[p.Port] = p.Vlan
+	}
+	for port, want := range st.Pvids {
+		if got[port] != want {
+			t.Errorf("port %d PVID = %d, want %d (seeded)", port, got[port], want)
+		}
+	}
+}
+
+// TestHTTPFaceGS105PEGetVLANs reads back the seeded VLAN table via the
+// Plus-CGI 8021qMembe.cgi per-VLAN POST loop (the gs105pe-specific
+// CSRF-hash/selected-VLAN quirks, dossier §1.4), exercising
+// RenderGS105PEVlanConfig + RenderGS105PEVlanMembership together.
+func TestHTTPFaceGS105PEGetVLANs(t *testing.T) {
+	st := SeedGS105PE()
+	reader := gs105peTestReader(t, st)
+	vlans, err := reader.GetVLANs(context.Background())
+	if err != nil {
+		t.Fatalf("GetVLANs() error = %v", err)
+	}
+	if len(vlans) != len(st.Vlans) {
+		t.Fatalf("GetVLANs() returned %d VLANs, want %d (seeded)", len(vlans), len(st.Vlans))
+	}
+	for _, v := range vlans {
+		wantSim, ok := st.Vlans[v.VlanID]
+		if !ok {
+			t.Fatalf("GetVLANs() returned unknown VLAN %d", v.VlanID)
+		}
+		if len(v.MemberPorts) != len(wantSim.Member) {
+			t.Errorf("VLAN %d MemberPorts = %v, want %d ports (seeded member set)", v.VlanID, v.MemberPorts, len(wantSim.Member))
+		}
+		for _, p := range v.UntaggedPorts {
+			if !wantSim.Untagged[p] {
+				t.Errorf("VLAN %d reports port %d untagged, seed does not", v.VlanID, p)
+			}
+		}
+	}
+}
+
+// TestHTTPFaceGS105PEGetMgmtIP exercises RenderGS105PESwitchInfo read back
+// through webui.ParseGS105PESysInfo (the lowercase ip_address/subnet_mask/
+// gateway_address field-name convention, distinct from GS110EMX's uppercase
+// IP_ADDRESS/etc).
+func TestHTTPFaceGS105PEGetMgmtIP(t *testing.T) {
+	st := SeedGS105PE()
+	reader := gs105peTestReader(t, st)
+	mgmt, err := reader.GetMgmtIP(context.Background())
+	if err != nil {
+		t.Fatalf("GetMgmtIP() error = %v", err)
+	}
+	if mgmt.Address == nil || *mgmt.Address != st.Mgmt.Address {
+		t.Errorf("GetMgmtIP().Address = %v, want %q", mgmt.Address, st.Mgmt.Address)
+	}
+	if mgmt.Netmask == nil || *mgmt.Netmask != st.Mgmt.Netmask {
+		t.Errorf("GetMgmtIP().Netmask = %v, want %q", mgmt.Netmask, st.Mgmt.Netmask)
+	}
+	if mgmt.Gateway == nil || *mgmt.Gateway != st.Mgmt.Gateway {
+		t.Errorf("GetMgmtIP().Gateway = %v, want %q", mgmt.Gateway, st.Mgmt.Gateway)
+	}
+	if mgmt.Mode != model.IPModeDHCP {
+		t.Errorf("GetMgmtIP().Mode = %v, want IPModeDHCP (seed is dhcp)", mgmt.Mode)
+	}
+	wantMac := strings.ToUpper(formatGS105PEMac(st.NsdpMac))
+	if mgmt.BaseMac == nil || *mgmt.BaseMac != wantMac {
+		t.Errorf("GetMgmtIP().BaseMac = %v, want %q", mgmt.BaseMac, wantMac)
+	}
+}
+
+// TestHTTPFaceGS105PEWriterSetPVIDNeverAppliesOnThisMock pins a documented,
+// preserved-from-Python behavior (not a Go-side bug): web_gs105pe.py has NO
+// apply_* functions, and Python's own do_POST elif-chain priority means a
+// POST to gs105pe's pvid_path is intercepted by _render_gs105pe_page (a
+// read-only re-render of unmutated state) BEFORE it could ever reach
+// web.py's generic apply_form fallback -- so on this mock, gs105pe HTTP
+// writes never take effect. No Python test exercises HttpWriter.set_pvid
+// against gs105pe either (dossier §8's test inventory has no such case),
+// consistent with this being a genuine, if surprising, capability gap of
+// the pinned reference rather than something this port should paper over.
+func TestHTTPFaceGS105PEWriterSetPVIDNeverAppliesOnThisMock(t *testing.T) {
+	st := SeedGS105PE()
+	m, err := model.GetModel("gs105pe")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	wantUnchanged := st.Pvids[3]
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	err = writer.SetPVID(context.Background(), 3, wantUnchanged+1, false)
+	if err == nil {
+		t.Fatalf("SetPVID() against gs105pe error = nil, want a WriteVerificationError (this mock's known write-is-a-no-op gap, see doc comment)")
+	}
+	if st.Pvids[3] != wantUnchanged {
+		t.Errorf("state.Pvids[3] after a refused SetPVID = %d, want unchanged %d", st.Pvids[3], wantUnchanged)
+	}
 }
 
 // -- Lifecycle edge cases -------------------------------------------------

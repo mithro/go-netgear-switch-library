@@ -419,12 +419,7 @@ func parseHTTPFormBody(raw []byte) map[string]string {
 // gets its own template.
 func (f *HTTPFace) renderLogin() string {
 	if f.spec.SessionTokenField != "" {
-		// TODO(slice-06 Tasks 9/10): replace with the byte-faithful GS110EMX
-		// login template (a Go web_gs110emx.RenderLogin, __RAND__-substituted
-		// from a captured fixture) -- this minimal stand-in only proves the
-		// GAMBIT handshake's rand-scrape/token-issuance SHAPE, which is all
-		// Task 8 promises for any dialect other than STANDARD.
-		return renderGenericLoginPage(f.rand)
+		return RenderGS110EMXLogin(f.rand)
 	}
 	return renderGenericLoginPage(f.rand)
 }
@@ -446,12 +441,7 @@ func renderGenericLoginPage(rand string) string {
 // token webui.ParseGambitToken reads. token=="" for a failed login (mirrors
 // Python's `token = face._token if ok else ""`).
 func (f *HTTPFace) renderRedirect(token string) string {
-	// TODO(slice-06 Tasks 9/10): replace with the byte-faithful GS110EMX
-	// redirect.html template -- this minimal stand-in only proves the token
-	// round-trip shape webui.ParseGambitToken reads.
-	return fmt.Sprintf(
-		`<html><body><form><input type="hidden" name="Gambit" value="%s"></form></body></html>`,
-		token)
+	return RenderGS110EMXRedirect(token)
 }
 
 // loginResponse validates one login POST's credential against f.password,
@@ -703,63 +693,180 @@ func (f *HTTPFace) handleCertUpload(contentType string, raw []byte) (int, string
 // Python do_GET's "with face._lock: ... elif chain" (faces/http.py:318-338).
 // Must be called with f.renderMu held.
 //
-// TODO(slice-06 Tasks 9/10): insert, IN THIS EXACT PRIORITY ORDER (dossier
-// §3.3 steps 1-7), before the dialect-gated renderStandardPage branch below:
+// TODO(slice-06 Task 10): insert, IN THIS EXACT PRIORITY ORDER (dossier §3.3
+// steps 1-2/5-7), BEFORE the GS110EMX/GS105PE branches Task 9 landed below:
 //  1. the shared FASTPATH "VLAN Membership" page (web_fastpath_vlan) --
 //     checked first because it is served byte-shape-identically across
 //     three dialects (M4300/S3300/XE_FASTPATH), independent of html_dialect;
 //  2. the shared FASTPATH XUI write pages (web_fastpath_xui + the
 //     per-dialect module port_config_path/poe_config_path/mgmt_ip_path
 //     apply-then-render, including their "<page>.html/a1" alias);
-//  3. the GAMBIT token-session page set (a Go web_gs110emx render dispatch,
-//     gated on spec.SessionTokenField != "");
-//  4. web_gs105pe's own dashboard/stats/pvid/vlan-config/sysinfo/membership
-//     renderers (gated on HTMLDialectGS105PE);
 //  5. web_m4300's renderers (gated on HTMLDialectM4300, cross-reusing
 //     web_gsm7252ps for lldp_path/poe_status_path -- dossier §3.3 step 5);
 //  6. web_gsm7228ps's renderers (gated on HTMLDialectS3300);
 //  7. web_gsm7252ps's renderers (gated on HTMLDialectXEFastpath).
 //
+// Steps 3 (GAMBIT token-session page set, gated on spec.SessionTokenField !=
+// "") and 4 (web_gs105pe's own dashboard/stats/pvid/vlan-config/sysinfo/
+// membership renderers, gated on HTMLDialectGS105PE) are Task 9 scope and are
+// wired below, in Python's exact priority order (3 before 4) -- both must
+// stay ahead of the eventual step-5/6/7 insertions per dossier §3.3.
+//
 // Getting this ordering wrong breaks any model whose written page is not
 // itself present in f.known -- see dossier §3.9's routing-precedence note.
 //
-// UNTIL those land, this function is DIALECT-GATED, not a blanket fallback:
-// only HTMLDialectStandard (gs305ep) reaches renderStandardPage. Every other
-// dialect's ok=false tells the caller to answer an honest 404 -- exactly the
-// same "never fabricate a page this model's spec didn't earn" treatment
-// goaheadGet's wcd branch already gives GoAhead. A GS110EMX/GS105PE/M4300/
-// S3300/XE_FASTPATH read must NOT silently fall through to the STANDARD
-// renderer: that would render a plausible-looking page in the WRONG dialect
-// shape, built from REAL seeded data, which is worse than a 404 -- it would
-// false-green a caller's integration against a page the mock cannot
-// actually produce yet (principles 1/5: the fake must match hardware, never
-// paper over a gap). See TestHTTPFaceNonStandardDialectReadPagesAreHonestly404
-// in httpface_test.go, a deliberate tripwire Tasks 9/10 MUST update (not
-// silently leave green) once each dialect's real renderer lands.
+// UNTIL steps 1/2/5/6/7 land, this function is DIALECT-GATED, not a blanket
+// fallback: only HTMLDialectStandard (gs305ep), HTMLDialectGS110EMX and
+// HTMLDialectGS105PE reach a real renderer. Every other dialect's
+// ok=false tells the caller to answer an honest 404 -- exactly the same
+// "never fabricate a page this model's spec didn't earn" treatment
+// goaheadGet's wcd branch already gives GoAhead. An M4300/S3300/XE_FASTPATH
+// read must NOT silently fall through to the STANDARD renderer: that would
+// render a plausible-looking page in the WRONG dialect shape, built from
+// REAL seeded data, which is worse than a 404 -- it would false-green a
+// caller's integration against a page the mock cannot actually produce yet
+// (principles 1/5: the fake must match hardware, never paper over a gap).
+// See TestHTTPFaceNonStandardDialectReadPagesAreHonestly404 in
+// httpface_test.go, a deliberate tripwire Task 9 updated to remove its
+// GS110EMX/GS105PE cases (now genuinely rendered) -- Task 10 MUST do the
+// same for M4300/S3300/XE_FASTPATH once their renderers land.
 func (f *HTTPFace) dispatchRender(path string, form map[string]string) (page string, implemented bool) {
+	if f.spec.SessionTokenField != "" {
+		return f.renderGS110EMXPage(path, form), true
+	}
+	if f.spec.HTMLDialect == webui.HTMLDialectGS105PE {
+		if page, ok := f.renderGS105PEPage(path, form); ok {
+			return page, true
+		}
+	}
 	if f.spec.HTMLDialect == webui.HTMLDialectStandard {
 		return f.renderStandardPage(path, form), true
 	}
 	return "", false
 }
 
-// dispatchApplyAndRender applies form to path then re-renders, mirroring
-// Python do_POST's matching elif chain (faces/http.py:376-397): the
-// STANDARD-dialect fallback branch applies THEN renders as one atomic
-// critical section (already true here, since both calls happen inside the
-// single f.renderMu section the caller holds); every per-dialect branch
-// Tasks 9/10 add does its own apply-then-render internally instead (mirrored
-// from Python, where e.g. _render_fastpath_xui_page applies the form before
-// building its return value). Must be called with f.renderMu held. See
-// dispatchRender's doc comment for the exact Task 9/10 insertion order AND
-// for why this is dialect-gated (ok=false -> caller 404s) rather than a
-// blanket STANDARD-dialect fallback for every model.
+// dispatchApplyAndRender applies path/form then re-renders (or, for the
+// GAMBIT token-session model's dashboard path, returns the apply's own bare
+// reply body instead of a re-rendered page -- see renderGS110EMXPage's doc
+// comment), mirroring Python do_POST's matching elif chain (faces/http.py:
+// 376-397). Must be called with f.renderMu held. See dispatchRender's doc
+// comment for the exact Task 10 insertion order AND for why this is
+// dialect-gated (ok=false -> caller 404s) rather than a blanket STANDARD-
+// dialect fallback for every model.
 func (f *HTTPFace) dispatchApplyAndRender(path string, form map[string]string) (page string, implemented bool) {
+	if f.spec.SessionTokenField != "" {
+		return f.renderGS110EMXPage(path, form), true
+	}
+	if f.spec.HTMLDialect == webui.HTMLDialectGS105PE {
+		// web_gs105pe.py has NO apply_* functions of its own: every one of its
+		// known paths (dashboard/stats/pvid/vlan-config/sysinfo/membership) is
+		// intercepted here, read-only, exactly mirroring Python's do_POST
+		// elif-chain priority (_render_gs105pe_page runs BEFORE the generic
+		// web.apply_form fallback ever could) -- so a POST to gs105pe's
+		// pvid_path/vlan_config_path/vlan_membership_path never mutates state
+		// on this mock. This is the pinned source's own (surprising but
+		// faithfully-preserved) behavior, not a Go-side gap: no Python test
+		// exercises HttpWriter.set_pvid/set_vlan_membership against gs105pe
+		// either (dossier §8/test inventory).
+		if page, ok := f.renderGS105PEPage(path, form); ok {
+			return page, true
+		}
+	}
 	if f.spec.HTMLDialect == webui.HTMLDialectStandard {
 		f.applyStandardForm(path, form)
 		return f.renderStandardPage(path, form), true
 	}
 	return "", false
+}
+
+// renderGS110EMXPage renders one of the GAMBIT token-session model's known
+// GET/POST paths from state, mirroring Python VirtualHttpFace._render_token_page
+// (faces/http.py:616-642) -- gs110emx's ENTIRE known-path set is covered
+// here (never falls through to renderStandardPage), so the HTTP face serves
+// the FULL NSDP read surface (ports/stats/VLANs/PVIDs/mgmt-IP) real hardware
+// does. form carries the VLAN_ID for a vlanMembership POST. Any path not
+// populated in the spec 404s honestly before this is ever called (f.known
+// already gates on the spec's populated fields).
+func (f *HTTPFace) renderGS110EMXPage(path string, form map[string]string) string {
+	spec := f.spec
+	switch path {
+	case spec.SysinfoPath:
+		return RenderGS110EMXSysinfo(f.state, f.token)
+	case spec.StatsPath:
+		return RenderGS110EMXInterfaceStats(f.state, f.token)
+	case spec.DashboardPath:
+		// Same URL for read and write on this model. An apply POST (ACTION=
+		// apply) is answered with the firmware's bare SUCCESS body, NOT a
+		// re-rendered page -- reproducing that is what lets the library's
+		// GS110EMX apply-verification be exercised without hardware.
+		if form["ACTION"] == "apply" {
+			return ApplyGS110EMXPortSettings(f.state, form)
+		}
+		return RenderGS110EMXPortSettings(f.state, f.token)
+	case spec.PvidPath:
+		return RenderGS110EMXPvid(f.state, f.token)
+	case spec.VlanConfigPath:
+		return RenderGS110EMXCf8021q(f.state, f.token)
+	case spec.VlanMembershipPath:
+		vid, err := strconv.Atoi(form["VLAN_ID"])
+		if err != nil {
+			vid = 1
+		}
+		return RenderGS110EMXVlanMembership(f.state, f.token, vid)
+	default:
+		return notFoundBody
+	}
+}
+
+// renderGS105PEPage renders a GS105PE read page from state, mirroring Python
+// VirtualHttpFace._render_gs105pe_page (faces/http.py:408-436): ok=false
+// means this path is not one of gs105pe's own pages, so the caller falls
+// through to the STANDARD-dialect renderer -- unreachable in practice since
+// this model's own known-path set (dossier §3.3 step 4) is a strict subset
+// of the branches below, but mirrored for exact structural fidelity with the
+// Python source (a future path added to gs105peSpec without a matching case
+// here would silently fall through rather than panic, exactly as Python's
+// `return None` does).
+//
+// A GET (no VLAN_ID) shows the lowest VLAN, matching real firmware; a POST
+// selects the requested one. Without this dispatch, a gs105pe VirtualSwitch
+// fell through to the STANDARD renderer whose permissive catch-all returns a
+// fabricated 200 -- the mock silently reported every port DOWN while the
+// seed had ports 3 and 5 UP, exactly the "mock must never fabricate" rule
+// this face's package doc comment states.
+func (f *HTTPFace) renderGS105PEPage(path string, form map[string]string) (string, bool) {
+	spec := f.spec
+	switch path {
+	case spec.DashboardPath:
+		return RenderGS105PEStatus(f.state), true
+	case spec.StatsPath:
+		return RenderGS105PEPortStatistics(f.state), true
+	case spec.PvidPath:
+		return RenderGS105PEPvid(f.state), true
+	case spec.VlanConfigPath:
+		return RenderGS105PEVlanConfig(f.state), true
+	case spec.SysinfoPath:
+		return RenderGS105PESwitchInfo(f.state), true
+	case spec.VlanMembershipPath:
+		vid, err := strconv.Atoi(form["VLAN_ID"])
+		if err != nil || vid == 0 {
+			vid = lowestVlanID(f.state, 1)
+		}
+		return RenderGS105PEVlanMembership(f.state, vid), true
+	default:
+		return "", false
+	}
+}
+
+// lowestVlanID returns the lowest VLAN ID in state.Vlans, or fallback if
+// state.Vlans is empty, mirroring Python's `min(self.state.vlans,
+// default=1)`.
+func lowestVlanID(state *State, fallback int) int {
+	keys := sortedIntKeys(state.Vlans)
+	if len(keys) == 0 {
+		return fallback
+	}
+	return keys[0]
 }
 
 // hashInput is web.py's _hash_input(): the constant CSRF `hash` field
