@@ -36,12 +36,14 @@ package virtual
 // shared VLAN-membership/XUI pages, GoAhead's wcd read routing) -- see
 // dispatchRender/dispatchApplyAndRender's own doc comments for the exact
 // per-dialect priority order, mirroring Python's elif chain. Both dispatch
-// functions are DIALECT-GATED, not a blanket fallback: each of the 7
-// HTMLDialects this package defines has its own case below, and any
-// dialect/path that isn't wired returns implemented=false, so the caller
-// (handleGet/handlePost) answers an honest 404 -- never a wrong-shaped
-// STANDARD page. renderStandardPage (this file, below) is reachable ONLY
-// under HTMLDialectStandard; see its own doc comment.
+// functions are DIALECT-GATED, not a blanket fallback: every HTMLDialect
+// this package serves reaches its own byte-faithful renderer -- the six
+// non-GoAhead dialects through the cases in these two functions, and
+// GoAheadXML diverted upstream in handleGet/handlePost before either is ever
+// called. Any dialect/path that isn't wired returns implemented=false, so
+// the caller (handleGet/handlePost) answers an honest 404 -- never a
+// wrong-shaped STANDARD page. renderStandardPage (this file, below) is
+// reachable ONLY under HTMLDialectStandard; see its own doc comment.
 
 import (
 	"bytes"
@@ -1094,12 +1096,13 @@ func hashInput() string {
 	return fmt.Sprintf(`<input type="hidden" name="hash" value="%s">`, virtualHTTPCSRFHash)
 }
 
-// renderStandardPage is the STANDARD dialect's (gs305ep, and gs105pe's
-// shared pages) generic page renderer, ported field-for-field from Python
-// web.py's render_page (lines 42-60). dispatchRender/dispatchApplyAndRender
-// only ever call this under HTMLDialectStandard -- every other dialect is
-// routed to its own per-dialect renderer instead, so this function is
-// reachable ONLY for STANDARD-dialect paths. The final `return` is still
+// renderStandardPage is the STANDARD dialect's (gs305ep only) generic page
+// renderer, ported field-for-field from Python web.py's render_page
+// (lines 42-60). dispatchRender/dispatchApplyAndRender only ever call this
+// under HTMLDialectStandard -- every other dialect is routed to its own
+// per-dialect renderer instead (gs105pe, though it shared these pages when
+// Task 8 first landed, has had its own renderGS105PEPage since Task 9), so
+// this function is reachable ONLY for STANDARD-dialect paths. The final `return` is still
 // DELIBERATELY PERMISSIVE within that STANDARD scope (an "OK" catch-all for
 // any known-but-unhandled STANDARD path, e.g. a POE apply target that has
 // no distinct status view) -- exactly as web.py's own module docstring
