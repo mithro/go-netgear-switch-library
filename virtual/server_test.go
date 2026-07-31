@@ -103,10 +103,10 @@ func TestVirtualSwitchGSM7252PSStartBindsSNMPFaceAndStopIsClean(t *testing.T) {
 // pre-slice-05 pin): gs305ep is a Plus-class model whose ONLY backends are
 // NSDP+HTTP (model.Backends has no model.BackendSNMP -- see
 // model/registry.go). As of slice 05 this package implements the NSDP face,
-// so Start now SUCCEEDS for gs305ep -- binding NsdpPort only (HTTPPort
-// stays 0 until slice 06's HTTP face lands) and leaving SnmpPort 0 (no
-// BackendSNMP to bind at all, mirroring D-NSDP §9.6's
-// test_plus_model_binds_nsdp_not_snmp intent). This is the exact
+// and as of slice 06 the HTTP face too, so Start now SUCCEEDS for gs305ep
+// -- binding BOTH NsdpPort and HTTPPort CONCURRENTLY (D-HTTP-F §6.1) and
+// leaving SnmpPort 0 (no BackendSNMP to bind at all, mirroring D-NSDP
+// §9.6's test_plus_model_binds_nsdp_not_snmp intent). This is the exact
 // expectation flip the superseded test's own doc comment anticipated.
 func TestVirtualSwitchGS305EPStartBindsNsdpFaceNotSnmp(t *testing.T) {
 	sw, err := NewVirtualSwitch("gs305ep")
@@ -128,8 +128,8 @@ func TestVirtualSwitchGS305EPStartBindsNsdpFaceNotSnmp(t *testing.T) {
 	if sw.SnmpPort != 0 {
 		t.Errorf("SnmpPort after Start = %d, want 0 (gs305ep has no BackendSNMP)", sw.SnmpPort)
 	}
-	if sw.HTTPPort != 0 {
-		t.Errorf("HTTPPort after Start = %d, want 0 (HTTP face is slice 06 scope)", sw.HTTPPort)
+	if sw.HTTPPort == 0 {
+		t.Error("HTTPPort after Start = 0, want nonzero bound port (gs305ep has BackendHTTP, bound concurrently with NSDP)")
 	}
 
 	// Prove the bound face is actually live, not just a nonzero field: a

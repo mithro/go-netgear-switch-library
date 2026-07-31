@@ -47,6 +47,12 @@ func TestNewStateDefaults(t *testing.T) {
 	if st.UploadedCert != nil || st.ScpCertDeploy != nil {
 		t.Error("expected HTTP/CLI-only fields to default nil")
 	}
+	if st.VlanMembershipPage != nil {
+		t.Error("expected VlanMembershipPage to default nil (no FASTPATH VLAN-membership page geometry unless seeded)")
+	}
+	if st.VlanMembershipLockedPorts == nil || len(st.VlanMembershipLockedPorts) != 0 {
+		t.Error("expected VlanMembershipLockedPorts to default non-nil and empty")
+	}
 }
 
 func TestNewPortSimDefaultIfType(t *testing.T) {
@@ -535,6 +541,8 @@ func buildRichState() *State {
 	cert := "pem-bytes"
 	st.UploadedCert = &cert
 	st.ScpCertDeploy = &ScpCertDeploySim{Commands: []string{"copy scp://x nvram:sslpem-root"}, Copies: []ScpCopy{{Source: "scp://x", Dest: "nvram:sslpem-root"}}, Saved: true}
+	st.VlanMembershipPage = &VlanMembershipPageSim{Slots: 116, LagSlot: 3, Grid: "gif"}
+	st.VlanMembershipLockedPorts = map[int]bool{5: true}
 	return st
 }
 
@@ -562,6 +570,8 @@ func TestSnapshotIsIndependentDeepCopy(t *testing.T) {
 	*st.UploadedCert = "changed"
 	st.ScpCertDeploy.Commands[0] = "changed"
 	st.ScpCertDeploy.Saved = false
+	st.VlanMembershipPage.Grid = "png"
+	st.VlanMembershipLockedPorts[6] = true
 
 	// The snapshot must be completely unaffected by every mutation above.
 	want := buildRichState()
@@ -620,6 +630,9 @@ func TestSnapshotNilFieldsStayNil(t *testing.T) {
 	}
 	if snap.UploadedCert != nil || snap.ScpCertDeploy != nil {
 		t.Error("nil HTTP/CLI-only fields must stay nil through Snapshot")
+	}
+	if snap.VlanMembershipPage != nil {
+		t.Error("nil VlanMembershipPage must stay nil through Snapshot")
 	}
 
 	// Restore from this blank snapshot must also cleanly zero out a richer

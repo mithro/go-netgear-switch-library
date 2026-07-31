@@ -145,7 +145,12 @@ func (s *State) OIDMap() map[string]OIDEntry {
 
 	for vid, vsim := range s.Vlans {
 		out[colKey(snmp.Dot1qVlanStaticName, vid)] = entry("OCTETSTR", vsim.Name)
-		out[colKey(snmp.Dot1qVlanStaticEgress, vid)] = entry("OCTETSTR", string(snmp.EncodePortBitmap(sliceFromPortSet(vsim.Member), vlanWidth)))
+		// dot1qVlanStaticEgressPorts is the STATIC (configured) table, so it
+		// reports vsim.Configured(), not the current Member set -- proven
+		// live on GSM7252PS @10.1.5.22, whose VLAN 1 static egress bitmap
+		// includes 1/0/50 and 1/0/51 even though vlanStatus.html omits them
+		// (see VlanSim.ConfiguredOnly).
+		out[colKey(snmp.Dot1qVlanStaticEgress, vid)] = entry("OCTETSTR", string(snmp.EncodePortBitmap(sliceFromPortSet(vsim.Configured()), vlanWidth)))
 		out[colKey(snmp.Dot1qVlanStaticUntagged, vid)] = entry("OCTETSTR", string(snmp.EncodePortBitmap(sliceFromPortSet(vsim.Untagged), vlanWidth)))
 	}
 

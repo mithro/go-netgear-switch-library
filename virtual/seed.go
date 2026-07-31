@@ -147,7 +147,14 @@ func SeedGSM7252PS() *State {
 	}
 
 	vlans := map[int]*VlanSim{
-		1:   {Name: "default", Member: portSetFromSlice([]int{6, 8, 10, 15, 19, 21, 22, 26, 28, 29, 34, 35, 36, 39, 40, 49, 50, 51, 52, 418, 419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457, 458, 459, 460, 461, 462, 463, 464, 465, 466, 467, 468, 469, 470, 471, 472, 473, 474, 475, 476, 477, 478, 479, 480, 481}), Untagged: portSetFromSlice([]int{3, 4, 6, 7, 8, 10, 14, 15, 16, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 39, 40, 42, 49, 50, 51, 52, 418, 419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457, 458, 459, 460, 461, 462, 463, 464, 465, 466, 467, 468, 469, 470, 471, 472, 473, 474, 475, 476, 477, 478, 479, 480, 481})},
+		// Ports 50/51 are on this VLAN's static (configured) egress list but
+		// are NOT current members -- live-captured on 10.1.5.22: `show vlan 1`
+		// and vlanPortCfg_vlan1.html both list them "Current: Exclude /
+		// Configured: Include", while dot1qVlanStaticEgressPorts and the VLAN
+		// Membership page's hiddenMem grid DO carry them (see
+		// VlanSim.ConfiguredOnly). Their Untagged bit stays set: that bitmap is
+		// a separate axis the real switch keeps regardless of participation.
+		1:   {Name: "default", Member: portSetFromSlice([]int{6, 8, 10, 15, 19, 21, 22, 26, 28, 29, 34, 35, 36, 39, 40, 49, 52, 418, 419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457, 458, 459, 460, 461, 462, 463, 464, 465, 466, 467, 468, 469, 470, 471, 472, 473, 474, 475, 476, 477, 478, 479, 480, 481}), Untagged: portSetFromSlice([]int{3, 4, 6, 7, 8, 10, 14, 15, 16, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 39, 40, 42, 49, 50, 51, 52, 418, 419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457, 458, 459, 460, 461, 462, 463, 464, 465, 466, 467, 468, 469, 470, 471, 472, 473, 474, 475, 476, 477, 478, 479, 480, 481}), ConfiguredOnly: portSetFromSlice([]int{50, 51})},
 		4:   {Name: "wifi", Member: portSetFromSlice([]int{11, 12, 46, 49, 50, 51}), Untagged: portSetFromSlice([]int{11, 12, 46})},
 		5:   {Name: "net", Member: portSetFromSlice([]int{3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 24, 25, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 39, 40, 42, 46, 47, 48, 49, 50, 51, 52, 418, 419}), Untagged: portSetFromSlice([]int{9, 45, 47, 48, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457, 458, 459, 460, 461, 462, 463, 464, 465, 466, 467, 468, 469, 470, 471, 472, 473, 474, 475, 476, 477, 478, 479, 480, 481})},
 		6:   {Name: "pwr", Member: portSetFromSlice([]int{46, 47, 49, 50, 51, 418, 419}), Untagged: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 48, 52})},
@@ -296,6 +303,13 @@ func SeedGSM7252PS() *State {
 	// Real fixed Q-BRIDGE PortList width, measured LIVE (read-only) on this
 	// switch @10.1.5.22: dot1qVlanStaticEgressPorts is 79 bytes wide.
 	s.VLANPortListWidth = model.Ptr(79)
+
+	// MEASURED off the real VLAN-Membership capture (2026-07-30,
+	// testdata/http/gsm7252ps_vlanPortCfg_vlan1.html): 116 hiddenMem slots
+	// = 52 ports + 64 LAGs, LAG ifNames 0/3/N, the OLDER
+	// toggleImageFirst/grey_[btu].gif grid, no trailing comma, no CSRFToken
+	// and UNescaped ifName lists (the only one of the four like that).
+	s.VlanMembershipPage = &VlanMembershipPageSim{Slots: 116, LagSlot: 3, Grid: "gif"}
 
 	return s
 }
@@ -514,6 +528,12 @@ func SeedGSM7228PS() *State {
 	// pseudo-ports).
 	s.VLANPortListWidth = model.Ptr(45)
 
+	// MEASURED off the real VLAN-Membership capture (2026-07-30,
+	// testdata/http/gsm7228ps_vlanPortCfg_vlan5.html): 78 hiddenMem slots
+	// = 52 ports + 26 LAGs, LAG ifNames 0/3/N, the NEWER togImg/switch_*.png
+	// grid, HTML-escaped ifName lists, no trailing comma and no CSRFToken.
+	s.VlanMembershipPage = &VlanMembershipPageSim{Slots: 78, LagSlot: 3, Grid: "png", Escape: true}
+
 	return s
 }
 
@@ -642,6 +662,26 @@ func SeedM4300_24X() *State {
 	// Real fixed Q-BRIDGE PortList width, measured LIVE (read-only) on the
 	// M4300 @10.1.5.13: dot1qVlanStaticEgressPorts is 131 bytes wide.
 	s.VLANPortListWidth = model.Ptr(131)
+
+	// MEASURED off the real VLAN-Membership capture (2026-07-30,
+	// testdata/http/m4300_vlanportcfg_vlan1.html): 152 hiddenMem slots = 24
+	// ports + 128 LAGs, LAG ifNames 0/13/N, the togImg/switch_*.png grid,
+	// HTML-escaped ifName lists, and this firmware's TRAILING comma on
+	// hiddenMem/hiddenTagged. No CSRFToken on the 24X (the 16X has one).
+	s.VlanMembershipPage = &VlanMembershipPageSim{Slots: 152, LagSlot: 13, Grid: "png", TrailingComma: true, Escape: true}
+
+	// LIVE-PROVEN 2026-07-30 on 10.1.5.13: EVERY port on this switch is
+	// "switchport mode access" or "trunk" (per its own show running-config),
+	// and the M4300 image only accepts an explicit VLAN-membership apply on
+	// a port in "general" mode. Applying anyway returns HTTP 200 with
+	// err_flag=1 and err_msg="Unable to set VLAN membership for VLAN
+	// ( 4004 )". The sibling M4300-16X (10.1.5.20) leaves ports 1-8 with no
+	// switchport-mode line at all and the SAME apply succeeds there -- so
+	// this is per-port configuration, not a per-model capability, and the
+	// mock models it per-port too.
+	s.VlanMembershipLockedPorts = portSetFromSlice([]int{
+		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+	})
 
 	return s
 }
@@ -773,6 +813,19 @@ func SeedM4300_16X() *State {
 	// Real fixed Q-BRIDGE PortList width, measured LIVE (read-only) on this
 	// switch @10.1.5.20: dot1qVlanStaticEgressPorts is 131 bytes wide.
 	s.VLANPortListWidth = model.Ptr(131)
+
+	// MEASURED off the real VLAN-Membership capture (2026-07-30,
+	// testdata/http/m4300_16x_vlanportcfg_vlan4.html): 144 hiddenMem slots
+	// = 16 ports + 128 LAGs, LAG ifNames 0/13/N, togImg/switch_*.png grid,
+	// escaped ifName lists, trailing comma -- AND the per-page CSRFToken
+	// only this AV-era firmware carries (CSRF=true), which the form
+	// builder must echo back.
+	s.VlanMembershipPage = &VlanMembershipPageSim{
+		Slots: 144, LagSlot: 13, Grid: "png", TrailingComma: true, CSRF: true, Escape: true,
+	}
+	// VlanMembershipLockedPorts stays empty (this SKU's ports 1-8 carry no
+	// switchport-mode line -- see SeedM4300_24X's doc comment for the
+	// live-proven per-port counter-example this pairs with).
 
 	return s
 }

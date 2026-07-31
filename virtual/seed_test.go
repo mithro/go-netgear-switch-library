@@ -168,13 +168,22 @@ func assertVlansMatchCapture(t *testing.T, seed *State, capture model.SwitchData
 		if vsim.Name != derefStr(r.Name) {
 			t.Errorf("VLAN %d name = %q, want %q", vid, vsim.Name, derefStr(r.Name))
 		}
-		if !intSetEqualsSlice(vsim.Member, r.MemberPorts) {
-			t.Errorf("VLAN %d member_ports = %v, want %v", vid, sortedSetKeys(vsim.Member), r.MemberPorts)
+		// The capture is an SNMP walk, so its member_ports came from
+		// dot1qVlanStaticEgressPorts -- the STATIC (configured) table.
+		// Compare it against the seed's CONFIGURED set, not its current
+		// Member set: on the real GSM7252PS, VLAN 1's static bitmap
+		// includes 1/0/50 and 1/0/51 while vlanStatus.html/show vlan report
+		// them Current: Exclude, so the two views differ by exactly those
+		// ports (see VlanSim.ConfiguredOnly, and Python's
+		// tests/capture_parity.py._assert_vlans_match, which this mirrors).
+		configured := vsim.Configured()
+		if !intSetEqualsSlice(configured, r.MemberPorts) {
+			t.Errorf("VLAN %d member_ports = %v, want %v", vid, sortedSetKeys(configured), r.MemberPorts)
 		}
 		if !intSetEqualsSlice(vsim.Untagged, r.UntaggedPorts) {
 			t.Errorf("VLAN %d untagged_ports = %v, want %v", vid, sortedSetKeys(vsim.Untagged), r.UntaggedPorts)
 		}
-		tagged := sortedSetKeys(diffSet(vsim.Member, vsim.Untagged))
+		tagged := sortedSetKeys(diffSet(configured, vsim.Untagged))
 		if !intSliceEqual(tagged, r.TaggedPorts) {
 			t.Errorf("VLAN %d tagged_ports = %v, want %v", vid, tagged, r.TaggedPorts)
 		}
