@@ -24,22 +24,24 @@ package virtual
 // extra determinism rather than fighting it (dossier §3.1) -- Stop() is
 // genuinely leak-free, not just "no new leaks after this returns".
 //
-// TASK 8 SCOPE (this file): the face skeleton (bind/serve/stop), all 5
-// login handshakes (dossier §3.2), Referer/Origin 403 enforcement (§3.4),
-// the 404-for-unspecced-path gate (§3.7), SSL-cert-upload validation (both
-// the multipart/S3300 shape and the GoAhead XML shape, §3.5/§3.6), and ONE
-// dialect (HTMLDialectStandard -- gs305ep, and gs105pe's shared pages) wired
-// end-to-end to prove the read/write/re-render shape. Every OTHER dialect's
-// byte-faithful renderer (GS110EMX, GS105PE's own port/PVID/stats pages,
-// M4300, XE_FASTPATH/gsm7252ps, S3300/gsm7228ps, the FASTPATH shared VLAN-
-// membership/XUI pages, GoAhead's wcd read routing) is Task 9/10 territory --
-// see dispatchRender/dispatchApplyAndRender's own doc comments for exactly
-// where those per-dialect branches slot in, in Python's own priority order.
-// Until they land, every non-STANDARD-dialect READ page falls through to the
-// same generic (deliberately permissive, per web.py's own docstring)
-// STANDARD-dialect fallback this file implements -- correct for gs305ep,
-// not yet correct for any other model's PAGE CONTENT (though its login,
-// 404, referer and cert-upload behavior all already are).
+// TASK 8 SCOPE (this file, as first landed): the face skeleton
+// (bind/serve/stop), all 5 login handshakes (dossier §3.2), Referer/Origin
+// 403 enforcement (§3.4), the 404-for-unspecced-path gate (§3.7),
+// SSL-cert-upload validation (both the multipart/S3300 shape and the
+// GoAhead XML shape, §3.5/§3.6), and ONE dialect (HTMLDialectStandard --
+// gs305ep, and gs105pe's shared pages) wired end-to-end to prove the
+// read/write/re-render shape. Tasks 9/10 have since landed every other
+// dialect's own byte-faithful renderer (GS110EMX, GS105PE's own port/PVID/
+// stats pages, M4300, XE_FASTPATH/gsm7252ps, S3300/gsm7228ps, the FASTPATH
+// shared VLAN-membership/XUI pages, GoAhead's wcd read routing) -- see
+// dispatchRender/dispatchApplyAndRender's own doc comments for the exact
+// per-dialect priority order, mirroring Python's elif chain. Both dispatch
+// functions are DIALECT-GATED, not a blanket fallback: each of the 7
+// HTMLDialects this package defines has its own case below, and any
+// dialect/path that isn't wired returns implemented=false, so the caller
+// (handleGet/handlePost) answers an honest 404 -- never a wrong-shaped
+// STANDARD page. renderStandardPage (this file, below) is reachable ONLY
+// under HTMLDialectStandard; see its own doc comment.
 
 import (
 	"bytes"
@@ -481,10 +483,14 @@ func (f *HTTPFace) loginResponse(form map[string]string) string {
 // other path 404s (the mock never fabricates a page), mirroring Python
 // Handler._goahead_get (faces/http.py:217-274).
 //
-// TASK 9/10 SEAM: the wcd READ branch below always 404s -- web_gs728tpp's
-// render_wcd (the routed-by-file= XML renderer set) has not been ported yet.
-// The redirect-when-unauthenticated and login-statusCode/sessionID steps
-// ARE fully wired here (Task 8 scope: all 5 login handshakes).
+// The wcd READ branch below renders the GoAhead XML data block via
+// RenderGS728TPPWcd (web_gs728tpp's render_wcd, routed by the query's
+// file= target -- see that function's own doc comment for the route
+// table); an unrecognized file= target still 404s, since the mock never
+// fabricates a page for a route it doesn't know. The
+// redirect-when-unauthenticated and login-statusCode/sessionID steps were
+// Task 8 scope (all 5 login handshakes); the wcd renderer itself landed in
+// Task 9/10.
 func (f *HTTPFace) goaheadGet(w http.ResponseWriter, r *http.Request) {
 	pathOnly := r.URL.Path
 	rawQuery := r.URL.RawQuery
@@ -1088,13 +1094,16 @@ func hashInput() string {
 	return fmt.Sprintf(`<input type="hidden" name="hash" value="%s">`, virtualHTTPCSRFHash)
 }
 
-// renderStandardPage is the STANDARD dialect's (gs305ep) generic page
-// renderer, ported field-for-field from Python web.py's render_page
-// (lines 42-60). The final `return` is DELIBERATELY PERMISSIVE (an "OK"
-// catch-all for any known-but-unhandled path, e.g. a POE apply target that
-// has no distinct status view) -- exactly as web.py's own module docstring
-// warns; reachable today for every non-STANDARD dialect too, since Tasks
-// 9/10's per-dialect branches (dispatchRender's TODO) aren't wired yet.
+// renderStandardPage is the STANDARD dialect's (gs305ep, and gs105pe's
+// shared pages) generic page renderer, ported field-for-field from Python
+// web.py's render_page (lines 42-60). dispatchRender/dispatchApplyAndRender
+// only ever call this under HTMLDialectStandard -- every other dialect is
+// routed to its own per-dialect renderer instead, so this function is
+// reachable ONLY for STANDARD-dialect paths. The final `return` is still
+// DELIBERATELY PERMISSIVE within that STANDARD scope (an "OK" catch-all for
+// any known-but-unhandled STANDARD path, e.g. a POE apply target that has
+// no distinct status view) -- exactly as web.py's own module docstring
+// warns.
 func (f *HTTPFace) renderStandardPage(path string, form map[string]string) string {
 	spec := f.spec
 	switch path {
