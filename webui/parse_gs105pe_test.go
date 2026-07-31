@@ -241,3 +241,38 @@ func TestParseVLANIDsAndMembershipSharedWithGS105PE(t *testing.T) {
 		t.Errorf("ParseCSRFHash(gs105pe_pvid) = (%q, %v), want (\"18007\", true)", got, ok)
 	}
 }
+
+// TestParseGS105PESysInfo pins webui.ParseGS105PESysInfo against the real
+// captured gs105pe_switch_info.html, GROUNDED against dossier D-HTTP-P §2.5:
+// this unit is live-confirmed DHCP (matching its NSDP read), and its mgmt-IP
+// input names are LOWERCASE (ip_address/subnet_mask/gateway_address) --
+// contrast GS110EMX's uppercase IP_ADDRESS/etc despite the identical login
+// scheme.
+func TestParseGS105PESysInfo(t *testing.T) {
+	info, err := webui.ParseGS105PESysInfo(readFixture(t, "gs105pe_switch_info.html"))
+	if err != nil {
+		t.Fatalf("ParseGS105PESysInfo() error = %v", err)
+	}
+	want := webui.HTTPSysInfo{
+		ProductName:     "GS105PE",
+		SwitchName:      "poe-micro3",
+		SerialNumber:    "61W19753A00A8",
+		MacAddress:      "38:94:ED:B7:CD:E0",
+		FirmwareVersion: "V1.6.0.4",
+		IPMode:          model.IPModeDHCP,
+		IPAddress:       "10.1.5.30",
+		SubnetMask:      "255.255.255.0",
+		GatewayAddress:  "10.1.5.1",
+	}
+	if info != want {
+		t.Errorf("ParseGS105PESysInfo() = %+v, want %+v", info, want)
+	}
+}
+
+// TestParseGS105PESysInfoRejectsMalformedPage mirrors the "missing expected
+// field(s)" error shape ParseSysInfo also uses (parse_gs110emx_test.go::
+// TestParseSysInfoRejectsMalformedPage).
+func TestParseGS105PESysInfoRejectsMalformedPage(t *testing.T) {
+	_, err := webui.ParseGS105PESysInfo(malformedPage)
+	wantErrUnexpectedPage(t, err)
+}

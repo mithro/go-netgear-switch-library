@@ -281,3 +281,35 @@ func TestSpeedTextToMbpsFractionalGig(t *testing.T) {
 		t.Errorf("ports = %+v, want a single port with SpeedMbps=2500", ports)
 	}
 }
+
+// TestParseSysInfoGS110EMX pins webui.ParseSysInfo against the real captured
+// gs110emx_sysinfo.html (test_parse.py::test_parse_sysinfo_gs110emx):
+// data-select-value="0" on this capture means the STATIC-IP branch (see
+// HTTPSysInfo's doc comment for the DHCP-branch caveat).
+func TestParseSysInfoGS110EMX(t *testing.T) {
+	info, err := webui.ParseSysInfo(readFixture(t, "gs110emx_sysinfo.html"))
+	if err != nil {
+		t.Fatalf("ParseSysInfo() error = %v", err)
+	}
+	want := webui.HTTPSysInfo{
+		ProductName:     "GS110EMX",
+		SwitchName:      "sw-netgear-gs110emx1",
+		SerialNumber:    "53H60253A0032",
+		MacAddress:      "bc:a5:11:b8:ec:f1",
+		FirmwareVersion: "1.0.1.4",
+		IPMode:          model.IPModeStatic,
+		IPAddress:       "10.1.5.25",
+		SubnetMask:      "255.255.255.0",
+		GatewayAddress:  "10.1.5.1",
+	}
+	if info != want {
+		t.Errorf("ParseSysInfo() = %+v, want %+v", info, want)
+	}
+}
+
+// TestParseSysInfoRejectsMalformedPage mirrors test_parse.py::
+// test_parse_sysinfo_rejects_malformed_page.
+func TestParseSysInfoRejectsMalformedPage(t *testing.T) {
+	_, err := webui.ParseSysInfo(malformedPage)
+	wantErrUnexpectedPage(t, err)
+}

@@ -936,6 +936,180 @@ func TestParseXUIMgmtIPRejectsMalformedPage(t *testing.T) {
 	}
 }
 
+// --- ParseXUIListPage / ParseXUIFormPage (deferred by Tasks 2/3 to Task 4,
+// once webui/types.go's XuiListPage/XuiFormPage existed) --------------------
+
+// TestFixturePortsPagesCarryTheMeasuredRowNaming pins webui.ParseXUIListPage
+// against test_http_xui_writes.py::
+// test_fixture_ports_pages_carry_the_measured_row_naming: per-firmware row/
+// checkbox naming, straight off the four managed models' live captures.
+func TestFixturePortsPagesCarryTheMeasuredRowNaming(t *testing.T) {
+	cases := []struct {
+		fixture, prefix, checkbox, ifname string
+	}{
+		{"gsm7252ps_portsConfiguration.html", "1.0.52.", "1.0.52.gecb5", "1/0/1"},
+		{"gsm7228ps_portsConfiguration.html", "1.0.52.", "1.0.52.gecb10", "1/g1"},
+		{"m4300_ports.html", "1.0.24.", "1.0.24.gecb_1_2", "1/0/1"},
+		{"m4300_16x_portsConfiguration.html", "1.0.16.", "1.0.16.gecb_1_2", "1/0/1"},
+	}
+	for _, c := range cases {
+		page, err := webui.ParseXUIListPage(readFixture(t, c.fixture), c.fixture)
+		if err != nil {
+			t.Fatalf("%s: ParseXUIListPage() error = %v", c.fixture, err)
+		}
+		row := page.Rows[0]
+		if row.Prefix != c.prefix {
+			t.Errorf("%s: rows[0].Prefix = %q, want %q", c.fixture, row.Prefix, c.prefix)
+		}
+		if row.Checkbox == nil || *row.Checkbox != c.checkbox {
+			t.Errorf("%s: rows[0].Checkbox = %v, want %q", c.fixture, row.Checkbox, c.checkbox)
+		}
+		if v, ok := row.Field("v_1_2_1"); !ok || v != c.ifname {
+			t.Errorf("%s: rows[0].Field(v_1_2_1) = (%q, %v), want (%q, true)", c.fixture, v, ok, c.ifname)
+		}
+		if v, ok := row.Field("v_1_2_6"); !ok || v != "Enable" {
+			t.Errorf("%s: rows[0].Field(v_1_2_6) = (%q, %v), want (\"Enable\", true)", c.fixture, v, ok)
+		}
+		if got := strings.ToUpper(page.Buttons["v_2_1_2"]); got != "APPLY" {
+			t.Errorf("%s: Buttons[v_2_1_2] = %q, want APPLY (case-insensitive)", c.fixture, got)
+		}
+	}
+}
+
+// TestFixturePoEPageHasTheWriteOnlyResetColumn pins webui.ParseXUIListPage
+// against test_http_xui_writes.py::
+// test_fixture_poe_page_has_the_write_only_reset_column.
+func TestFixturePoEPageHasTheWriteOnlyResetColumn(t *testing.T) {
+	page, err := webui.ParseXUIListPage(readFixture(t, "gsm7252ps_poeInterfaceConfiguration.html"), "")
+	if err != nil {
+		t.Fatalf("ParseXUIListPage() error = %v", err)
+	}
+	if len(page.Rows) != 48 {
+		t.Errorf("len(Rows) = %d, want 48", len(page.Rows))
+	}
+	if v, ok := page.Rows[0].Field("v_1_2_20"); !ok || v != "Reset" {
+		t.Errorf("rows[0].Field(v_1_2_20) = (%q, %v), want (\"Reset\", true)", v, ok)
+	}
+	if page.Buttons["v_2_1_3"] != "RESET" {
+		t.Errorf("Buttons[v_2_1_3] = %q, want \"RESET\"", page.Buttons["v_2_1_3"])
+	}
+}
+
+// TestFixtureM4300SixteenXPoEPageLabelsResetDifferently pins
+// webui.ParseXUIListPage against test_http_xui_writes.py::
+// test_fixture_m4300_16x_poe_page_labels_reset_differently: the SAME
+// v_2_1_3 button field reads "Power Cycle Port(s)" on this SKU, not "RESET"
+// -- button labels are echoed from the page, never hardcoded.
+func TestFixtureM4300SixteenXPoEPageLabelsResetDifferently(t *testing.T) {
+	page, err := webui.ParseXUIListPage(readFixture(t, "m4300_16x_poeInterfaceConfiguration.html"), "")
+	if err != nil {
+		t.Fatalf("ParseXUIListPage() error = %v", err)
+	}
+	if len(page.Rows) != 16 {
+		t.Errorf("len(Rows) = %d, want 16", len(page.Rows))
+	}
+	if page.Buttons["v_2_1_3"] != "Power Cycle Port(s)" {
+		t.Errorf("Buttons[v_2_1_3] = %q, want \"Power Cycle Port(s)\"", page.Buttons["v_2_1_3"])
+	}
+}
+
+// TestFixtureM4300TwentyFourXPoEPageIsPresentButHasNoRows pins
+// webui.ParseXUIListPage against test_http_xui_writes.py::
+// test_fixture_m4300_24x_poe_page_is_present_but_has_no_rows: THE captured
+// proof that the -24X's missing PoE is a device fact, not a missing
+// implementation. A 404 would have meant "page not found"; this is a real
+// HTTP 200 of exactly 28152 bytes, with the correct title and the page's
+// full button set, that simply contains ZERO <TR p="..."> rows -- because
+// the SKU has no PSE ports.
+func TestFixtureM4300TwentyFourXPoEPageIsPresentButHasNoRows(t *testing.T) {
+	html := readFixture(t, "m4300_24x_poeInterfaceConfiguration.html")
+	if len(html) != 28152 {
+		t.Fatalf("len(html) = %d, want 28152", len(html))
+	}
+	if !strings.Contains(html, "<TITLE>NETGEAR -  PoE Port Configuration</TITLE>") {
+		t.Fatalf("fixture missing the expected <TITLE>")
+	}
+	page, err := webui.ParseXUIListPage(html, "")
+	if err != nil {
+		t.Fatalf("ParseXUIListPage() error = %v", err)
+	}
+	if len(page.Rows) != 0 {
+		t.Errorf("len(Rows) = %d, want 0", len(page.Rows))
+	}
+	if page.Buttons["v_2_1_3"] != "Power Cycle Port(s)" {
+		t.Errorf("Buttons[v_2_1_3] = %q, want \"Power Cycle Port(s)\"", page.Buttons["v_2_1_3"])
+	}
+}
+
+// TestXuiPagesExposeTheirListNavigationBlock pins webui.ParseXUIListPage
+// against test_http_xui_writes.py::
+// test_xui_pages_expose_their_list_navigation_block: every XUI list page
+// carries a urlListUnit field in its deftestme navigation rows, and the
+// parser must surface it under Nav -- it is what scopes an apply (and what
+// the gsm7252ps PoE page REQUIRES, dossier §1.6 item 3). The global "apply
+// to all rows" row is NOT navigation.
+func TestXuiPagesExposeTheirListNavigationBlock(t *testing.T) {
+	page, err := webui.ParseXUIListPage(readFixture(t, "gsm7252ps_portsConfiguration.html"), "")
+	if err != nil {
+		t.Fatalf("ParseXUIListPage() error = %v", err)
+	}
+	if page.Nav["v_1_1_1"] != "1" {
+		t.Errorf("Nav[v_1_1_1] = %q, want \"1\"", page.Nav["v_1_1_1"])
+	}
+	if page.Nav["v_1_3_1"] != "1" {
+		t.Errorf("Nav[v_1_3_1] = %q, want \"1\"", page.Nav["v_1_3_1"])
+	}
+	for name := range page.Nav {
+		if strings.HasPrefix(name, "v_g_") {
+			t.Errorf("Nav contains global-row field %q, want none", name)
+		}
+	}
+}
+
+// TestParseXUIListPageRejectsMalformedPage mirrors ParseXUIMgmtIP's own
+// malformed-page rejection (there is no write form to scope to at all).
+func TestParseXUIListPageRejectsMalformedPage(t *testing.T) {
+	if _, err := webui.ParseXUIListPage(malformedPage, ""); !errors.Is(err, model.ErrHTTPUnexpectedPage) {
+		t.Errorf("error = %v, want model.ErrHTTPUnexpectedPage", err)
+	}
+}
+
+// TestFixtureGSM7228PSIPPageIsNotAButtonPage pins webui.ParseXUIFormPage
+// against test_http_xui_writes.py::
+// test_fixture_gsm7228ps_ip_page_is_not_a_button_page: v_2_1_1 on this page
+// is the Management VLAN ID, NOT a button -- the reason button detection is
+// scoped to the page's own xuiButtonsDiv instead of guessing from the field
+// name shape.
+func TestFixtureGSM7228PSIPPageIsNotAButtonPage(t *testing.T) {
+	page, err := webui.ParseXUIFormPage(readFixture(t, "gsm7228ps_ipConfiguration.html"), "")
+	if err != nil {
+		t.Fatalf("ParseXUIFormPage() error = %v", err)
+	}
+	if page.Fields["v_2_1_1"] != "5" {
+		t.Errorf("Fields[v_2_1_1] = %q, want \"5\"", page.Fields["v_2_1_1"])
+	}
+	if len(page.Buttons) != 2 {
+		t.Errorf("len(Buttons) = %d, want 2 (v_3_1_1, v_3_1_2)", len(page.Buttons))
+	}
+	if _, ok := page.Buttons["v_3_1_1"]; !ok {
+		t.Errorf("Buttons missing v_3_1_1")
+	}
+	if _, ok := page.Buttons["v_3_1_2"]; !ok {
+		t.Errorf("Buttons missing v_3_1_2")
+	}
+	if page.Fields["v_1_1_1"] != "10.1.5.11" {
+		t.Errorf("Fields[v_1_1_1] = %q, want \"10.1.5.11\"", page.Fields["v_1_1_1"])
+	}
+}
+
+// TestParseXUIFormPageRejectsMalformedPage mirrors
+// TestParseXUIListPageRejectsMalformedPage for the flat-page reader.
+func TestParseXUIFormPageRejectsMalformedPage(t *testing.T) {
+	if _, err := webui.ParseXUIFormPage(malformedPage, ""); !errors.Is(err, model.ErrHTTPUnexpectedPage) {
+		t.Errorf("error = %v, want model.ErrHTTPUnexpectedPage", err)
+	}
+}
+
 func sortInts(s []int) {
 	for i := 1; i < len(s); i++ {
 		for j := i; j > 0 && s[j-1] > s[j]; j-- {

@@ -163,3 +163,65 @@ func ParseGS105PEStats(html string) ([]model.PortStats, error) {
 	}
 	return out, nil
 }
+
+// gs105peDHCPSelectRE mirrors Python parse.parse_gs105pe_sysinfo's inline
+// DHCP-mode scrape: a `<select id="dhcpMode">` whose FIRST `<option
+// value="1">` carries `selected` means Enable/DHCP; `"0"` means
+// Disable/static.
+var gs105peDHCPSelectRE = regexp.MustCompile(`(?s)<select[^>]*id="dhcpMode".*?<option value="1"[^>]*selected`)
+
+// ParseGS105PESysInfo parses GS105PE's switch_info.cgi -> device identity +
+// mgmt-IP config, mirroring Python parse.parse_gs105pe_sysinfo (source
+// lines 486-523, dossier §2.5). GROUNDED in gs105pe_switch_info.html.
+// Identity comes from the same `<td>Label</td><td>value</td>` rows
+// labeledCell reads for GS110EMX's ParseSysInfo; the mgmt IP/mask/gateway
+// come from the LOWERCASE ip_address/subnet_mask/gateway_address inputs
+// (NOT GS110EMX's uppercase IP_ADDRESS etc. -- a genuinely different
+// field-name convention between the two models despite sharing a login
+// scheme).
+func ParseGS105PESysInfo(html string) (HTTPSysInfo, error) {
+	productName, okProduct := labeledCell(html, "Product Name")
+	serialNumber, okSerial := labeledCell(html, "Serial Number")
+	macAddress, okMAC := labeledCell(html, "MAC Address")
+	firmwareVersion, okFirmware := labeledCell(html, "Firmware Version")
+	ipAddress, okIP := namedInputValue(html, "ip_address")
+	subnetMask, okMask := namedInputValue(html, "subnet_mask")
+	gatewayAddress, okGateway := namedInputValue(html, "gateway_address")
+
+	var missing []string
+	for _, f := range []struct {
+		name string
+		ok   bool
+	}{
+		{"Product Name", okProduct},
+		{"Serial Number", okSerial},
+		{"MAC Address", okMAC},
+		{"Firmware Version", okFirmware},
+		{"ip_address", okIP},
+		{"subnet_mask", okMask},
+		{"gateway_address", okGateway},
+	} {
+		if !f.ok {
+			missing = append(missing, f.name)
+		}
+	}
+	if len(missing) > 0 {
+		return HTTPSysInfo{}, errUnexpectedPage("switch_info.cgi: missing expected field(s): %s", strings.Join(missing, ", "))
+	}
+	ipMode := model.IPModeStatic
+	if gs105peDHCPSelectRE.MatchString(html) {
+		ipMode = model.IPModeDHCP
+	}
+	switchName, _ := namedInputValue(html, "switch_name")
+	return HTTPSysInfo{
+		ProductName:     productName,
+		SwitchName:      switchName,
+		SerialNumber:    serialNumber,
+		MacAddress:      macAddress,
+		FirmwareVersion: firmwareVersion,
+		IPMode:          ipMode,
+		IPAddress:       ipAddress,
+		SubnetMask:      subnetMask,
+		GatewayAddress:  gatewayAddress,
+	}, nil
+}

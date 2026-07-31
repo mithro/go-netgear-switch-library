@@ -26,12 +26,12 @@ package webui
 //   - The FASTPATH "VLAN Membership" page parser, parse_fastpath_membership
 //     (source lines 1719-2046) -- the single most intricate parser in the
 //     reference, shared by ALL FOUR managed models (gsm7252ps, gsm7228ps,
-//     m4300-24x, m4300-16x), plus the minimal slice of the generic XUI
-//     form-page helpers (source lines 2048-2306) needed to serve
-//     ParseXUIMgmtIP -- the full parse_xui_list_page/parse_xui_form_page
-//     (returning the XuiListPage/XuiFormPage types the Writer's echo-back
-//     needs) are deliberately NOT ported here; see this file's XUI section
-//     header for why.
+//     m4300-24x, m4300-16x), plus the full generic XUI form-page helpers
+//     (source lines 2048-2306): ParseXUIMgmtIP, and (added by Task 4, once
+//     webui/types.go's XuiListPage/XuiFormPage existed for them to return)
+//     ParseXUIListPage/ParseXUIFormPage -- the row-repeating/flat page
+//     readers the eventual Writer's echo-back (forms.go's
+//     XuiRowApplyForm/XuiFormApplyForm) depends on.
 
 import (
 	"fmt"
@@ -1281,42 +1281,46 @@ func FastpathHiddenMemWith(page FastpathMembership, port int, mode model.VlanMod
 }
 
 // ---------------------------------------------------------------------------
-// FASTPATH "XE"/Cheetah XUI generic form pages -- the minimal slice needed
-// for ParseXUIMgmtIP (source lines 2048-2306). Every one of these pages
-// carries TWO <FORM>s: the first (.../a0) is the applet/redirect form and
-// holds no data; the SECOND (.../a1) is the read+write form everything here
-// is scoped to. The full parse_xui_list_page/parse_xui_form_page (returning
-// the XuiListPage/XuiFormPage row-repeating types) are deliberately NOT
-// ported in this task -- they are used ONLY by the Writer's echo-back
-// (http_write.py), never by a read, so they are deferred to whichever task
-// adds webui/types.go (Task 4) and the Writer (Task 7); see this package's
-// parse_gs110emx.go-style precedent of deferring HttpSysInfo-dependent
-// parsers until their type lands.
+// FASTPATH "XE"/Cheetah XUI generic form pages (source lines 2048-2306).
+// Every one of these pages carries TWO <FORM>s: the first (.../a0) is the
+// applet/redirect form and holds no data; the SECOND (.../a1) is the
+// read+write form everything here is scoped to. ParseXUIListPage/
+// ParseXUIFormPage return the XuiListPage/XuiFormPage row-repeating/flat
+// types (webui/types.go) the eventual Writer's echo-back (forms.go's
+// XuiRowApplyForm/XuiFormApplyForm) consumes; ParseXUIMgmtIP needs only the
+// flat field map, not either wrapper type.
 // ---------------------------------------------------------------------------
 
 var xuiFormRE = regexp.MustCompile(`(?i)<FORM\b[^>]*ACTION="([^"]*/a1)"`)
 
-// xuiFormBlock mirrors Python parse._xui_form_block: the inner HTML of the
-// page's SECOND <FORM ACTION=".../a1">, or an error -- scoping to this form
-// specifically matters because the first form (/a0) carries
+// xuiFormBlock mirrors Python parse._xui_form_block: (action, inner HTML) of
+// the page's SECOND <FORM ACTION=".../a1">, or an error -- scoping to this
+// form specifically matters because the first form (/a0) carries
 // applet_port/applet_unit/dbgopt fields that must never leak into a read.
-func xuiFormBlock(htmlStr, page string) (string, error) {
+// action is the captured ACTION="..." target (unescaped, matching Python's
+// unescape(m.group(1))) -- ParseXUIMgmtIP discards it (it has no use for the
+// write-form target), but ParseXUIListPage/ParseXUIFormPage need it.
+func xuiFormBlock(htmlStr, page string) (action, block string, err error) {
 	loc := xuiFormRE.FindStringSubmatchIndex(htmlStr)
 	if loc == nil {
-		return "", errUnexpectedPage(
+		return "", "", errUnexpectedPage(
 			`%s: no <FORM ACTION="...(/a1)"> -- this is not a FASTPATH XUI write page (wrong URL, or the session bounced to the login page)`, page)
 	}
-	return htmlStr[loc[1]:], nil
+	return unescapeHTML(htmlStr[loc[2]:loc[3]]), htmlStr[loc[1]:], nil
 }
 
-// xuiInputs mirrors Python parse._xui_inputs: {name: value} for one XUI
-// form block, deliberately NOT unescaped (the caller unescapes only the
-// fields it actually consumes) and deliberately NOT fastpathFormFields --
-// DISABLED inputs (every button) are dropped (a browser never submits
-// them), and a checkbox is not returned as a field at all here since
-// ParseXUIMgmtIP has no use for row selection.
-func xuiInputs(block string) map[string]string {
-	fields := make(map[string]string)
+// xuiInputsWithCheckboxes mirrors Python parse._xui_inputs: ({name: value},
+// [checkbox names]) for one XUI form block, deliberately NOT unescaped (each
+// caller unescapes only the fields it actually consumes) and deliberately
+// NOT fastpathFormFields -- two kinds must be separated out or an echoed
+// body would say something the browser never says:
+//   - DISABLED inputs (every button) are dropped -- a browser never submits
+//     them, the firmware enables the one clicked button itself.
+//   - a checkbox carries no `value` attribute, so echoing it as "" would
+//     silently SELECT that row; row selection is the one thing these pages
+//     key their writes off, so it is returned separately.
+func xuiInputsWithCheckboxes(block string) (fields map[string]string, checkboxes []string) {
+	fields = make(map[string]string)
 	for _, m := range inputRE.FindAllStringSubmatch(block, -1) {
 		attrs := tagAttrs(m[1])
 		name := attrs["name"]
@@ -1327,6 +1331,7 @@ func xuiInputs(block string) map[string]string {
 			continue
 		}
 		if strings.EqualFold(attrs["type"], "checkbox") {
+			checkboxes = append(checkboxes, name)
 			continue
 		}
 		fields[name] = attrs["value"]
@@ -1351,7 +1356,197 @@ func xuiInputs(block string) map[string]string {
 			fields[name] = ""
 		}
 	}
+	return fields, checkboxes
+}
+
+// xuiInputs is xuiInputsWithCheckboxes without the checkbox list, for
+// callers (ParseXUIMgmtIP) that have no use for row selection.
+func xuiInputs(block string) map[string]string {
+	fields, _ := xuiInputsWithCheckboxes(block)
 	return fields
+}
+
+// xuiRowRE mirrors Python parse._XUI_ROW_RE: the repeating rows of a list
+// page. `p="1.35.520"` is the row's coordinate attribute; the field NAMES
+// use the "1.35.52." prefix (same digits, no trailing column index), which
+// is why the prefix is taken from a field name (xuiRowFieldRE) rather than
+// from `p` itself.
+var xuiRowRE = regexp.MustCompile(`(?is)<TR\s+p="[\d.]+"[^>]*>(.*?)</TR>`)
+
+// xuiRowFieldRE mirrors Python parse._XUI_ROW_FIELD_RE: a row-instance data
+// field name, capturing the "<unit>.<row0>.<count>." prefix separately from
+// the bare "v_<a>_<b>_<c>" column.
+var xuiRowFieldRE = regexp.MustCompile(`^((?:\d+\.)+)(v_\d+_\d+_\d+)$`)
+
+// xuiHiddenNames mirrors Python parse._XUI_HIDDEN_NAMES: the trailing
+// "redirection elements" block every XUI form ends with.
+var xuiHiddenNames = [...]string{"submit_flag", "submit_target", "err_flag", "err_msg", "clazz_information"}
+
+// xuiButtonsDivRE mirrors Python parse._XUI_BUTTONS_DIV_RE: the page's
+// buttons live in their own trailing <div id="xuiButtonsDiv">. Scoped to
+// that div ON PURPOSE rather than matched by name shape: the button fields
+// are named v_2_1_N/v_3_1_N depending on the page, and on gsm7228ps's
+// ipConfiguration.html v_2_1_1 is NOT a button at all -- it is the
+// Management VLAN ID data field. A name-shaped guess would have classified
+// a real setting as a button and dropped it from every echoed body.
+var xuiButtonsDivRE = regexp.MustCompile(`(?is)<div id="xuiButtonsDiv"[^>]*>(.*?)</div>`)
+
+// xuiTokenRE mirrors Python parse._XUI_TOKEN_RE: page-level fields that are
+// NOT data cells and must ride along on every apply. Today that is exactly
+// the per-page CSRFToken the AV-era M4300-16X issues and whose absence it
+// answers with 403; matched by name rather than by "not a v_* field" so a
+// future data field cannot be swept in by accident.
+var xuiTokenRE = regexp.MustCompile(`(?i)^CSRFToken$`)
+
+// xuiNavRowRE mirrors Python parse._XUI_NAV_ROW_RE: the page's
+// list-NAVIGATION rows -- the "Go To Port" bars the firmware emits above and
+// below the table, marked class=deftestme.
+var xuiNavRowRE = regexp.MustCompile(`(?is)<TR\b[^>]*\bclass=["']?deftestme["']?[^>]*>(.*?)</TR>`)
+
+// xuiPageFieldRE mirrors Python parse._XUI_PAGE_FIELD_RE: a page-level
+// (unprefixed) data field name, e.g. "v_1_1_1". Deliberately excludes the
+// global "apply to all rows" row's "v_g_1_2_*" twins -- echoing those back
+// is itself refused (live 2026-07-30 on gsm7252ps 10.1.5.22: a PoE apply
+// that carried them answered err_flag=1, because the global row's cells
+// render EMPTY and the firmware tries to apply them to every port).
+var xuiPageFieldRE = regexp.MustCompile(`^v_\d+_\d+_\d+$`)
+
+// xuiButtons mirrors Python parse._xui_buttons: the page's button fields ->
+// their labels ("v_2_1_2" -> "APPLY"). Kept even though the inputs are
+// rendered DISABLED (so a browser would not submit them), because the
+// firmware's own xuiProcessButtonActions calls xuiShed(3, ...) to ENABLE the
+// clicked button before form.submit() -- so the real POST does carry
+// exactly one of these, with the label as its value. The labels are NOT
+// interchangeable between models: the same v_2_1_3 reads "RESET" on
+// gsm7252ps/gsm7228ps and "Power Cycle Port(s)" on both M4300s (live
+// 2026-07-30), which is why the value is echoed from the page instead of
+// being a constant.
+func xuiButtons(htmlStr string) map[string]string {
+	div := xuiButtonsDivRE.FindStringSubmatch(htmlStr)
+	if div == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string)
+	for _, m := range inputRE.FindAllStringSubmatch(div[1], -1) {
+		attrs := tagAttrs(m[1])
+		if name := attrs["name"]; name != "" {
+			out[name] = unescapeHTML(attrs["value"])
+		}
+	}
+	return out
+}
+
+// ParseXUIListPage parses a FASTPATH XUI table page -> its write form + one
+// XuiRow per row, mirroring Python parse.parse_xui_list_page (source lines
+// 2178-2233, dossier §2.8). page names the page in any returned error
+// ("" defaults to "XUI list page").
+//
+// Raises (returns an error wrapping model.ErrHTTPUnexpectedPage) only when
+// the write form is missing. An EMPTY row slice is NOT an error and is not
+// swallowed either -- it is a real, meaningful answer the caller
+// interprets: the M4300-24X genuinely has no PoE, and its
+// /v1/poeInterfaceConfiguration.html proves it with an HTTP 200 of 28152
+// bytes carrying the correct <TITLE>NETGEAR -  PoE Port Configuration</TITLE>,
+// the full button set and ZERO <TR p="..."> rows (live 2026-07-30 on
+// 10.1.5.13). A 404 would have been a missing page; this is a present page
+// with no PSE ports.
+func ParseXUIListPage(htmlStr, page string) (XuiListPage, error) {
+	if page == "" {
+		page = "XUI list page"
+	}
+	action, block, err := xuiFormBlock(htmlStr, page)
+	if err != nil {
+		return XuiListPage{}, err
+	}
+	rows := make([]XuiRow, 0)
+	for _, m := range xuiRowRE.FindAllStringSubmatch(block, -1) {
+		rowFields, checkboxes := xuiInputsWithCheckboxes(m[1])
+		prefix := ""
+		for name := range rowFields {
+			if pm := xuiRowFieldRE.FindStringSubmatch(name); pm != nil {
+				prefix = pm[1]
+				break
+			}
+		}
+		if prefix == "" {
+			continue // a spacer/label row, not a data row
+		}
+		var checkbox *string
+		for _, cb := range checkboxes {
+			if strings.HasPrefix(cb, prefix) {
+				c := cb
+				checkbox = &c
+				break
+			}
+		}
+		fields := make(map[string]string, len(rowFields))
+		for k, v := range rowFields {
+			fields[k] = unescapeHTML(v)
+		}
+		rows = append(rows, XuiRow{Prefix: prefix, Checkbox: checkbox, Fields: fields})
+	}
+	formFields, _ := xuiInputsWithCheckboxes(xuiRowRE.ReplaceAllString(block, ""))
+	nav := make(map[string]string)
+	for _, m := range xuiNavRowRE.FindAllStringSubmatch(block, -1) {
+		rowFields, _ := xuiInputsWithCheckboxes(m[1])
+		for n, v := range rowFields {
+			if xuiPageFieldRE.MatchString(n) {
+				nav[n] = unescapeHTML(v)
+			}
+		}
+	}
+	hidden := make(map[string]string)
+	for _, n := range xuiHiddenNames {
+		if v, ok := formFields[n]; ok {
+			hidden[n] = v // NOT unescaped -- matches Python's dict comprehension here (unlike tokens/row fields/nav)
+		}
+	}
+	tokens := make(map[string]string)
+	for n, v := range formFields {
+		if xuiTokenRE.MatchString(n) {
+			tokens[n] = unescapeHTML(v)
+		}
+	}
+	return XuiListPage{
+		Action:  action,
+		Hidden:  hidden,
+		Buttons: xuiButtons(block),
+		Rows:    rows,
+		Tokens:  tokens,
+		Nav:     nav,
+	}, nil
+}
+
+// ParseXUIFormPage parses a FASTPATH XUI detail page -> its write form's
+// flat field map, mirroring Python parse.parse_xui_form_page (source lines
+// 2236-2246, dossier §2.8). page names the page in any returned error ("" =
+// "XUI page").
+func ParseXUIFormPage(htmlStr, page string) (XuiFormPage, error) {
+	if page == "" {
+		page = "XUI page"
+	}
+	action, block, err := xuiFormBlock(htmlStr, page)
+	if err != nil {
+		return XuiFormPage{}, err
+	}
+	fields, _ := xuiInputsWithCheckboxes(block)
+	hidden := make(map[string]string, len(xuiHiddenNames))
+	for _, n := range xuiHiddenNames {
+		if v, ok := fields[n]; ok {
+			hidden[n] = v // NOT unescaped, popped straight from fields -- see ParseXUIListPage
+			delete(fields, n)
+		}
+	}
+	out := make(map[string]string, len(fields))
+	for k, v := range fields {
+		out[k] = unescapeHTML(v)
+	}
+	return XuiFormPage{
+		Action:  action,
+		Hidden:  hidden,
+		Buttons: xuiButtons(block),
+		Fields:  out,
+	}, nil
 }
 
 var xuiIPMode = map[string]model.IPMode{
@@ -1377,7 +1572,7 @@ func ParseXUIMgmtIP(htmlStr string, addressField, netmaskField, gatewayField, mo
 	if page == "" {
 		page = "XUI management-IP page"
 	}
-	block, err := xuiFormBlock(htmlStr, page)
+	_, block, err := xuiFormBlock(htmlStr, page)
 	if err != nil {
 		return model.MgmtIPConfig{}, err
 	}

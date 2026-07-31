@@ -287,3 +287,94 @@ func ParseGS110EMXPortFormFields(html string) (map[int]map[string]string, error)
 	}
 	return out, nil
 }
+
+// labeledCell mirrors Python parse._labeled_cell: sysInfo.html's
+// `<td>Label</td><td>value</td>` row shape, trimmed. Shared by ParseSysInfo
+// (this file) and parse_gs105pe.go's ParseGS105PESysInfo -- both dialects'
+// identity rows use the exact same two-cell shape, differing only in which
+// labels/field names carry the mgmt-IP values (see each function's doc
+// comment).
+func labeledCell(html, label string) (string, bool) {
+	re := regexp.MustCompile(`<td[^>]*>` + regexp.QuoteMeta(label) + `</td>\s*<td[^>]*>([^<]*)</td>`)
+	m := re.FindStringSubmatch(html)
+	if m == nil {
+		return "", false
+	}
+	return strings.TrimSpace(m[1]), true
+}
+
+// namedInputValue mirrors Python parse._named_input_value: sysInfo.html's
+// `<input name="NAME" ... value="...">` fields. Shared the same way as
+// labeledCell.
+func namedInputValue(html, name string) (string, bool) {
+	re := regexp.MustCompile(`name=["']` + regexp.QuoteMeta(name) + `["'][^>]*value=["']([^"']*)["']`)
+	m := re.FindStringSubmatch(html)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+// dhcpSelectValueRE mirrors Python parse.parse_sysinfo's inline
+// `<tr data-select-value="(\d+)">` scrape wrapping the DHCP-mode <select>.
+var dhcpSelectValueRE = regexp.MustCompile(`<tr data-select-value="(\d+)"`)
+
+// ParseSysInfo parses GS110EMX's sysInfo.html -> device identity + mgmt-IP
+// config, mirroring Python parse.parse_sysinfo (source lines 2360-2400,
+// dossier §2.4). GROUNDED in gs110emx_sysinfo.html (a real capture) -- see
+// HTTPSysInfo (types.go) for field provenance, including the ip_mode
+// data-select-value inference caveat. Returns an error wrapping
+// model.ErrHTTPUnexpectedPage naming whichever field(s) are missing rather
+// than fabricating a partial result -- this page is never legitimately
+// missing any of these on a real switch.
+func ParseSysInfo(html string) (HTTPSysInfo, error) {
+	productName, okProduct := labeledCell(html, "Product Name")
+	serialNumber, okSerial := labeledCell(html, "Serial Number")
+	macAddress, okMAC := labeledCell(html, "MAC Address")
+	firmwareVersion, okFirmware := labeledCell(html, "Firmware Version")
+	switchName, okSwitchName := namedInputValue(html, "switch_name")
+	ipAddress, okIP := namedInputValue(html, "IP_ADDRESS")
+	subnetMask, okMask := namedInputValue(html, "SUBNET_MASK")
+	gatewayAddress, okGateway := namedInputValue(html, "GATEWAY_ADDRESS")
+
+	var missing []string
+	for _, f := range []struct {
+		name string
+		ok   bool
+	}{
+		{"Product Name", okProduct},
+		{"Serial Number", okSerial},
+		{"MAC Address", okMAC},
+		{"Firmware Version", okFirmware},
+		{"switch_name", okSwitchName},
+		{"IP_ADDRESS", okIP},
+		{"SUBNET_MASK", okMask},
+		{"GATEWAY_ADDRESS", okGateway},
+	} {
+		if !f.ok {
+			missing = append(missing, f.name)
+		}
+	}
+	dhcpSelect := dhcpSelectValueRE.FindStringSubmatch(html)
+	if dhcpSelect == nil {
+		missing = append(missing, "DHCP data-select-value")
+	}
+	if len(missing) > 0 {
+		return HTTPSysInfo{}, errUnexpectedPage("sysInfo.html: missing expected field(s): %s", strings.Join(missing, ", "))
+	}
+	ipMode := model.IPModeStatic
+	if dhcpSelect[1] == "1" {
+		ipMode = model.IPModeDHCP
+	}
+	return HTTPSysInfo{
+		ProductName:     productName,
+		SwitchName:      switchName,
+		SerialNumber:    serialNumber,
+		MacAddress:      macAddress,
+		FirmwareVersion: firmwareVersion,
+		IPMode:          ipMode,
+		IPAddress:       ipAddress,
+		SubnetMask:      subnetMask,
+		GatewayAddress:  gatewayAddress,
+	}, nil
+}
