@@ -235,11 +235,13 @@ func TestFacadeNSDPIntegration_GS110EMXUnsupportedReadsRaise(t *testing.T) {
 	if _, err := sw.GetMACs(ctx); !errors.Is(err, netgearswitch.ErrUnsupportedCapability) {
 		t.Errorf("GetMACs() error = %v, want wrapping ErrUnsupportedCapability", err)
 	}
-	// GetLLDP/GetSensors/GetPoE: NSDP itself raises ErrUnsupportedCapability
-	// for each (no LLDP/sensor/PoE tags exist), HTTP has no Go backend yet
-	// in this slice, so the dispatch loop's last-recorded error is HTTP's
-	// "no backend implementation yet" -- still ErrUnsupportedCapability,
-	// still naming the model.
+	// GetLLDP/GetSensors/GetPoE: gs110emx's default backend is NSDP (its
+	// only backendPreference member); NSDP itself raises
+	// ErrUnsupportedCapability for each (no LLDP/sensor/PoE tags exist).
+	// Under single-backend dispatch (D-REC Topic A) that is the end of it --
+	// HTTP (no Go backend yet in this slice regardless) is never attempted --
+	// still ErrUnsupportedCapability, still naming the model (and NSDP as
+	// the backend that failed).
 	if _, err := sw.GetLLDP(ctx); !errors.Is(err, netgearswitch.ErrUnsupportedCapability) {
 		t.Errorf("GetLLDP() error = %v, want wrapping ErrUnsupportedCapability", err)
 	}
@@ -522,7 +524,7 @@ func TestFacadeNSDPIntegration_GS305EPUnsupportedReadsRaise(t *testing.T) {
 		t.Errorf("GetSensors() error = %v, want wrapping ErrUnsupportedCapability", err)
 	}
 	if _, err := sw.GetPoE(ctx); !errors.Is(err, netgearswitch.ErrUnsupportedCapability) {
-		t.Errorf("GetPoE() error = %v, want wrapping ErrUnsupportedCapability (NSDP has no PoE tag; HTTP not implemented until slice 06)", err)
+		t.Errorf("GetPoE() error = %v, want wrapping ErrUnsupportedCapability (gs305ep's default backend NSDP has no PoE tag; single-backend dispatch never attempts HTTP without an explicit backend= override)", err)
 	}
 }
 

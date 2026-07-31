@@ -395,11 +395,24 @@ func TestSnapshot_PopulatesModelAndHost(t *testing.T) {
 	}
 }
 
-func TestSnapshot_DegradesUnsupportedFieldsToEmptyAndFallsThroughToSecondBackend(t *testing.T) {
+// TestSnapshot_DegradesUnsupportedFieldsToEmptyNoCrossBackendFill replaces
+// the pre-reconciliation TestSnapshot_DegradesUnsupportedFieldsToEmptyAndFallsThroughToSecondBackend
+// (D-REC A.9/A.12): Snapshot resolves ONE backend for the WHOLE call (the
+// SAME pure, deterministic resolveBackend(model, nil, preference) result
+// every field's readVia call independently computes), so a field that
+// backend can't serve degrades to empty and is NEVER filled from a second,
+// different backend -- even when one is injected and would have answered.
+// This mirrors Python's pinned
+// test_snapshot_on_plus_model_uses_nsdp_and_skips_unsupported_sections
+// (gs305ep, NSDP-default, an injected FakeHttp that WOULD answer PoE but is
+// never reached): the old test's core assertion (PoE filled from HTTP) is
+// now WRONG under the no-fallback contract -- PoE must degrade to empty,
+// exactly like every other NSDP gap, even though the HTTP fake here would
+// happily answer it if GetPoE(WithReadBackend(HTTP)) were called explicitly
+// (see TestGetPoE_DefaultBackendCannotServeNamesBothBackends in
+// switch_test.go for that explicit-override path).
+func TestSnapshot_DegradesUnsupportedFieldsToEmptyNoCrossBackendFill(t *testing.T) {
 	clearBackendRegistry(t)
-	// Mirrors D-FAC's pinned test_snapshot_on_plus_model_uses_nsdp_and_skips_unsupported_sections:
-	// NSDP serves ports but raises Unsupported for macs/lldp/sensors/poe;
-	// HTTP fills the poe gap NSDP left. gs305ep is a real {NSDP,HTTP} model.
 	nsdpPorts := []model.PortStatus{{Port: 1, AdminEnabled: true}}
 	withRegisteredBackend(t, model.BackendNSDP, func(_ *Switch) (BackendReader, error) {
 		return &stubReader{
@@ -411,8 +424,13 @@ func TestSnapshot_DegradesUnsupportedFieldsToEmptyAndFallsThroughToSecondBackend
 			mgmtIPErr:  wrapUnsupported("nsdp mgmt ip gap for this test"),
 		}, nil
 	})
+	// Injected but must NEVER be reached by Snapshot: gs305ep's default
+	// backend (NSDP) is chosen for every field in this one call, and
+	// Snapshot never re-dispatches a degraded field to a different backend.
+	httpBuilt := false
 	httpPoe := []model.PoEStatus{{Port: 1, Detect: model.PoEDetectDelivering}}
 	withRegisteredBackend(t, model.BackendHTTP, func(_ *Switch) (BackendReader, error) {
+		httpBuilt = true
 		return &stubReader{poe: httpPoe, mgmtIPErr: wrapUnsupported("http mgmt ip gap for this test")}, nil
 	})
 
@@ -438,11 +456,14 @@ func TestSnapshot_DegradesUnsupportedFieldsToEmptyAndFallsThroughToSecondBackend
 	if len(data.Sensors) != 0 {
 		t.Fatalf("Snapshot().Sensors = %v, want empty (degraded)", data.Sensors)
 	}
-	if len(data.PoE) != 1 || !data.PoE[0].Delivering() {
-		t.Fatalf("Snapshot().PoE = %v, want HTTP's one delivering port (NSDP gap filled by HTTP)", data.PoE)
+	if len(data.PoE) != 0 {
+		t.Fatalf("Snapshot().PoE = %v, want empty (degraded -- NO cross-backend fill from HTTP under single-backend dispatch)", data.PoE)
 	}
 	if data.MgmtIP != nil {
 		t.Fatalf("Snapshot().MgmtIP = %v, want nil (degraded)", data.MgmtIP)
+	}
+	if httpBuilt {
+		t.Fatal("Snapshot() must never build the HTTP reader at all: every field resolves to NSDP, gs305ep's single chosen backend for this call")
 	}
 }
 

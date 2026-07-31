@@ -33,6 +33,20 @@ import (
 // safety rail regardless of which one ends up serving the delete.
 type Write struct {
 	Force bool
+	// Backend, if set, runs THIS write call over exactly that backend,
+	// overriding both this Switch's pinned default (WithBackend) and the
+	// model's own highest-preference backend -- the write-side twin of
+	// ReadOption/WithReadBackend (D-REC A.10.3). Writes reuse this ALREADY-
+	// mandatory options struct rather than a second, parallel functional-
+	// option mechanism: every write call site already passes a Write{}
+	// value at minimum, so extending it costs nothing at existing call
+	// sites (nil is already what every caller not touching this field
+	// gets). The named backend must be one the model declares or the call
+	// raises naming it (resolveBackend's "no such backend" shape,
+	// dispatch.go); it need not be one that can actually serve the
+	// operation -- an op it cannot serve still raises, never silently
+	// falling back to a different backend.
+	Backend *model.Backend
 }
 
 // CycleOption configures a PoE cycle/clear-fault call's poll timeouts,
@@ -65,7 +79,7 @@ func cycleTimeoutsFromOptions(opts []CycleOption) snmp.PoeCycleTimeouts {
 // (fires only when turning PoE off) lives entirely in the BackendWriter
 // (snmp.Writer.SetPoE, D-WR §2.5); o.Force is forwarded unchanged.
 func (s *Switch) SetPoE(ctx context.Context, port int, on bool, o Write) error {
-	return s.writeVia(ctx, "set_poe", func(w BackendWriter) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.SetPoE(ctx, port, on, o.Force)
 	})
 }
@@ -75,7 +89,7 @@ func (s *Switch) SetPoE(ctx context.Context, port int, on bool, o Write) error {
 // (fires only when disabling) lives entirely in the BackendWriter
 // (snmp.Writer.SetPortEnabled, D-WR §2.8); o.Force is forwarded unchanged.
 func (s *Switch) SetPortEnabled(ctx context.Context, port int, enabled bool, o Write) error {
-	return s.writeVia(ctx, "set_port_enabled", func(w BackendWriter) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.SetPortEnabled(ctx, port, enabled, o.Force)
 	})
 }
@@ -85,7 +99,7 @@ func (s *Switch) SetPortEnabled(ctx context.Context, port int, enabled bool, o W
 // entirely in the BackendWriter (snmp.Writer.SetPVID, D-WR §2.9); o.Force is
 // forwarded unchanged.
 func (s *Switch) SetPVID(ctx context.Context, port, vlan int, o Write) error {
-	return s.writeVia(ctx, "set_pvid", func(w BackendWriter) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.SetPVID(ctx, port, vlan, o.Force)
 	})
 }
@@ -96,62 +110,76 @@ func (s *Switch) SetPVID(ctx context.Context, port, vlan int, o Write) error {
 // (snmp.Writer.SetVlanMembership, D-WR §2.10); o.Force is forwarded
 // unchanged.
 func (s *Switch) SetVlanMembership(ctx context.Context, vlanID, port int, mode VlanMode, o Write) error {
-	return s.writeVia(ctx, "set_vlan_membership", func(w BackendWriter) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.SetVlanMembership(ctx, vlanID, port, mode, o.Force)
 	})
 }
 
-// CreateVlan creates vlanID with the given name, dispatched through
-// whichever backend serves it first. CreateVlan never guards on protected
-// ports (an empty VLAN has no member ports by construction, D-WR §2.11) --
-// o is accepted only for surface consistency with every other write method
-// here; the underlying BackendWriter.CreateVlan takes no force parameter at
-// all, so o.Force is not forwarded.
-//
-//nolint:revive // o is intentionally unused; see doc comment above.
+// CreateVlan creates vlanID with the given name, dispatched through the
+// resolved backend (o.Backend, or this Switch's default). CreateVlan never
+// guards on protected ports (an empty VLAN has no member ports by
+// construction, D-WR §2.11); the underlying BackendWriter.CreateVlan takes
+// no force parameter at all, so o.Force is not forwarded -- only o.Backend
+// is consulted.
 func (s *Switch) CreateVlan(ctx context.Context, vlanID int, name string, o Write) error {
-	return s.writeVia(ctx, "create_vlan", func(w BackendWriter) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.CreateVlan(ctx, vlanID, name)
 	})
 }
 
-// DeleteVlan destroys vlanID, dispatched through whichever backend serves
-// it first. Unlike every other write method, this ALSO runs a facade-level
-// guard (guardVLANDeleteMembers, D-WR §3.3) BEFORE dispatch: a full
-// GetVLANs read-dispatch checks the target VLAN's member ports against
-// s.protectedPorts, refusing with the SAME message text
-// snmp.Writer.DeleteVlan's own internal guard uses -- so every backend gets
-// the same safety rail even though only the SNMP writer enforces it
-// natively today. The guard degrades SILENTLY (no error) if no backend can
-// even read VLANs, and is skipped entirely when o.Force is true.
+// DeleteVlan destroys vlanID, dispatched through the resolved backend
+// (o.Backend, or this Switch's default). Unlike every other write method,
+// this ALSO runs a facade-level guard (guardVLANDeleteMembers, D-WR §3.3)
+// BEFORE dispatch: a GetVLANs read over the SAME backend the delete itself
+// will use (D-REC A.7/A.10.7 -- new plumbing versus the pre-reconciliation
+// Go source, which always read over the facade default regardless of
+// o.Backend) checks the target VLAN's member ports against s.protectedPorts,
+// refusing with the SAME message text snmp.Writer.DeleteVlan's own internal
+// guard uses -- so every backend gets the same safety rail even though only
+// the SNMP writer enforces it natively today. The guard degrades SILENTLY
+// (no error) if that backend can't even read VLANs, and is skipped entirely
+// when o.Force is true.
 func (s *Switch) DeleteVlan(ctx context.Context, vlanID int, o Write) error {
-	if err := s.guardVLANDeleteMembers(ctx, vlanID, o.Force); err != nil {
+	if err := s.guardVLANDeleteMembers(ctx, vlanID, o.Force, o.Backend); err != nil {
 		return err
 	}
-	return s.writeVia(ctx, "delete_vlan", func(w BackendWriter) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.DeleteVlan(ctx, vlanID, o.Force)
 	})
+}
+
+// readOptsForBackend converts a write-side *model.Backend override
+// (Write.Backend, possibly nil) into the ReadOption slice
+// guardVLANDeleteMembers's internal GetVLANs read needs to run over the
+// SAME backend the delete itself will use (D-REC A.7/A.10.7): nil yields no
+// options, so GetVLANs falls through to its own default resolution --
+// identical to what the delete's own writeVia call uses for backend=nil.
+func readOptsForBackend(b *model.Backend) []ReadOption {
+	if b == nil {
+		return nil
+	}
+	return []ReadOption{WithReadBackend(*b)}
 }
 
 // guardVLANDeleteMembers is the facade-level duplicate of
 // snmp.Writer.DeleteVlan's own protected-port guard, mirroring Python's
 // SyncSwitch._guard_vlan_delete_members exactly (D-WR §3.3): if force is
-// true, it is a no-op. Otherwise it does a full GetVLANs read-dispatch (the
-// SAME backend-preference machinery every other read uses); an
-// UnsupportedCapability failure there (no backend can even read VLANs)
-// degrades SILENTLY -- an inability to check is not treated as a reason to
-// block the delete -- while any OTHER error propagates. If the target VLAN
-// is found, its MemberPorts are intersected with s.protectedPorts; a
-// non-empty clash raises an error wrapping model.ErrProtectedPort with the
-// EXACT message text snmp.Writer.DeleteVlan's own guard uses (formatIntList
-// below is a deliberate byte-identical duplicate of the snmp package's
-// private helper of the same name, per D-WR trap #10 -- both copies must
-// stay in sync).
-func (s *Switch) guardVLANDeleteMembers(ctx context.Context, vlanID int, force bool) error {
+// true, it is a no-op. Otherwise it reads VLANs over the SAME backend the
+// delete itself will use (backend, threaded through as a ReadOption -- D-REC
+// A.7/A.10.7); an UnsupportedCapability failure there (that backend can't
+// even read VLANs) degrades SILENTLY -- an inability to check is not treated
+// as a reason to block the delete -- while any OTHER error propagates. If
+// the target VLAN is found, its MemberPorts are intersected with
+// s.protectedPorts; a non-empty clash raises an error wrapping
+// model.ErrProtectedPort with the EXACT message text snmp.Writer.DeleteVlan's
+// own guard uses (formatIntList below is a deliberate byte-identical
+// duplicate of the snmp package's private helper of the same name, per D-WR
+// trap #10 -- both copies must stay in sync).
+func (s *Switch) guardVLANDeleteMembers(ctx context.Context, vlanID int, force bool, backend *model.Backend) error {
 	if force {
 		return nil
 	}
-	vlans, err := s.GetVLANs(ctx)
+	vlans, err := s.GetVLANs(ctx, readOptsForBackend(backend)...)
 	if err != nil {
 		if errors.Is(err, model.ErrUnsupportedCapability) {
 			return nil
@@ -211,7 +239,7 @@ func formatIntList(ports []int) string {
 // BackendWriter (snmp.Writer.SetMgmtIP, D-WR §2.13); o.Force is forwarded
 // unchanged -- the facade adds no separate check of its own.
 func (s *Switch) SetMgmtIP(ctx context.Context, address, netmask, gateway string, o Write) error {
-	return s.writeVia(ctx, "set_mgmt_ip", func(w BackendWriter) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.SetMgmtIP(ctx, address, netmask, gateway, o.Force)
 	})
 }
@@ -223,7 +251,7 @@ func (s *Switch) SetMgmtIP(ctx context.Context, address, netmask, gateway string
 // override the default PoE cycle timeouts (snmp.DefaultPoeCycleTimeouts).
 func (s *Switch) CyclePoE(ctx context.Context, port int, o Write, opts ...CycleOption) error {
 	timeouts := cycleTimeoutsFromOptions(opts)
-	return s.writeVia(ctx, "cycle_poe", func(w BackendWriter) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.CyclePoE(ctx, port, timeouts, o.Force)
 	})
 }
@@ -236,7 +264,7 @@ func (s *Switch) CyclePoE(ctx context.Context, port int, o Write, opts ...CycleO
 // opts override the default PoE cycle timeouts.
 func (s *Switch) ClearPoEFault(ctx context.Context, port int, o Write, opts ...CycleOption) error {
 	timeouts := cycleTimeoutsFromOptions(opts)
-	return s.writeVia(ctx, "clear_poe_fault", func(w BackendWriter) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
 		return w.ClearPoEFault(ctx, port, timeouts, o.Force)
 	})
 }

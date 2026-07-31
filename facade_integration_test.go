@@ -401,9 +401,11 @@ func TestFacadeIntegration_GS110EMXNSDPServesReadsHTTPStillDegrades(t *testing.T
 
 	// GetMACs is gated at the facade level before any dispatch (gs110emx has
 	// no SNMP backend, so HasMACTable() is false); GetLLDP/GetSensors/GetPoE
-	// dispatch through NSDP (which raises ErrUnsupportedCapability for each)
-	// then HTTP (still unregistered in this slice) -- both still an honest
-	// ErrUnsupportedCapability naming the model, exactly like before slice 05.
+	// resolve to NSDP (gs110emx's default backend: NSDP+HTTP, NSDP wins) and
+	// NSDP itself raises ErrUnsupportedCapability for each -- under
+	// single-backend dispatch (D-REC Topic A) this is a hard stop, never a
+	// fall-through attempt at HTTP (still unregistered in this slice
+	// regardless): an honest ErrUnsupportedCapability naming NSDP.
 	if _, err := sw.GetMACs(ctx); !errors.Is(err, netgearswitch.ErrUnsupportedCapability) {
 		t.Errorf("GetMACs() on gs110emx error = %v, want wrapping ErrUnsupportedCapability", err)
 	}
