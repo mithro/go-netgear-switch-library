@@ -150,7 +150,7 @@ Exact wire flow per scheme (from `endpoints.py` docstrings + `client.py`):
    query strings (see §1.5 gs728tpp), so the final URL is
    `/<sess>/wcd?{file=...}{...}`.
 
-### 1.2 `HtmlDialect` enum — all 6 values
+### 1.2 `HtmlDialect` enum — all 7 values (CORRECTED: 7 not 6; S3300 is the 7th, used by gsm7228ps — verified vs source Task-1 review)
 
 ```python
 class HtmlDialect(enum.Enum):
@@ -1947,7 +1947,7 @@ port as it lands:
 
 **endpoints.py**: `LoginScheme` (5 values) ✓ §1.1 · `HtmlDialect` (6 values)
 ✓ §1.2 · `XuiMgmtIpFields` (7 fields, 2 instances) ✓ §1.3 · `HttpModelSpec`
-(34 fields) ✓ §1.4 · `HTTP_SPECS`/`_SPECS` all 8 model entries, every field
+(36 fields — CORRECTED from 34, verified vs source) ✓ §1.4 · `HTTP_SPECS`/`_SPECS` all 8 model entries, every field
 ✓ §1.5 · `http_spec()` ✓ §1.5 intro · 1841111 write-op diffs (6 items) ✓ §1.6
 
 **parse.py** (60 top-level functions/regex constants covered): `_cells`,
