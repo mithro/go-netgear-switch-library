@@ -12,14 +12,18 @@ package webui_test
 // socket.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -778,6 +782,78 @@ func TestPostMultipartSendsFileFieldsAndToken(t *testing.T) {
 	}
 	if gotFileContentType != "application/octet-stream" {
 		t.Errorf("file Content-Type = %q, want %q", gotFileContentType, "application/octet-stream")
+	}
+}
+
+// TestPostMultipartFieldsWrittenInSortedOrder pins PostMultipart's field
+// write order to sorted-by-key, matching PostForm's (url.Values.Encode-
+// derived) determinism. http.Request.ParseMultipartForm reassembles fields
+// into a map, discarding wire order, so this test walks the RAW body bytes
+// with mime/multipart.Reader instead -- the only way to observe the
+// sequence actually written to the wire.
+func TestPostMultipartFieldsWrittenInSortedOrder(t *testing.T) {
+	const password, rand, token = "secret", "xyz789", "tok-9"
+	var gotFieldNames []string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `<input id="rand" value="%s">`, rand)
+	})
+	mux.HandleFunc("/redirect.html", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `<input type="hidden" name="Gambit" value="%s">`, token)
+	})
+	mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mr := multipart.NewReader(bytes.NewReader(raw), params["boundary"])
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			gotFieldNames = append(gotFieldNames, part.FormName())
+			_, _ = io.Copy(io.Discard, part)
+		}
+		_, _ = fmt.Fprint(w, "UPLOAD-OK")
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := webui.NewHTTPClient(trimScheme(server.URL), password, webui.HTTPSpecs["gs110emx"])
+	_, err := client.PostMultipart(context.Background(), "/upload", map[string]string{
+		"zebra": "1",
+		"apple": "2",
+		"mango": "3",
+	}, webui.MultipartFile{
+		Field:       "cert",
+		Filename:    "cert.pem",
+		Content:     []byte("PEMDATA"),
+		ContentType: "application/octet-stream",
+	})
+	if err != nil {
+		t.Fatalf("PostMultipart() = %v, want nil", err)
+	}
+
+	// The token field (spec.SessionTokenField="Gambit" for gs110emx) is
+	// merged into data before the sort, so it participates in the same
+	// sorted-key ordering as the caller's own fields; the file part is
+	// always written last (a separate CreatePart call after the field
+	// loop), so it trails regardless of its own field name.
+	want := []string{"Gambit", "apple", "mango", "zebra", "cert"}
+	if !reflect.DeepEqual(gotFieldNames, want) {
+		t.Errorf("multipart part order = %v, want %v (sorted data/token keys, file part last)", gotFieldNames, want)
 	}
 }
 

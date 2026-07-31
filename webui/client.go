@@ -55,6 +55,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -497,7 +498,13 @@ func (c *HTTPClient) PostForm(ctx context.Context, path string, data map[string]
 
 // PostMultipart submits data plus file as a multipart/form-data POST to
 // path, mirroring Python post_multipart (source lines 395-409). NEVER
-// retried, same rationale as PostForm.
+// retried, same rationale as PostForm. Fields are written in sorted-key
+// order, so the wire bytes are deterministic run-to-run -- the same
+// guarantee PostForm gets for free from url.Values.Encode (which sorts its
+// keys). Python's dict iterates in insertion order, not sorted order, so the
+// two languages can put fields in a different sequence on the wire; that
+// divergence is a slice-10 cross-language watch item, same status as
+// PostForm's.
 func (c *HTTPClient) PostMultipart(ctx context.Context, path string, data map[string]string, file MultipartFile) (string, error) {
 	if err := c.ensureLoggedIn(ctx); err != nil {
 		return "", err
@@ -506,8 +513,13 @@ func (c *HTTPClient) PostMultipart(ctx context.Context, path string, data map[st
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
-	for k, v := range body {
-		if err := mw.WriteField(k, v); err != nil {
+	keys := make([]string, 0, len(body))
+	for k := range body {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if err := mw.WriteField(k, body[k]); err != nil {
 			return "", errHTTPCause(err, "POST %s: encoding multipart field %q", path, k)
 		}
 	}
