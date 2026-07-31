@@ -8,23 +8,23 @@ package virtual
 //
 // VirtualSwitch is a mock switch server: a seeded State plus whichever
 // protocol faces the model's registry entry supports, bound on Start. This
-// slice implements the SNMP face (snmpface.go) and, as of slice 05, the
-// NSDP face (nsdpface.go); HTTP (slice 06) and SSH/Telnet CLI (slice 07)
-// faces land later -- see the reserved port fields below, which exist now
-// so this struct's shape never needs to change again once those faces
-// arrive.
+// slice implements the SNMP face (snmpface.go), the NSDP face (nsdpface.go,
+// slice 05) and, as of slice 06, the HTTP face (httpface.go); SSH/Telnet
+// CLI (slice 07) faces land later -- see the reserved port fields below,
+// which exist now so this struct's shape never needs to change again once
+// those faces arrive.
 //
-// Deviates from the Python reference in one deliberate way: Python's
-// VirtualSwitch.start() independently binds each backend the model
-// supports, so a {NSDP, HTTP} model ends up with BOTH self.port (NSDP) and
-// self.http_port (HTTP) live at once. This Go port keeps SnmpPort/NsdpPort
-// as separate fields from the start (see NsdpPort's own doc comment), so
-// Start's "at least one face bound" check is "does this model have
-// BackendSNMP or BackendNSDP" as of this slice; the moment slice 06/07
-// land, Start's body gains the same independent per-backend `if` blocks
-// for HTTP/SSH/Telnet, and the "no face bindable" branch becomes reachable
-// only for a model with none of the four backends -- see the per-field
-// TODOs below for exactly which slice wires which remaining field.
+// Matches the Python reference exactly (D-HTTP-F §6.1): VirtualSwitch.
+// start() independently binds each backend the model supports, so a
+// {NSDP, HTTP} model ends up with BOTH its NSDP face (NsdpPort) and its
+// HTTP face (HTTPPort) live at once. This Go port keeps SnmpPort/NsdpPort/
+// HTTPPort as separate fields (see NsdpPort's own doc comment), so Start's
+// "at least one face bound" check is "does this model have BackendSNMP,
+// BackendNSDP or BackendHTTP" as of this slice; the moment slice 07 lands,
+// Start's body gains the same independent per-backend `if` blocks for SSH/
+// Telnet, and the "no face bindable" branch becomes reachable only for a
+// model with none of the five backends -- see the per-field TODOs below for
+// exactly which slice wires which remaining field.
 
 import (
 	"context"
@@ -32,6 +32,7 @@ import (
 	"sync"
 
 	"github.com/mithro/go-netgear-switch-library/model"
+	"github.com/mithro/go-netgear-switch-library/webui"
 )
 
 // VirtualSwitch is a mock switch server: a seeded State plus its bound
@@ -62,7 +63,13 @@ type VirtualSwitch struct { //nolint:revive // name is mandated by D-VIRT §5/Ta
 	// SnmpPort's own doc comment for why this is a field distinct from
 	// every other backend's port.
 	NsdpPort int
-	// HTTPPort is reserved for slice 06's HTTP face; always 0 in this slice.
+	// HTTPPort is the bound HTTP face's TCP port once Start has bound it (0
+	// otherwise; 0 before Start, or on a model with no BackendHTTP). See
+	// SnmpPort's own doc comment for why this is a field distinct from
+	// every other backend's port -- confirmed by D-HTTP-F §6.1 to match the
+	// Python reference's independent self.http_port field exactly (a
+	// {NSDP, HTTP} model such as gs305ep/gs110emx/gs105pe binds BOTH its
+	// NSDP face (NsdpPort) and its HTTP face (HTTPPort) CONCURRENTLY).
 	HTTPPort int
 	// SSHPort is reserved for slice 07's SSH CLI face; always 0 in this slice.
 	SSHPort int
@@ -70,13 +77,15 @@ type VirtualSwitch struct { //nolint:revive // name is mandated by D-VIRT §5/Ta
 	// this slice.
 	TelnetPort int
 
-	modelKey  string
-	modelInfo *model.SwitchModel
-	community string
+	modelKey     string
+	modelInfo    *model.SwitchModel
+	community    string
+	httpPassword string
 
 	mu       sync.Mutex
 	snmpFace *SnmpFace
 	nsdpFace *NsdpFace
+	httpFace *HTTPFace
 }
 
 // Option configures a VirtualSwitch at construction time.
@@ -94,6 +103,13 @@ func WithHost(host string) Option {
 	return func(v *VirtualSwitch) { v.Host = host }
 }
 
+// WithHTTPPassword overrides the HTTP admin password the bound HTTP face
+// requires (default "password", mirroring Python VirtualSwitch's own
+// http_password="password" constructor default).
+func WithHTTPPassword(password string) Option {
+	return func(v *VirtualSwitch) { v.httpPassword = password }
+}
+
 // NewVirtualSwitch builds a VirtualSwitch for modelKey: resolves modelKey
 // against the model registry FIRST (an unknown key returns an error
 // wrapping model.ErrUnknownModel immediately, before any state is built or
@@ -106,11 +122,12 @@ func NewVirtualSwitch(modelKey string, opts ...Option) (*VirtualSwitch, error) {
 		return nil, err
 	}
 	v := &VirtualSwitch{
-		State:     BuildState(modelKey),
-		Host:      "127.0.0.1",
-		community: "public",
-		modelKey:  modelKey,
-		modelInfo: m,
+		State:        BuildState(modelKey),
+		Host:         "127.0.0.1",
+		community:    "public",
+		httpPassword: "password",
+		modelKey:     modelKey,
+		modelInfo:    m,
 	}
 	for _, opt := range opts {
 		opt(v)
@@ -120,19 +137,20 @@ func NewVirtualSwitch(modelKey string, opts ...Option) (*VirtualSwitch, error) {
 
 // Start binds every protocol face this slice implements that the model
 // supports: SNMP (bound iff the model's registry entry has
-// model.BackendSNMP) and, as of slice 05, NSDP (bound iff it has
-// model.BackendNSDP) -- HTTP/SSH/Telnet aren't independent `if` blocks yet,
-// see the package doc comment above. A Plus-class model such as
-// gs110emx/gs305ep/gs105pe (registry backends {NSDP, HTTP}) now binds its
-// NSDP face into NsdpPort; only HTTPPort stays 0 until slice 06 lands. A
-// model with no face this slice can bind for it at all (none of
-// BackendSNMP/BackendNSDP) returns an error wrapping
-// model.ErrUnsupportedCapability.
+// model.BackendSNMP), NSDP (bound iff it has model.BackendNSDP, slice 05),
+// and, as of slice 06, HTTP (bound iff it has model.BackendHTTP) -- SSH/
+// Telnet aren't independent `if` blocks yet, see the package doc comment
+// above. A Plus-class model such as gs110emx/gs305ep/gs105pe (registry
+// backends {NSDP, HTTP}) binds BOTH its NSDP face (NsdpPort) AND its HTTP
+// face (HTTPPort) CONCURRENTLY (D-HTTP-F §6.1), exactly like a managed
+// model (SNMP, HTTP) binds both SnmpPort and HTTPPort. A model with no face
+// this slice can bind for it at all (none of BackendSNMP/BackendNSDP/
+// BackendHTTP) returns an error wrapping model.ErrUnsupportedCapability.
 //
-// TODO(slice-06/slice-07): once the HTTP and SSH/Telnet faces exist, this
-// gains their own independent `if` blocks too (mirroring the Python
-// reference's start()), and this method's "no face bindable" error becomes
-// reachable only for a hypothetical model with none of the four backends.
+// TODO(slice-07): once the SSH/Telnet CLI faces exist, this gains their own
+// independent `if` blocks too (mirroring the Python reference's start()),
+// and this method's "no face bindable" error becomes reachable only for a
+// hypothetical model with none of the five backends.
 func (v *VirtualSwitch) Start() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -158,8 +176,22 @@ func (v *VirtualSwitch) Start() error {
 		v.nsdpFace = face
 	}
 
-	if v.snmpFace == nil && v.nsdpFace == nil {
-		return fmt.Errorf("model %q has no protocol face this slice can bind (no SNMP/NSDP backend; see slices 06-07 for HTTP/SSH/Telnet): %w",
+	if v.modelInfo.HasBackend(model.BackendHTTP) {
+		spec, err := webui.HTTPSpec(v.modelInfo)
+		if err != nil {
+			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+		}
+		face := NewHTTPFace(v.State, spec, v.httpPassword, v.Host)
+		port, err := face.Start()
+		if err != nil {
+			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+		}
+		v.HTTPPort = port
+		v.httpFace = face
+	}
+
+	if v.snmpFace == nil && v.nsdpFace == nil && v.httpFace == nil {
+		return fmt.Errorf("model %q has no protocol face this slice can bind (no SNMP/NSDP/HTTP backend; see slice 07 for SSH/Telnet): %w",
 			v.modelKey, model.ErrUnsupportedCapability)
 	}
 	return nil
@@ -167,9 +199,9 @@ func (v *VirtualSwitch) Start() error {
 
 // Stop stops every bound face. Idempotent: safe to call if Start failed,
 // was never called, or Stop was already called. Stops the SNMP face first,
-// then NSDP, regardless of whether the first stop errored, so a failure
-// stopping one face never leaks the other; only the first error (if any)
-// is returned.
+// then NSDP, then HTTP, regardless of whether an earlier stop errored, so a
+// failure stopping one face never leaks the others; only the first error
+// (if any) is returned.
 func (v *VirtualSwitch) Stop() error {
 	v.mu.Lock()
 	snmpFace := v.snmpFace
@@ -178,6 +210,9 @@ func (v *VirtualSwitch) Stop() error {
 	nsdpFace := v.nsdpFace
 	v.nsdpFace = nil
 	v.NsdpPort = 0
+	httpFace := v.httpFace
+	v.httpFace = nil
+	v.HTTPPort = 0
 	v.mu.Unlock()
 
 	var firstErr error
@@ -191,6 +226,11 @@ func (v *VirtualSwitch) Stop() error {
 			firstErr = fmt.Errorf("virtual: VirtualSwitch.Stop: %w", err)
 		}
 	}
+	if httpFace != nil {
+		if err := httpFace.Stop(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("virtual: VirtualSwitch.Stop: %w", err)
+		}
+	}
 	return firstErr
 }
 
@@ -199,15 +239,17 @@ func (v *VirtualSwitch) Stop() error {
 // Endpoints is the set of listening endpoints a started VirtualSwitch
 // exposes, for a caller (e.g. a cross-language conformance-harness client,
 // slice 10) that wants only connection details, not this package's
-// concrete VirtualSwitch type. NsdpPort mirrors VirtualSwitch.NsdpPort now
-// that the NSDP face has landed (this slice); later slices add HTTPPort,
-// SSHPort, TelnetPort, Password fields the same way, as those faces land,
-// mirroring VirtualSwitch's own reserved fields.
+// concrete VirtualSwitch type. NsdpPort mirrors VirtualSwitch.NsdpPort;
+// HTTPPort/HTTPPassword mirror VirtualSwitch.HTTPPort/httpPassword now that
+// the HTTP face has landed (this slice); later slices add SSHPort/
+// TelnetPort the same way, mirroring VirtualSwitch's own reserved fields.
 type Endpoints struct {
-	Host      string
-	SnmpPort  int
-	NsdpPort  int
-	Community string
+	Host         string
+	SnmpPort     int
+	NsdpPort     int
+	Community    string
+	HTTPPort     int
+	HTTPPassword string
 }
 
 // EndpointProvider is the conformance-harness seam a cross-language test
@@ -274,7 +316,14 @@ func (p *GoFakeProvider) StartModel(ctx context.Context, modelKey string) (Endpo
 		_ = sw.Stop() // idempotent: a no-op if CloseAll's own Stop call already ran.
 	}()
 
-	return Endpoints{Host: sw.Host, SnmpPort: sw.SnmpPort, NsdpPort: sw.NsdpPort, Community: sw.community}, nil
+	return Endpoints{
+		Host:         sw.Host,
+		SnmpPort:     sw.SnmpPort,
+		NsdpPort:     sw.NsdpPort,
+		Community:    sw.community,
+		HTTPPort:     sw.HTTPPort,
+		HTTPPassword: sw.httpPassword,
+	}, nil
 }
 
 // CloseAll stops every VirtualSwitch this provider has ever started via

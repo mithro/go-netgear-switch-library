@@ -19,6 +19,7 @@ import (
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/nsdp"
 	"github.com/mithro/go-netgear-switch-library/snmp"
+	"github.com/mithro/go-netgear-switch-library/webui"
 )
 
 // resolveOnce is a lazily-resolved optional secret cell: resolve() runs its
@@ -138,6 +139,27 @@ type Switch struct {
 	// both from the same underlying secret spec.
 	httpPassword *resolveOnce
 
+	// httpClient, if non-nil, is used AS-IS by every HTTP consumer
+	// (backend_http.go's buildHTTPReader/buildHTTPWriter/
+	// Switch.UploadCertificate) instead of a default one this Switch would
+	// otherwise build+cache from host/the resolved HTTP password. Mirrors
+	// WithSNMPClient/WithNSDPClient; unlike SNMP's split read/write client
+	// fields, ONE field serves all three HTTP consumers here -- exactly
+	// like NSDP's single nsdpClient field -- because webui.Session already
+	// spans reads, writes AND cert-upload (webui/types.go).
+	httpClient webui.Session
+
+	// httpSessionMu guards httpSessionCache below.
+	httpSessionMu sync.Mutex
+	// httpSessionCache is the lazily-built DEFAULT webui.Session this Switch
+	// built for itself (nil until first built, or forever nil when
+	// httpClient was injected instead) -- shared across
+	// buildHTTPReader/buildHTTPWriter/UploadCertificate so all three reuse
+	// the SAME login session (one password resolution, one cookie jar/
+	// Gambit token), mirroring Python's SyncSwitch._built_http_client.
+	// Closed by Close().
+	httpSessionCache *lazyHTTPSession
+
 	// protectedPorts is stored sorted ascending with duplicates removed
 	// (this codebase's canonical form for Python's frozenset[int]; see
 	// config.go's protectedPorts helper for the same convention).
@@ -245,6 +267,28 @@ func WithNSDPPasswordResolver(r func() (*string, error)) SwitchOption {
 // Passing this option never causes r to run during New/FromConfig.
 func WithHTTPPasswordResolver(r func() (*string, error)) SwitchOption {
 	return func(sw *Switch) { sw.httpPassword = newResolveOnce(r) }
+}
+
+// WithHTTPPassword sets the HTTP admin password literally (a plain string,
+// not a secret spec), mirroring Python's http_password constructor
+// parameter and WithNSDPPassword's shape on the NSDP side. INDEPENDENT of
+// any NSDP password configured via WithNSDPPassword/WithNSDPPasswordResolver
+// -- see Switch.nsdpPassword's doc comment.
+func WithHTTPPassword(s string) SwitchOption {
+	return func(sw *Switch) {
+		sw.httpPassword = newResolveOnce(func() (*string, error) { return &s, nil })
+	}
+}
+
+// WithHTTPClient injects an already-built webui.Session, used as-is by
+// EVERY HTTP consumer (the reader, the writer, and UploadCertificate)
+// instead of a default one this Switch would otherwise build+cache from
+// host/the resolved HTTP password. Primarily for tests (a fake/virtual
+// session, or a real webui.HTTPClient pointed at a VirtualSwitch's
+// ephemeral HTTPPort) or a caller reusing an already-logged-in session.
+// Mirrors WithSNMPClient/WithNSDPClient.
+func WithHTTPClient(session webui.Session) SwitchOption {
+	return func(sw *Switch) { sw.httpClient = session }
 }
 
 // WithBackend pins EVERY op on this Switch to backend by default, unless a
@@ -358,13 +402,23 @@ func FromConfig(cfg SwitchConfig, opts ...SwitchOption) (*Switch, error) {
 	return New(cfg.Model, cfg.Host, configOpts...)
 }
 
-// Close releases any resource THIS Switch built for itself. Slice 03 has
-// none yet: SNMP/NSDP clients (injected or default-built) are never closed
-// (mirroring Python: they are built fresh per call and need no teardown),
-// and no HTTP client exists until slice 06 wires one up as the sole
-// persistent connection worth closing (D-FAC §2.15). Safe to call at any
-// time, including on a Switch that never dispatched a single read.
+// Close releases the HTTP client THIS Switch built for itself (never one
+// injected via WithHTTPClient) -- the "sole persistent connection worth
+// closing" D-FAC §2.15 anticipated. SNMP/NSDP clients (injected or default-
+// built) are still never closed (mirroring Python: they are built fresh per
+// call and need no teardown). Safe to call at any time, including on a
+// Switch that never dispatched a single HTTP op (or any op at all).
 func (s *Switch) Close() error {
+	s.httpSessionMu.Lock()
+	cache := s.httpSessionCache
+	s.httpSessionCache = nil
+	s.httpSessionMu.Unlock()
+	if cache == nil {
+		return nil
+	}
+	if closable, ok := cache.builtSession().(interface{ Close() }); ok {
+		closable.Close()
+	}
 	return nil
 }
 
