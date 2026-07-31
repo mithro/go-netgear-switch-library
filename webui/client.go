@@ -596,8 +596,20 @@ func appendQueryParam(path, key, value string) string {
 // spec.NeedsReferer (dossier §6.6) -- Go's http.Client has no per-client
 // default-header hook the way httpx.Client(headers=...) does, so every
 // call site funnels through here instead.
+//
+// A literal space is percent-encoded to "%20" before the URL is built: at
+// least one real HttpModelSpec path -- gs728tpp's MacTablePath, "wcd?{file=
+// /Switching/Address Table/DynamicAddresses_master.xml}{ForwardingTable}"
+// -- carries an unescaped space in what net/url treats as the RAW QUERY
+// (everything after "?"), and unlike u.Path, u.RawQuery is sent to the wire
+// VERBATIM by (*http.Request).Write/RequestURI -- never auto-escaped. A raw
+// space there breaks HTTP request-line framing and the peer (including this
+// package's own httpface_test.go virtual face) answers a bare 400 Bad
+// Request before the request even reaches the server's handler. httpx (the
+// Python reference's transport) percent-encodes this automatically, which
+// is why the Python client never needed a workaround here.
 func (c *HTTPClient) newRequest(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+strings.ReplaceAll(path, " ", "%20"), body)
 	if err != nil {
 		return nil, err
 	}

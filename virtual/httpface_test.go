@@ -8,8 +8,10 @@ package virtual
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -20,6 +22,24 @@ import (
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/webui"
 )
+
+// clientSpec returns a shallow copy of spec with Secure forced false, for
+// driving webui.HTTPClient/Reader/Writer against this mock over plain HTTP.
+// spec.Secure only selects http:// vs https:// inside webui.NewHTTPClient
+// (dossier §3.4/§6.6) -- this face never implements TLS (see
+// TestHTTPFaceSecurePOSTRequiresOriginHeader's own doc comment) -- so a
+// library-level (not raw net/http) test against a "secure" model (only
+// m4300-16x) must hand the CLIENT this desecured copy or every request
+// bounces off Go's http.Client with "server gave HTTP response to HTTPS
+// client". webui.NewReader/NewWriter re-derive their OWN spec from m
+// internally (they take a Session + *model.SwitchModel, not a spec), so
+// passing this copy only to NewHTTPClient is enough -- every PATH value
+// (unaffected by Secure) still matches.
+func clientSpec(spec *webui.HTTPModelSpec) *webui.HTTPModelSpec {
+	cp := *spec
+	cp.Secure = false
+	return &cp
+}
 
 // startHTTPFace starts an HTTPFace over st per spec with the given password
 // on 127.0.0.1, registering t.Cleanup to stop it, and returns its
@@ -204,71 +224,23 @@ func TestHTTPFace404ForUnspeccedPath(t *testing.T) {
 	}
 }
 
-// TestHTTPFaceNonStandardDialectReadPagesAreHonestly404 is a deliberate
-// tripwire (dispatchRender's doc comment / principles 1 & 5): every dialect
-// OTHER than HTMLDialectStandard/HTMLDialectGS110EMX/HTMLDialectGS105PE has
-// no renderer wired yet, so a known, spec-advertised read page must 404
-// honestly rather than silently falling through to the STANDARD-dialect
-// fallback (which would render a plausible-looking page in the WRONG shape,
-// built from real seeded data -- worse than a 404, since it would
-// false-green a caller's integration against a page this mock cannot
-// actually produce yet).
+// TestHTTPFaceNonStandardDialectReadPagesAreHonestly404 used to be a
+// deliberate tripwire (dispatchRender's doc comment / principles 1 & 5):
+// every dialect OTHER than HTMLDialectStandard/HTMLDialectGS110EMX/
+// HTMLDialectGS105PE had no renderer wired yet, so a known, spec-advertised
+// read page had to 404 honestly rather than silently fall through to the
+// STANDARD-dialect fallback.
 //
-// Task 9 FLIPPED the GS110EMX/GS105PE cases (removed below -- both dialects
-// now genuinely render, see TestHTTPFaceGS110EMX*/TestHTTPFaceGS105PE*).
-// Task 10 MUST update this test the same way (per model, as its real
-// renderer lands) -- a green run of this test after Task 10 lands a
-// dialect's renderer means that dialect's own tripwire case was never
-// removed, not that the renderer is still missing.
-func TestHTTPFaceNonStandardDialectReadPagesAreHonestly404(t *testing.T) {
-	tests := []struct {
-		name     string
-		modelKey string
-		dialect  webui.HTMLDialect
-	}{
-		{"M4300/m4300-24x", "m4300-24x", webui.HTMLDialectM4300},
-		{"M4300/m4300-16x", "m4300-16x", webui.HTMLDialectM4300},
-		{"XEFastpath/gsm7252ps", "gsm7252ps", webui.HTMLDialectXEFastpath},
-		{"S3300/gsm7228ps", "gsm7228ps", webui.HTMLDialectS3300},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m, err := model.GetModel(tt.modelKey)
-			if err != nil {
-				t.Fatalf("model.GetModel(%q): %v", tt.modelKey, err)
-			}
-			spec, err := webui.HTTPSpec(m)
-			if err != nil {
-				t.Fatalf("webui.HTTPSpec(%q): %v", tt.modelKey, err)
-			}
-			if spec.HTMLDialect != tt.dialect {
-				t.Fatalf("spec.HTMLDialect = %v, want %v (test table/registry drifted)", spec.HTMLDialect, tt.dialect)
-			}
-			addr, _ := startHTTPFace(t, NewState(tt.modelKey), spec, "password")
-
-			// Raw net/http, with a Referer/Origin header whenever this
-			// model's spec demands one, so the request reaches the dialect
-			// gate at all (not rejected earlier by the unrelated referer
-			// check -- see TestHTTPFaceRefererMissingIs403/
-			// TestHTTPFaceSecurePOSTRequiresOriginHeader for THAT gate).
-			req, err := http.NewRequest(http.MethodGet, "http://"+addr+spec.DashboardPath, nil) //nolint:noctx // test-only.
-			if err != nil {
-				t.Fatalf("NewRequest: %v", err)
-			}
-			if spec.NeedsReferer {
-				req.Header.Set("Referer", "http://"+addr+"/")
-			}
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("GET %s: %v", spec.DashboardPath, err)
-			}
-			defer func() { _ = resp.Body.Close() }()
-			if resp.StatusCode != http.StatusNotFound {
-				t.Errorf("GET %s (dialect %v, no renderer wired yet) status = %d, want 404", spec.DashboardPath, spec.HTMLDialect, resp.StatusCode)
-			}
-		})
-	}
-}
+// Task 9 flipped the GS110EMX/GS105PE cases; Task 10 flips the remaining
+// four (M4300 x2, XE_FASTPATH, S3300) plus GoAhead's wcd routing (see
+// TestHTTPFaceGoAheadFaceServesEveryReadOpFromState, which replaced
+// TestHTTPFaceGoAheadAuthenticatedReadOfUnimplementedWcdPage404s below) --
+// EVERY HTMLDialect this package defines now has a real renderer wired in
+// dispatchRender/dispatchApplyAndRender, so this tripwire has nothing left
+// to cover and is removed rather than left as an empty shell. Coverage for
+// "a model's spec advertises a path this dialect's renderer does not
+// implement" now lives in each dialect's own *ServesEveryReadOpFromState /
+// *404sAPathTheSpecDoesNotServe tests below.
 
 // -- Wired dialect (STANDARD/gs305ep) end-to-end -------------------------
 
@@ -1196,7 +1168,14 @@ func TestHTTPFaceGoAheadUnauthenticatedWriteRedirects(t *testing.T) {
 	}
 }
 
-func TestHTTPFaceGoAheadAuthenticatedReadOfUnimplementedWcdPage404s(t *testing.T) {
+// TestHTTPFaceGoAheadFaceServesEveryReadOpFromState replaces the former
+// TestHTTPFaceGoAheadAuthenticatedReadOfUnimplementedWcdPage404s tripwire:
+// web_gs728tpp.go's RenderGS728TPPWcd is now wired into goaheadGet, so the
+// mock renders the real wcd XML and the SAME webui.ParseGoAhead* parsers
+// that read the hardware captures read it back -- ports/pvids/vlans/poe/
+// macs/lldp/sensors/mgmt-IP, all from one seeded State. Mirrors Python
+// test_goahead_face_serves_every_read_op_from_state.
+func TestHTTPFaceGoAheadFaceServesEveryReadOpFromState(t *testing.T) {
 	m, err := model.GetModel("gs728tpp")
 	if err != nil {
 		t.Fatalf("model.GetModel: %v", err)
@@ -1205,23 +1184,985 @@ func TestHTTPFaceGoAheadAuthenticatedReadOfUnimplementedWcdPage404s(t *testing.T
 	if err != nil {
 		t.Fatalf("webui.HTTPSpec: %v", err)
 	}
-	addr, _ := startHTTPFace(t, NewState("gs728tpp"), spec, "password")
+	st := SeedGS728TPP()
+	addr, _ := startHTTPFace(t, st, spec, "password")
 
 	client := webui.NewHTTPClient(addr, "password", spec)
 	ctx := context.Background()
 	if err := client.Login(ctx); err != nil {
 		t.Fatalf("Login() error = %v", err)
 	}
-	// TASK 9/10 SEAM: web_gs728tpp's render_wcd isn't ported yet, so every
-	// authenticated wcd read 404s honestly (never a fabricated page) --
-	// pinned here so Task 9/10 landing render_wcd is a deliberate, visible
-	// change to this test's expectation, not a silent regression either way.
-	_, err = client.GetPage(ctx, spec.PoEStatusPath)
-	if err == nil {
-		t.Fatalf("GetPage(%s) after login error = nil, want an HTTP error (Task 9/10 hasn't wired render_wcd yet)", spec.PoEStatusPath)
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
 	}
-	if !errors.Is(err, model.ErrHTTP) {
-		t.Errorf("GetPage(%s) error = %v, want errors.Is(..., model.ErrHTTP)", spec.PoEStatusPath, err)
+
+	ports, err := reader.GetPorts(ctx)
+	if err != nil {
+		t.Fatalf("GetPorts() error = %v", err)
+	}
+	if len(ports) != len(st.Ports) {
+		t.Fatalf("GetPorts() returned %d ports, want %d (seeded)", len(ports), len(st.Ports))
+	}
+	for _, p := range ports {
+		sim, ok := st.Ports[p.Port]
+		if !ok {
+			t.Fatalf("GetPorts() returned unknown port %d", p.Port)
+		}
+		if p.AdminEnabled != sim.Admin || p.LinkUp != sim.Link {
+			t.Errorf("port %d = %+v, want admin=%v link=%v", p.Port, p, sim.Admin, sim.Link)
+		}
+	}
+
+	pvids, err := reader.GetPVIDs(ctx)
+	if err != nil {
+		t.Fatalf("GetPVIDs() error = %v", err)
+	}
+	if len(pvids) != len(st.Pvids) {
+		t.Errorf("GetPVIDs() returned %d rows, want %d (seeded)", len(pvids), len(st.Pvids))
+	}
+
+	vlans, err := reader.GetVLANs(ctx)
+	if err != nil {
+		t.Fatalf("GetVLANs() error = %v", err)
+	}
+	if len(vlans) != len(st.Vlans) {
+		t.Fatalf("GetVLANs() returned %d VLANs, want %d (seeded)", len(vlans), len(st.Vlans))
+	}
+	for _, v := range vlans {
+		vsim := st.Vlans[v.VlanID]
+		if len(v.MemberPorts) != len(vsim.Member) {
+			t.Errorf("VLAN %d MemberPorts = %v, want len %d (seeded)", v.VlanID, v.MemberPorts, len(vsim.Member))
+		}
+	}
+
+	poe, err := reader.GetPoE(ctx)
+	if err != nil {
+		t.Fatalf("GetPoE() error = %v", err)
+	}
+	if len(poe) != len(st.Poe) {
+		t.Errorf("GetPoE() returned %d ports, want %d (seeded)", len(poe), len(st.Poe))
+	}
+
+	macs, err := reader.GetMACs(ctx)
+	if err != nil {
+		t.Fatalf("GetMACs() error = %v", err)
+	}
+	if len(macs) != len(st.Macs) {
+		t.Errorf("GetMACs() returned %d entries, want %d (seeded)", len(macs), len(st.Macs))
+	}
+
+	lldp, err := reader.GetLLDP(ctx)
+	if err != nil {
+		t.Fatalf("GetLLDP() error = %v", err)
+	}
+	if len(lldp) != len(st.Lldp) {
+		t.Errorf("GetLLDP() returned %d neighbours, want %d (seeded)", len(lldp), len(st.Lldp))
+	}
+
+	sensors, err := reader.GetSensors(ctx)
+	if err != nil {
+		t.Fatalf("GetSensors() error = %v", err)
+	}
+	byNameKind := map[[2]string]float64{}
+	for _, s := range sensors {
+		byNameKind[[2]string{s.Kind, s.Name}] = s.Value
+	}
+	if v, ok := byNameKind[[2]string{"fan", "Fan1"}]; !ok || v != 1.0 {
+		t.Errorf("sensors[fan/Fan1] = %v (ok=%v), want 1.0", v, ok)
+	}
+	if _, ok := byNameKind[[2]string{"fan", "Fan3"}]; ok {
+		t.Errorf("sensors carries fan/Fan3, want absent (unpopulated slot skipped)")
+	}
+	if v, ok := byNameKind[[2]string{"power", "Main PS"}]; !ok || v != 1.0 {
+		t.Errorf("sensors[power/Main PS] = %v (ok=%v), want 1.0", v, ok)
+	}
+
+	mgmt, err := reader.GetMgmtIP(ctx)
+	if err != nil {
+		t.Fatalf("GetMgmtIP() error = %v", err)
+	}
+	if mgmt.Address == nil || *mgmt.Address != st.Mgmt.Address {
+		t.Errorf("mgmt.Address = %v, want %s", mgmt.Address, st.Mgmt.Address)
+	}
+	if mgmt.Gateway == nil || *mgmt.Gateway != st.Mgmt.Gateway {
+		t.Errorf("mgmt.Gateway = %v, want %s", mgmt.Gateway, st.Mgmt.Gateway)
+	}
+	if mgmt.Mode != model.IPModeUnknown {
+		t.Errorf("mgmt.Mode = %v, want Unknown (this page carries no DHCP/static indicator)", mgmt.Mode)
+	}
+}
+
+// TestHTTPFaceGoAheadGetStatsUnsupported: per-port statistics are behind an
+// unresolvable JS nav indirection on this UI (spec.StatsPath == ""), so
+// GetStats must raise an UnsupportedCapabilityError, never fabricate
+// counters. Mirrors Python test_goahead_get_stats_unsupported.
+func TestHTTPFaceGoAheadGetStatsUnsupported(t *testing.T) {
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, SeedGS728TPP(), spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	if _, err := reader.GetStats(ctx); !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Errorf("GetStats() error = %v, want errors.Is(..., model.ErrUnsupportedCapability)", err)
+	}
+}
+
+// -- gsm7252ps: the XE FASTPATH face ------------------------------------
+
+// TestHTTPFaceXEFaceServesEveryReadOpFromState mirrors Python
+// test_xe_face_serves_every_read_op_from_state: the mock renders the real
+// XE cell format, so the SAME parsers that read the hardware captures read
+// it back -- ports/stats/PVIDs/VLANs/MACs/PoE/LLDP/sensors/mgmt-IP, all
+// from one seeded State.
+func TestHTTPFaceXEFaceServesEveryReadOpFromState(t *testing.T) {
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	st := SeedGSM7252PS()
+	addr, _ := startHTTPFace(t, st, spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+
+	ports, err := reader.GetPorts(ctx)
+	if err != nil {
+		t.Fatalf("GetPorts() error = %v", err)
+	}
+	// The web UI lists ONLY physical ports: the state's CPU/lag interfaces
+	// (ifIndex 417/418) must not appear.
+	if len(ports) != 52 {
+		t.Errorf("GetPorts() returned %d ports, want 52 (physical only)", len(ports))
+	}
+	for _, p := range ports {
+		if p.Port > 52 {
+			t.Errorf("GetPorts() returned non-physical port %d", p.Port)
+		}
+	}
+
+	pvids, err := reader.GetPVIDs(ctx)
+	if err != nil {
+		t.Fatalf("GetPVIDs() error = %v", err)
+	}
+	wantPvids := 0
+	for p := range st.Pvids {
+		if p <= 52 {
+			wantPvids++
+		}
+	}
+	if len(pvids) != wantPvids {
+		t.Errorf("GetPVIDs() returned %d rows, want %d (physical only)", len(pvids), wantPvids)
+	}
+
+	vlans, err := reader.GetVLANs(ctx)
+	if err != nil {
+		t.Fatalf("GetVLANs() error = %v", err)
+	}
+	if len(vlans) != len(st.Vlans) {
+		t.Fatalf("GetVLANs() returned %d VLANs, want %d (seeded)", len(vlans), len(st.Vlans))
+	}
+	stats, err := reader.GetStats(ctx)
+	if err != nil {
+		t.Fatalf("GetStats() error = %v", err)
+	}
+	if len(stats) != 52 {
+		t.Errorf("GetStats() returned %d rows, want 52 (physical only)", len(stats))
+	}
+
+	poe, err := reader.GetPoE(ctx)
+	if err != nil {
+		t.Fatalf("GetPoE() error = %v", err)
+	}
+	if len(poe) != len(st.Poe) {
+		t.Errorf("GetPoE() returned %d ports, want %d (seeded)", len(poe), len(st.Poe))
+	}
+
+	macs, err := reader.GetMACs(ctx)
+	if err != nil {
+		t.Fatalf("GetMACs() error = %v", err)
+	}
+	if len(macs) != len(st.Macs) {
+		t.Errorf("GetMACs() returned %d entries, want %d (seeded)", len(macs), len(st.Macs))
+	}
+
+	lldp, err := reader.GetLLDP(ctx)
+	if err != nil {
+		t.Fatalf("GetLLDP() error = %v", err)
+	}
+	if len(lldp) != len(st.Lldp) {
+		t.Errorf("GetLLDP() returned %d neighbours, want %d (seeded)", len(lldp), len(st.Lldp))
+	}
+
+	mgmt, err := reader.GetMgmtIP(ctx)
+	if err != nil {
+		t.Fatalf("GetMgmtIP() error = %v", err)
+	}
+	if mgmt.Address == nil || *mgmt.Address != st.Mgmt.Address {
+		t.Errorf("mgmt.Address = %v, want %s", mgmt.Address, st.Mgmt.Address)
+	}
+	if mgmt.Gateway == nil || *mgmt.Gateway != st.Mgmt.Gateway {
+		t.Errorf("mgmt.Gateway = %v, want %s", mgmt.Gateway, st.Mgmt.Gateway)
+	}
+
+	// The HTTP sysInfo sensor set is the real web-UI one (temperatures +
+	// fan/PSU health), DIFFERENT from this device's SNMP set.
+	sensors, err := reader.GetSensors(ctx)
+	if err != nil {
+		t.Fatalf("GetSensors() error = %v", err)
+	}
+	byKindName := map[[2]string]float64{}
+	for _, s := range sensors {
+		byKindName[[2]string{s.Kind, s.Name}] = s.Value
+	}
+	if v, ok := byKindName[[2]string{"temperature", "System"}]; !ok || v != 29.0 {
+		t.Errorf("sensors[temperature/System] = %v (ok=%v), want 29.0", v, ok)
+	}
+	if _, ok := byKindName[[2]string{"temperature", "MAC"}]; ok {
+		t.Errorf("sensors carries temperature/MAC, want absent (N/A reading skipped)")
+	}
+	if v, ok := byKindName[[2]string{"fan", "Fan1/PWR"}]; !ok || v != 1.0 {
+		t.Errorf("sensors[fan/Fan1/PWR] = %v (ok=%v), want 1.0", v, ok)
+	}
+}
+
+// TestHTTPFaceXEFace404sAPathTheSpecDoesNotServe: this model's spec has no
+// reboot/logout/PoE-config page, and the face must 404 rather than
+// fabricate a 200 for one. Mirrors Python
+// test_xe_face_404s_a_path_the_spec_does_not_serve.
+func TestHTTPFaceXEFace404sAPathTheSpecDoesNotServe(t *testing.T) {
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, SeedGSM7252PS(), spec, "password")
+	resp, err := http.Get("http://" + addr + "/device_reboot.cgi") //nolint:noctx,gosec // test-only.
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /device_reboot.cgi status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestHTTPFaceXEWriterSetPortEnabledRoundTrip drives
+// webui.Writer.SetPortEnabled end-to-end against the XE FASTPATH grid
+// (GET-scrape-row, POST, re-GET-to-verify).
+func TestHTTPFaceXEWriterSetPortEnabledRoundTrip(t *testing.T) {
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	st := SeedGSM7252PS()
+	addr, _ := startHTTPFace(t, st, spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	ctx := context.Background()
+	target := !st.Ports[1].Admin
+	if err := writer.SetPortEnabled(ctx, 1, target, false); err != nil {
+		t.Fatalf("SetPortEnabled(port=1, %v) error = %v", target, err)
+	}
+	if st.Ports[1].Admin != target {
+		t.Errorf("state.Ports[1].Admin = %v after SetPortEnabled(%v), want %v", st.Ports[1].Admin, target, target)
+	}
+}
+
+// TestHTTPFaceXEWriterSetPoERoundTrip drives webui.Writer.SetPoE end-to-end
+// against the XE FASTPATH PoE grid.
+func TestHTTPFaceXEWriterSetPoERoundTrip(t *testing.T) {
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	st := SeedGSM7252PS()
+	addr, _ := startHTTPFace(t, st, spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	ctx := context.Background()
+	target := !st.Poe[1].Admin
+	if err := writer.SetPoE(ctx, 1, target, false); err != nil {
+		t.Fatalf("SetPoE(port=1, %v) error = %v", target, err)
+	}
+	if st.Poe[1].Admin != target {
+		t.Errorf("state.Poe[1].Admin = %v after SetPoE(%v), want %v", st.Poe[1].Admin, target, target)
+	}
+}
+
+// TestHTTPFaceXEWriterSetMgmtIPRoundTrip drives webui.Writer.SetMgmtIP
+// end-to-end against the gsm7252ps ipConfiguration.html XUI form page
+// (GET-scrape, POST, re-GET-to-verify), exercising
+// RenderFastpathMgmtIP/ApplyFastpathMgmtIP.
+func TestHTTPFaceXEWriterSetMgmtIPRoundTrip(t *testing.T) {
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	st := SeedGSM7252PS()
+	addr, _ := startHTTPFace(t, st, spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	ctx := context.Background()
+	// force=true required: SetMgmtIP moves the address the session itself
+	// is using -- see the writer's own doc comment.
+	if err := writer.SetMgmtIP(ctx, "10.1.5.99", "255.255.255.0", "10.1.5.1", true); err != nil {
+		t.Fatalf("SetMgmtIP() error = %v", err)
+	}
+	if st.Mgmt.Address != "10.1.5.99" || st.Mgmt.Netmask != "255.255.255.0" || st.Mgmt.Gateway != "10.1.5.1" {
+		t.Errorf("state.Mgmt = %+v after SetMgmtIP, want 10.1.5.99/255.255.255.0 gw 10.1.5.1", st.Mgmt)
+	}
+
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	mgmt, err := reader.GetMgmtIP(ctx)
+	if err != nil {
+		t.Fatalf("GetMgmtIP() error = %v", err)
+	}
+	if mgmt.Address == nil || *mgmt.Address != "10.1.5.99" {
+		t.Errorf("GetMgmtIP().Address = %v, want 10.1.5.99", mgmt.Address)
+	}
+}
+
+// TestHTTPFaceXEWriterSetPoENoListUnitFieldIsRefused exercises the
+// GSM7252PS's real, measured refusal: unlike its gsm7228ps/M4300 siblings,
+// this firmware's PoE rows carry no per-row "Unit" key, so an apply POST
+// that omits the page's own urlListUnit fields (v_1_1_1/v_1_3_1) is
+// refused with one "Error! Failed to Set '<label>' with '<value>'" line
+// per read-write column -- even though the row/checkbox were present.
+// Drives the raw form directly (not webui.Writer, which always echoes the
+// page's own Nav fields back) to reach ApplyXEPoEWith's unitRequired
+// refusal path deliberately.
+func TestHTTPFaceXEWriterSetPoENoListUnitFieldIsRefused(t *testing.T) {
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	st := SeedGSM7252PS()
+	addr, _ := startHTTPFace(t, st, spec, "password")
+
+	form := url.Values{
+		"submit_flag":    {"8"},
+		"1.0.48.gecb234": {"on"},
+		"1.0.48.v_1_2_2": {"Enable"},
+	}
+	resp, err := http.PostForm("http://"+addr+spec.PoEConfigPath, form) //nolint:noctx,gosec // test-only.
+	if err != nil {
+		t.Fatalf("POST %s: %v", spec.PoEConfigPath, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading response body: %v", err)
+	}
+	errMsg, hasErr := webui.ParseFastpathErr(string(body))
+	if !hasErr {
+		t.Fatal("response has no err_flag=1, want the missing-list-unit refusal")
+	}
+	if !strings.Contains(errMsg, "Admin <br/> Mode") {
+		t.Errorf("err_msg = %q, want it to name the Admin Mode column", errMsg)
+	}
+}
+
+// -- gsm7228ps: the S3300-52X XE FASTPATH face --------------------------
+
+// TestHTTPFaceS3300FaceServesGroundedReadsMatchingSNMPCapture mirrors
+// Python test_s3300_face_serves_grounded_reads_matching_snmp_capture: full
+// stack, no hardware -- cheetah login -> HttpReader reproduces the grounded
+// reads, cross-checked against the real SNMP capture. GetSensors raises
+// Unsupported (the S3300 sysInfo has no live fan/temp table -- SNMP only).
+func TestHTTPFaceS3300FaceServesGroundedReadsMatchingSNMPCapture(t *testing.T) {
+	m, err := model.GetModel("gsm7228ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	st := SeedGSM7228PS()
+	capture := loadCaptureSnapshot(t, captureGSM7228PS)
+	addr, _ := startHTTPFace(t, st, spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+
+	ports, err := reader.GetPorts(ctx)
+	if err != nil {
+		t.Fatalf("GetPorts() error = %v", err)
+	}
+	realPorts := make(map[int]model.PortStatus, len(capture.Ports))
+	for _, p := range capture.Ports {
+		realPorts[p.Port] = p
+	}
+	if len(ports) != 52 {
+		t.Errorf("GetPorts() returned %d ports, want 52", len(ports))
+	}
+	for _, p := range ports {
+		wantPort, ok := realPorts[p.Port]
+		if !ok {
+			continue
+		}
+		if p.LinkUp != wantPort.LinkUp {
+			t.Errorf("port %d LinkUp = %v, want %v (capture)", p.Port, p.LinkUp, wantPort.LinkUp)
+		}
+	}
+
+	stats, err := reader.GetStats(ctx)
+	if err != nil {
+		t.Fatalf("GetStats() error = %v", err)
+	}
+	if len(stats) != 52 {
+		t.Errorf("GetStats() returned %d rows, want 52", len(stats))
+	}
+
+	pvids, err := reader.GetPVIDs(ctx)
+	if err != nil {
+		t.Fatalf("GetPVIDs() error = %v", err)
+	}
+	realPvids := make(map[int]int, len(capture.Pvids))
+	for _, p := range capture.Pvids {
+		realPvids[p.Port] = p.Vlan
+	}
+	for _, p := range pvids {
+		if wantVlan, ok := realPvids[p.Port]; ok && wantVlan != p.Vlan {
+			t.Errorf("port %d pvid = %d, want %d (capture)", p.Port, p.Vlan, wantVlan)
+		}
+	}
+
+	vlans, err := reader.GetVLANs(ctx)
+	if err != nil {
+		t.Fatalf("GetVLANs() error = %v", err)
+	}
+	wantVids := map[int]bool{1: true, 5: true, 21: true, 121: true, 4089: true}
+	gotVids := map[int]bool{}
+	for _, v := range vlans {
+		gotVids[v.VlanID] = true
+	}
+	for vid := range wantVids {
+		if !gotVids[vid] {
+			t.Errorf("GetVLANs() missing VLAN %d (capture)", vid)
+		}
+	}
+
+	poe, err := reader.GetPoE(ctx)
+	if err != nil {
+		t.Fatalf("GetPoE() error = %v", err)
+	}
+	if len(poe) != len(st.Poe) {
+		t.Errorf("GetPoE() returned %d ports, want %d (seeded)", len(poe), len(st.Poe))
+	}
+
+	// basicAddressTable.html's shifted S3300 columns (RenderS3300MacTable)
+	// and sysInfo.html's base-MAC-only page (RenderS3300Sysinfo). The
+	// switch's own base MAC is learned on the CPU interface (ifName "c1"),
+	// which webui.ParseS3300Macs deliberately skips as non-physical -- so
+	// the expected count is the seed's MACs minus that one entry, not
+	// len(st.Macs) itself.
+	macs, err := reader.GetMACs(ctx)
+	if err != nil {
+		t.Fatalf("GetMACs() error = %v", err)
+	}
+	wantMacs := 0
+	for _, entry := range st.Macs {
+		port := entry.BridgePort
+		if p, ok := st.BridgePorts[entry.BridgePort]; ok {
+			port = p
+		}
+		if port >= 1 && port <= 52 {
+			wantMacs++
+		}
+	}
+	if len(macs) != wantMacs {
+		t.Errorf("GetMACs() returned %d entries, want %d (seeded, excluding the CPU-interface entry)", len(macs), wantMacs)
+	}
+	mgmt, err := reader.GetMgmtIP(ctx)
+	if err != nil {
+		t.Fatalf("GetMgmtIP() error = %v", err)
+	}
+	if mgmt.Address == nil || *mgmt.Address != st.Mgmt.Address {
+		t.Errorf("mgmt.Address = %v, want %s", mgmt.Address, st.Mgmt.Address)
+	}
+	if mgmt.BaseMac == nil {
+		t.Error("GetMgmtIP() BaseMac is nil, want the base MAC scraped from sysInfo.html")
+	}
+
+	if _, err := reader.GetSensors(ctx); !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Errorf("GetSensors() error = %v, want errors.Is(..., model.ErrUnsupportedCapability) (S3300 sysInfo has no live sensor table)", err)
+	}
+}
+
+// TestHTTPFaceS3300Face404sAPathTheSpecDoesNotServe mirrors Python
+// test_s3300_face_404s_a_path_the_spec_does_not_serve.
+func TestHTTPFaceS3300Face404sAPathTheSpecDoesNotServe(t *testing.T) {
+	m, err := model.GetModel("gsm7228ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, SeedGSM7228PS(), spec, "password")
+	resp, err := http.Get("http://" + addr + "/device_reboot.cgi") //nolint:noctx,gosec // test-only.
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /device_reboot.cgi status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// -- m4300-24x / m4300-16x: the Cheetah /v1 face -------------------------
+
+// TestHTTPFaceM4300ServesEveryReadOpFromState covers both M4300 SKUs'
+// shared ports/stats/pvids/vlans/mac-table/sysinfo/lldp reads, plus the
+// 16X-only PoE page (the 24X genuinely has none).
+func TestHTTPFaceM4300ServesEveryReadOpFromState(t *testing.T) {
+	tests := []struct {
+		modelKey string
+		seed     func() *State
+		hasPoE   bool
+	}{
+		{"m4300-24x", SeedM4300_24X, false},
+		{"m4300-16x", SeedM4300_16X, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.modelKey, func(t *testing.T) {
+			m, err := model.GetModel(tt.modelKey)
+			if err != nil {
+				t.Fatalf("model.GetModel: %v", err)
+			}
+			spec, err := webui.HTTPSpec(m)
+			if err != nil {
+				t.Fatalf("webui.HTTPSpec: %v", err)
+			}
+			st := tt.seed()
+			addr, _ := startHTTPFace(t, st, spec, "password")
+
+			// wantPhysical mirrors xePhysicalPorts/m4300PhysicalPorts: the
+			// seeded ports at or below model.PortCount -- deliberately NOT
+			// model.PortCount itself, which the registry sets to 28 on the
+			// M4300-24X while the real switch (and this seed) has only 24.
+			wantPhysical := 0
+			for p := range st.Ports {
+				if p <= m.PortCount {
+					wantPhysical++
+				}
+			}
+
+			client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+			ctx := context.Background()
+			if err := client.Login(ctx); err != nil {
+				t.Fatalf("Login() error = %v", err)
+			}
+			reader, err := webui.NewReader(client, m)
+			if err != nil {
+				t.Fatalf("webui.NewReader: %v", err)
+			}
+
+			ports, err := reader.GetPorts(ctx)
+			if err != nil {
+				t.Fatalf("GetPorts() error = %v", err)
+			}
+			if len(ports) != wantPhysical {
+				t.Errorf("GetPorts() returned %d ports, want %d (seeded physical ports)", len(ports), wantPhysical)
+			}
+
+			stats, err := reader.GetStats(ctx)
+			if err != nil {
+				t.Fatalf("GetStats() error = %v", err)
+			}
+			if len(stats) != wantPhysical {
+				t.Errorf("GetStats() returned %d rows, want %d", len(stats), wantPhysical)
+			}
+
+			pvids, err := reader.GetPVIDs(ctx)
+			if err != nil {
+				t.Fatalf("GetPVIDs() error = %v", err)
+			}
+			if len(pvids) == 0 {
+				t.Error("GetPVIDs() returned no rows")
+			}
+
+			vlans, err := reader.GetVLANs(ctx)
+			if err != nil {
+				t.Fatalf("GetVLANs() error = %v", err)
+			}
+			if len(vlans) != len(st.Vlans) {
+				t.Errorf("GetVLANs() returned %d VLANs, want %d (seeded)", len(vlans), len(st.Vlans))
+			}
+
+			macs, err := reader.GetMACs(ctx)
+			if err != nil {
+				t.Fatalf("GetMACs() error = %v", err)
+			}
+			if len(macs) != len(st.Macs) {
+				t.Errorf("GetMACs() returned %d entries, want %d (seeded)", len(macs), len(st.Macs))
+			}
+
+			lldp, err := reader.GetLLDP(ctx)
+			if err != nil {
+				t.Fatalf("GetLLDP() error = %v", err)
+			}
+			if len(lldp) != len(st.Lldp) {
+				t.Errorf("GetLLDP() returned %d neighbours, want %d (seeded)", len(lldp), len(st.Lldp))
+			}
+
+			mgmt, err := reader.GetMgmtIP(ctx)
+			if err != nil {
+				t.Fatalf("GetMgmtIP() error = %v", err)
+			}
+			if mgmt.BaseMac == nil {
+				t.Error("GetMgmtIP() BaseMac is nil")
+			}
+
+			if tt.hasPoE {
+				poe, err := reader.GetPoE(ctx)
+				if err != nil {
+					t.Fatalf("GetPoE() error = %v", err)
+				}
+				if len(poe) != len(st.Poe) {
+					t.Errorf("GetPoE() returned %d ports, want %d (seeded)", len(poe), len(st.Poe))
+				}
+			}
+		})
+	}
+}
+
+// TestHTTPFaceM4300WriterSetPortEnabledRoundTrip drives
+// webui.Writer.SetPortEnabled against the M4300 Cheetah /v1 grid.
+func TestHTTPFaceM4300WriterSetPortEnabledRoundTrip(t *testing.T) {
+	m, err := model.GetModel("m4300-24x")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	st := SeedM4300_24X()
+	addr, _ := startHTTPFace(t, st, spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	ctx := context.Background()
+	target := !st.Ports[1].Admin
+	if err := writer.SetPortEnabled(ctx, 1, target, false); err != nil {
+		t.Fatalf("SetPortEnabled(port=1, %v) error = %v", target, err)
+	}
+	if st.Ports[1].Admin != target {
+		t.Errorf("state.Ports[1].Admin = %v after SetPortEnabled(%v), want %v", st.Ports[1].Admin, target, target)
+	}
+}
+
+// TestHTTPFaceM4300WriterSetPoERoundTrip drives webui.Writer.SetPoE against
+// the M4300-16X's own PoE page (watts-formatted power column, gecb_1_2
+// checkbox, no page-level Unit field).
+func TestHTTPFaceM4300WriterSetPoERoundTrip(t *testing.T) {
+	m, err := model.GetModel("m4300-16x")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	st := SeedM4300_16X()
+	addr, _ := startHTTPFace(t, st, spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	ctx := context.Background()
+	port := sortedIntKeys(st.Poe)[0]
+	target := !st.Poe[port].Admin
+	if err := writer.SetPoE(ctx, port, target, false); err != nil {
+		t.Fatalf("SetPoE(port=%d, %v) error = %v", port, target, err)
+	}
+	if st.Poe[port].Admin != target {
+		t.Errorf("state.Poe[%d].Admin = %v after SetPoE(%v), want %v", port, st.Poe[port].Admin, target, target)
+	}
+}
+
+// -- the shared FASTPATH VLAN Membership page ----------------------------
+
+// TestHTTPFaceFastpathVlanMembershipRoundTrip drives
+// webui.Writer.SetVlanMembership end-to-end for every managed model that
+// accepts an explicit membership apply (m4300-24x is excluded -- see
+// TestHTTPFaceFastpathVlanMembershipM4300_24XRefusalIsSurfacedVerbatim
+// below for its own, deliberately different, per-port refusal).
+func TestHTTPFaceFastpathVlanMembershipRoundTrip(t *testing.T) {
+	tests := []struct {
+		modelKey string
+		seed     func() *State
+	}{
+		{"gsm7252ps", SeedGSM7252PS},
+		{"gsm7228ps", SeedGSM7228PS},
+		{"m4300-16x", SeedM4300_16X},
+	}
+	for _, tt := range tests {
+		t.Run(tt.modelKey, func(t *testing.T) {
+			m, err := model.GetModel(tt.modelKey)
+			if err != nil {
+				t.Fatalf("model.GetModel: %v", err)
+			}
+			spec, err := webui.HTTPSpec(m)
+			if err != nil {
+				t.Fatalf("webui.HTTPSpec: %v", err)
+			}
+			st := tt.seed()
+			addr, _ := startHTTPFace(t, st, spec, "password")
+
+			client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+			ctx := context.Background()
+			writer, err := webui.NewWriter(client, m)
+			if err != nil {
+				t.Fatalf("webui.NewWriter: %v", err)
+			}
+			reader, err := webui.NewReader(client, m)
+			if err != nil {
+				t.Fatalf("webui.NewReader: %v", err)
+			}
+
+			vid := 0
+			for v := range st.Vlans {
+				if vid == 0 || v > vid {
+					vid = v
+				}
+			}
+			// The highest PHYSICAL port the switch actually has -- not
+			// model.PortCount, which the registry sets to 28 on the
+			// M4300-24X-style models while the device renders fewer cells.
+			port := 0
+			for p := range st.Ports {
+				if p <= m.PortCount && p > port {
+					port = p
+				}
+			}
+			if st.VlanMembershipLockedPorts[port] {
+				t.Fatalf("test port %d is locked on %s; pick a different port for this model", port, tt.modelKey)
+			}
+
+			for _, mode := range []model.VlanMode{model.VlanTagged, model.VlanUntagged, model.VlanExcluded} {
+				if err := writer.SetVlanMembership(ctx, vid, port, mode, false); err != nil {
+					t.Fatalf("SetVlanMembership(vlan=%d, port=%d, %v) error = %v", vid, port, mode, err)
+				}
+				page, err := reader.ReadFastpathMembership(ctx, vid)
+				if err != nil {
+					t.Fatalf("ReadFastpathMembership(%d) error = %v", vid, err)
+				}
+				if got := page.Configured[port]; got != mode {
+					t.Errorf("after SetVlanMembership(%v): Configured[%d] = %v, want %v", mode, port, got, mode)
+				}
+				vsim := st.Vlans[vid]
+				switch mode {
+				case model.VlanExcluded:
+					if vsim.Member[port] {
+						t.Errorf("port %d still a Member after Excluded apply", port)
+					}
+				default:
+					if !vsim.Member[port] {
+						t.Errorf("port %d not a Member after %v apply", port, mode)
+					}
+					if (vsim.Untagged[port]) != (mode == model.VlanUntagged) {
+						t.Errorf("port %d Untagged = %v after %v apply", port, vsim.Untagged[port], mode)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestHTTPFaceFastpathVlanMembershipM4300_24XRefusalIsSurfacedVerbatim
+// mirrors Python test_mock_m4300_24x_refusal_is_surfaced_verbatim: on the
+// real 10.1.5.13 every port is switchport mode access/trunk, and the M4300
+// image only accepts explicit VLAN membership on a general-mode port. The
+// web UI answers HTTP 200 with err_flag=1 and a human err_msg; the library
+// surfaces that verbatim as an HTTP error, and a refused apply must leave
+// the device untouched.
+func TestHTTPFaceFastpathVlanMembershipM4300_24XRefusalIsSurfacedVerbatim(t *testing.T) {
+	m, err := model.GetModel("m4300-24x")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	st := SeedM4300_24X()
+	if !st.VlanMembershipLockedPorts[8] {
+		t.Fatal("precondition: port 8 should be locked on the seeded m4300-24x")
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	ctx := context.Background()
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	vid := 0
+	for v := range st.Vlans {
+		if vid == 0 || v > vid {
+			vid = v
+		}
+	}
+	before, err := reader.ReadFastpathMembership(ctx, vid)
+	if err != nil {
+		t.Fatalf("ReadFastpathMembership(%d) error = %v", vid, err)
+	}
+	err = writer.SetVlanMembership(ctx, vid, 8, model.VlanUntagged, false)
+	if err == nil {
+		t.Fatal("SetVlanMembership on a locked port returned nil error, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "Unable to set VLAN membership") {
+		t.Errorf("SetVlanMembership error = %v, want it to contain the firmware's verbatim refusal text", err)
+	}
+	after, err := reader.ReadFastpathMembership(ctx, vid)
+	if err != nil {
+		t.Fatalf("ReadFastpathMembership(%d) error = %v", vid, err)
+	}
+	for p, mode := range before.Configured {
+		if after.Configured[p] != mode {
+			t.Errorf("a refused apply mutated port %d's configured mode: %v -> %v", p, mode, after.Configured[p])
+		}
+	}
+}
+
+// TestHTTPFaceFastpathVlanMembershipConfiguredOnlyDivergence mirrors Python
+// test_mock_configured_only_ports_are_absent_from_the_current_lists: the
+// seeded GSM7252PS divergence, end to end through the mock's HTTP face --
+// ports 50/51 are Configured: Include / Current: Exclude on the real
+// switch, so the HTTP reader (which reports the CURRENT view) must not
+// list them as members, while the membership page's Configured grid must.
+func TestHTTPFaceFastpathVlanMembershipConfiguredOnlyDivergence(t *testing.T) {
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	st := SeedGSM7252PS()
+	if len(st.Vlans[1].ConfiguredOnly) == 0 {
+		t.Fatal("precondition: seeded gsm7252ps VLAN 1 should carry ConfiguredOnly ports")
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	vlans, err := reader.GetVLANs(ctx)
+	if err != nil {
+		t.Fatalf("GetVLANs() error = %v", err)
+	}
+	var vlan1 *model.VLANInfo
+	for i := range vlans {
+		if vlans[i].VlanID == 1 {
+			vlan1 = &vlans[i]
+		}
+	}
+	if vlan1 == nil {
+		t.Fatal("GetVLANs() has no VLAN 1")
+	}
+	for port := range st.Vlans[1].ConfiguredOnly {
+		for _, p := range vlan1.MemberPorts {
+			if p == port {
+				t.Errorf("VLAN 1 MemberPorts (CURRENT view) lists ConfiguredOnly port %d, want absent", port)
+			}
+		}
+	}
+	page, err := reader.ReadFastpathMembership(ctx, 1)
+	if err != nil {
+		t.Fatalf("ReadFastpathMembership(1) error = %v", err)
+	}
+	for port := range st.Vlans[1].ConfiguredOnly {
+		if page.Configured[port] != model.VlanUntagged {
+			t.Errorf("membership page Configured[%d] = %v, want Untagged (the CONFIGURED view)", port, page.Configured[port])
+		}
 	}
 }
 

@@ -64,6 +64,34 @@ type VlanSim struct {
 	Name     string
 	Member   map[int]bool
 	Untagged map[int]bool
+	// ConfiguredOnly is the set of ports CONFIGURED into this VLAN but NOT
+	// currently participating -- ``show vlan`` prints them as "Current:
+	// Exclude / Configured: Include". A REAL, MEASURED divergence, not a
+	// theoretical one: on GSM7252PS @10.1.5.22, VLAN 1 lists ports 1/0/50
+	// and 1/0/51 exactly that way, so the switch reports them in
+	// dot1qVlanStaticEgressPorts (the STATIC/configured table) and in the
+	// web UI's hiddenMem grid, while omitting them from the CLI's current
+	// list, from vlanStatus.html and from hiddenTagged/hiddenUnTagged.
+	// Keeping the two views separate is what lets the mock reproduce that
+	// split -- collapsing them would make the mock's SNMP and HTTP faces
+	// agree with each other while both disagree with hardware. Empty (the
+	// default) = configured and current coincide, the normal case. Mirrors
+	// Python VlanSim.configured_only.
+	ConfiguredOnly map[int]bool
+}
+
+// Configured returns the CONFIGURED egress set: current members plus
+// ConfiguredOnly, mirroring Python VlanSim.configured (a computed
+// property there; a method here since Go has no property syntax).
+func (v *VlanSim) Configured() map[int]bool {
+	out := make(map[int]bool, len(v.Member)+len(v.ConfiguredOnly))
+	for p := range v.Member {
+		out[p] = true
+	}
+	for p := range v.ConfiguredOnly {
+		out[p] = true
+	}
+	return out
 }
 
 // PoeSim is one PoE port: RFC 3621 admin/detect state plus vendor delivered
@@ -383,9 +411,10 @@ func cloneVlansMap(in map[int]*VlanSim) map[int]*VlanSim {
 	out := make(map[int]*VlanSim, len(in))
 	for k, v := range in {
 		out[k] = &VlanSim{
-			Name:     v.Name,
-			Member:   cloneIntBoolMap(v.Member),
-			Untagged: cloneIntBoolMap(v.Untagged),
+			Name:           v.Name,
+			Member:         cloneIntBoolMap(v.Member),
+			Untagged:       cloneIntBoolMap(v.Untagged),
+			ConfiguredOnly: cloneIntBoolMap(v.ConfiguredOnly),
 		}
 	}
 	return out

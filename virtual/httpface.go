@@ -522,12 +522,14 @@ func (f *HTTPFace) goaheadGet(w http.ResponseWriter, r *http.Request) {
 			f.redirectToSession(w)
 			return
 		}
-		// TODO(slice-06 Tasks 9/10): dispatch to a Go web_gs728tpp.RenderWcd
-		// (state, decoded[strings.Index(decoded, "wcd?"):]) once that
-		// per-model renderer module exists; every wcd query 404s honestly for
-		// now, matching Python's own `page is None -> 404` branch rather than
-		// fabricating a page.
-		f.send(w, notFoundBody, http.StatusNotFound, false)
+		f.renderMu.Lock()
+		page, ok := RenderGS728TPPWcd(f.state, decoded[strings.Index(decoded, "wcd?"):])
+		f.renderMu.Unlock()
+		if !ok {
+			f.send(w, notFoundBody, http.StatusNotFound, false)
+			return
+		}
+		f.send(w, page, http.StatusOK, false)
 		return
 	}
 	f.send(w, notFoundBody, http.StatusNotFound, false)
@@ -693,49 +695,57 @@ func (f *HTTPFace) handleCertUpload(contentType string, raw []byte) (int, string
 // Python do_GET's "with face._lock: ... elif chain" (faces/http.py:318-338).
 // Must be called with f.renderMu held.
 //
-// TODO(slice-06 Task 10): insert, IN THIS EXACT PRIORITY ORDER (dossier §3.3
-// steps 1-2/5-7), BEFORE the GS110EMX/GS105PE branches Task 9 landed below:
-//  1. the shared FASTPATH "VLAN Membership" page (web_fastpath_vlan) --
-//     checked first because it is served byte-shape-identically across
+// Priority order, mirroring Python's elif chain exactly (dossier §3.3):
+//  1. the shared FASTPATH "VLAN Membership" page (renderFastpathVlanPage)
+//     -- checked first because it is served byte-shape-identically across
 //     three dialects (M4300/S3300/XE_FASTPATH), independent of html_dialect;
-//  2. the shared FASTPATH XUI write pages (web_fastpath_xui + the
-//     per-dialect module port_config_path/poe_config_path/mgmt_ip_path
+//  2. the shared FASTPATH XUI write pages (renderFastpathXUIPage: the
+//     per-dialect module's port_config_path/poe_config_path/mgmt_ip_path
 //     apply-then-render, including their "<page>.html/a1" alias);
-//  5. web_m4300's renderers (gated on HTMLDialectM4300, cross-reusing
-//     web_gsm7252ps for lldp_path/poe_status_path -- dossier §3.3 step 5);
-//  6. web_gsm7228ps's renderers (gated on HTMLDialectS3300);
-//  7. web_gsm7252ps's renderers (gated on HTMLDialectXEFastpath).
-//
-// Steps 3 (GAMBIT token-session page set, gated on spec.SessionTokenField !=
-// "") and 4 (web_gs105pe's own dashboard/stats/pvid/vlan-config/sysinfo/
-// membership renderers, gated on HTMLDialectGS105PE) are Task 9 scope and are
-// wired below, in Python's exact priority order (3 before 4) -- both must
-// stay ahead of the eventual step-5/6/7 insertions per dossier §3.3.
+//  3. the GAMBIT token-session page set (spec.SessionTokenField != "");
+//  4. web_gs105pe's own dashboard/stats/pvid/vlan-config/sysinfo/membership
+//     renderers (HTMLDialectGS105PE);
+//  5. web_m4300's renderers (HTMLDialectM4300, cross-reusing web_gsm7252ps
+//     for lldp_path/poe_status_path);
+//  6. web_gsm7228ps's renderers (HTMLDialectS3300);
+//  7. web_gsm7252ps's renderers (HTMLDialectXEFastpath).
 //
 // Getting this ordering wrong breaks any model whose written page is not
 // itself present in f.known -- see dossier §3.9's routing-precedence note.
 //
-// UNTIL steps 1/2/5/6/7 land, this function is DIALECT-GATED, not a blanket
-// fallback: only HTMLDialectStandard (gs305ep), HTMLDialectGS110EMX and
-// HTMLDialectGS105PE reach a real renderer. Every other dialect's
-// ok=false tells the caller to answer an honest 404 -- exactly the same
-// "never fabricate a page this model's spec didn't earn" treatment
-// goaheadGet's wcd branch already gives GoAhead. An M4300/S3300/XE_FASTPATH
-// read must NOT silently fall through to the STANDARD renderer: that would
-// render a plausible-looking page in the WRONG dialect shape, built from
-// REAL seeded data, which is worse than a 404 -- it would false-green a
-// caller's integration against a page the mock cannot actually produce yet
-// (principles 1/5: the fake must match hardware, never paper over a gap).
-// See TestHTTPFaceNonStandardDialectReadPagesAreHonestly404 in
-// httpface_test.go, a deliberate tripwire Task 9 updated to remove its
-// GS110EMX/GS105PE cases (now genuinely rendered) -- Task 10 MUST do the
-// same for M4300/S3300/XE_FASTPATH once their renderers land.
+// This function is DIALECT-GATED, not a blanket fallback: a dialect with no
+// case below (there are none left; every HTMLDialect this package defines
+// now has one) would answer ok=false, telling the caller to 404 honestly
+// rather than fall through to the STANDARD renderer and render a
+// plausible-looking page in the WRONG dialect shape -- principles 1/5: the
+// fake must match hardware, never paper over a gap.
 func (f *HTTPFace) dispatchRender(path string, form map[string]string) (page string, implemented bool) {
+	if page, ok := f.renderFastpathVlanPage(path, form); ok {
+		return page, true
+	}
+	if page, ok := f.renderFastpathXUIPage(path, form); ok {
+		return page, true
+	}
 	if f.spec.SessionTokenField != "" {
 		return f.renderGS110EMXPage(path, form), true
 	}
 	if f.spec.HTMLDialect == webui.HTMLDialectGS105PE {
 		if page, ok := f.renderGS105PEPage(path, form); ok {
+			return page, true
+		}
+	}
+	if f.spec.HTMLDialect == webui.HTMLDialectM4300 {
+		if page, ok := f.renderM4300Page(path); ok {
+			return page, true
+		}
+	}
+	if f.spec.HTMLDialect == webui.HTMLDialectS3300 {
+		if page, ok := f.renderS3300Page(path); ok {
+			return page, true
+		}
+	}
+	if f.spec.HTMLDialect == webui.HTMLDialectXEFastpath {
+		if page, ok := f.renderXEPage(path); ok {
 			return page, true
 		}
 	}
@@ -750,10 +760,16 @@ func (f *HTTPFace) dispatchRender(path string, form map[string]string) (page str
 // reply body instead of a re-rendered page -- see renderGS110EMXPage's doc
 // comment), mirroring Python do_POST's matching elif chain (faces/http.py:
 // 376-397). Must be called with f.renderMu held. See dispatchRender's doc
-// comment for the exact Task 10 insertion order AND for why this is
-// dialect-gated (ok=false -> caller 404s) rather than a blanket STANDARD-
-// dialect fallback for every model.
+// comment for the exact priority order and for why this is dialect-gated
+// (ok=false -> caller 404s) rather than a blanket STANDARD-dialect fallback
+// for every model.
 func (f *HTTPFace) dispatchApplyAndRender(path string, form map[string]string) (page string, implemented bool) {
+	if page, ok := f.renderFastpathVlanPage(path, form); ok {
+		return page, true
+	}
+	if page, ok := f.renderFastpathXUIPage(path, form); ok {
+		return page, true
+	}
 	if f.spec.SessionTokenField != "" {
 		return f.renderGS110EMXPage(path, form), true
 	}
@@ -772,11 +788,207 @@ func (f *HTTPFace) dispatchApplyAndRender(path string, form map[string]string) (
 			return page, true
 		}
 	}
+	if f.spec.HTMLDialect == webui.HTMLDialectM4300 {
+		if page, ok := f.renderM4300Page(path); ok {
+			return page, true
+		}
+	}
+	if f.spec.HTMLDialect == webui.HTMLDialectS3300 {
+		if page, ok := f.renderS3300Page(path); ok {
+			return page, true
+		}
+	}
+	if f.spec.HTMLDialect == webui.HTMLDialectXEFastpath {
+		if page, ok := f.renderXEPage(path); ok {
+			return page, true
+		}
+	}
 	if f.spec.HTMLDialect == webui.HTMLDialectStandard {
 		f.applyStandardForm(path, form)
 		return f.renderStandardPage(path, form), true
 	}
 	return "", false
+}
+
+// renderFastpathVlanPage serves the managed FASTPATH VLAN Membership page
+// (GET page or its "_rw.html" form target), applying the form first when it
+// carries the apply flag. ok=false = not that page, so the caller falls
+// through. Checked BEFORE the per-dialect renderers because all three
+// managed dialects (XE_FASTPATH/S3300/M4300) serve the SAME page from the
+// same state -- see web_fastpath_vlan.go. Mirrors Python
+// VirtualHttpFace._render_fastpath_vlan_page (faces/http.py:488-516).
+func (f *HTTPFace) renderFastpathVlanPage(path string, form map[string]string) (string, bool) {
+	if path != f.spec.VlanMembershipPath && path != f.spec.VlanMembershipPostPath {
+		return "", false
+	}
+	if f.state.VlanMembershipPage == nil {
+		// A model with no MEASURED page geometry must not get a fabricated
+		// page (principle 5); 404 is what the face does for any endpoint
+		// the device does not serve.
+		return "", false
+	}
+	// Resolve the refusal BEFORE applying: a refused apply must change
+	// nothing and come back as err_flag=1 + err_msg on a 200 page, exactly
+	// as the M4300 firmware answers a port that is not in general mode.
+	errMsg := FastpathVlanRefusal(f.state, form)
+	ApplyFastpathVlanMembership(f.state, form)
+	return RenderFastpathVlanMembership(f.state, f.spec, form, errMsg), true
+}
+
+// renderFastpathXUIPage serves a managed model's XUI write page, applying
+// the form first. Covers portsConfiguration.html (set_port_enabled),
+// poeInterfaceConfiguration.html (set_poe/cycle_poe/clear_poe_fault) and the
+// model's management-IP page -- both the GET page and its "/a1" POST
+// target. ok=false = not one of these, so the caller falls through. Mirrors
+// Python VirtualHttpFace._render_fastpath_xui_page (faces/http.py:438-486).
+//
+// The apply happens BEFORE the re-render and its refusal (err_msg) is
+// rendered onto the page as err_flag=1 on a 200, which is how these pages
+// report a rejection -- never an HTTP error status. On a GET, form is
+// always {}, so every apply_* below is a no-op (their own is_apply guard
+// requires submit_flag=8) and this reduces to a plain render -- exactly
+// mirroring Python calling this same function from both do_GET and do_POST.
+func (f *HTTPFace) renderFastpathXUIPage(path string, form map[string]string) (string, bool) {
+	pagePath := path
+	if orig, aliased := xuiWriteHTTPPaths(f.spec)[path]; aliased {
+		pagePath = orig
+	}
+	if pagePath != f.spec.PortConfigPath && pagePath != f.spec.PoEConfigPath && pagePath != f.spec.MgmtIPPath {
+		return "", false
+	}
+	dialect := f.spec.HTMLDialect
+	if dialect != webui.HTMLDialectM4300 && dialect != webui.HTMLDialectS3300 && dialect != webui.HTMLDialectXEFastpath {
+		return "", false
+	}
+	if pagePath == f.spec.MgmtIPPath {
+		if f.spec.MgmtIPFields == nil {
+			return "", false
+		}
+		errMsg := ApplyFastpathMgmtIP(f.state, f.spec, form)
+		return RenderFastpathMgmtIP(f.state, f.spec, errMsg), true
+	}
+	if pagePath == f.spec.PortConfigPath {
+		switch dialect {
+		case webui.HTMLDialectM4300:
+			errMsg := ApplyM4300Ports(f.state, form)
+			return RenderM4300Ports(f.state, errMsg), true
+		case webui.HTMLDialectS3300:
+			errMsg := ApplyS3300Ports(f.state, form)
+			return RenderS3300Ports(f.state, errMsg), true
+		default: // HTMLDialectXEFastpath
+			errMsg := ApplyXEPorts(f.state, form)
+			return RenderXEPorts(f.state, errMsg), true
+		}
+	}
+	// pagePath == f.spec.PoEConfigPath
+	switch dialect {
+	case webui.HTMLDialectM4300:
+		errMsg := ApplyM4300PoE(f.state, form)
+		return RenderM4300PoE(f.state, errMsg), true
+	case webui.HTMLDialectS3300:
+		errMsg := ApplyS3300PoE(f.state, form)
+		return RenderS3300PoE(f.state, errMsg), true
+	default: // HTMLDialectXEFastpath
+		errMsg := ApplyXEPoE(f.state, form)
+		return RenderXEPoE(f.state, errMsg), true
+	}
+}
+
+// renderM4300Page renders an M4300 Cheetah /v1 read page from state,
+// ok=false if this model is not an M4300 (so the caller falls through).
+// Mirrors Python VirtualHttpFace._render_m4300_page (faces/http.py:518-551).
+func (f *HTTPFace) renderM4300Page(path string) (string, bool) {
+	spec := f.spec
+	switch {
+	case path == spec.DashboardPath:
+		return RenderM4300Ports(f.state, ""), true
+	case path == spec.StatsPath:
+		return RenderM4300PortStatistics(f.state), true
+	case path == spec.PvidPath:
+		return RenderM4300Pvids(f.state), true
+	case path == spec.VlanConfigPath:
+		return RenderM4300Vlans(f.state), true
+	case path == spec.MacTablePath:
+		return RenderM4300MacTable(f.state), true
+	case path == spec.SysinfoPath:
+		return RenderM4300Sysinfo(f.state), true
+	case spec.LLDPPath != "" && path == spec.LLDPPath:
+		// lldpRemoteInventory.html is the SAME page (and the same XE cell
+		// grid, with 1/0/N ifNames) on the M4300s as on gsm7252ps.
+		return RenderXELLDP(f.state), true
+	case spec.PoEStatusPath != "" && path == spec.PoEStatusPath:
+		// The M4300-16X PoE page shares the gsm7252ps XE cell layout, but
+		// watts=true: the M4300 firmware renders the power column in
+		// decimal WATTS ("4.60"), not the gsm7252ps's integer mW. The 24X
+		// has PoEStatusPath=="" and never reaches here. Mirrors Python's
+		// exact call (web_gsm7252ps.render_poe(state, watts=True) with
+		// every OTHER argument left at its XE default -- NOT M4300's own
+		// iface/checkbox/path) -- in practice unreachable on the shipped
+		// m4300-16x spec, where PoEStatusPath==PoEConfigPath, so
+		// renderFastpathXUIPage's M4300 branch (which DOES use the
+		// M4300-specific iface/checkbox/path) always intercepts this path
+		// first; kept for exact structural fidelity with the Python source.
+		return RenderXEPoEWith(f.state, true, "", xeIface, xePoECheckbox, "RESET", "/poeInterfaceConfiguration.html"), true
+	default:
+		return "", false
+	}
+}
+
+// renderS3300Page renders an S3300-52X (gsm7228ps) read page from state,
+// ok=false if this model is not the S3300 dialect (so the caller falls
+// through). Ports/stats/PVIDs/VLANs/PoE/LLDP reuse the gsm7252ps XE
+// renderers (same cell grid); only the MAC table (shifted columns, escaped
+// 1/gN ports) and sysInfo (base MAC only) are S3300-specific. Mirrors
+// Python VirtualHttpFace._render_s3300_page (faces/http.py:553-584).
+func (f *HTTPFace) renderS3300Page(path string) (string, bool) {
+	spec := f.spec
+	switch path {
+	case spec.DashboardPath:
+		return RenderS3300Ports(f.state, ""), true
+	case spec.StatsPath:
+		return RenderXEPortStatistics(f.state), true
+	case spec.PvidPath:
+		return RenderXEPvids(f.state), true
+	case spec.VlanConfigPath:
+		return RenderS3300Vlans(f.state), true
+	case spec.MacTablePath:
+		return RenderS3300MacTable(f.state), true
+	case spec.PoEStatusPath:
+		return RenderS3300PoE(f.state, ""), true
+	case spec.LLDPPath:
+		return RenderXELLDP(f.state), true
+	case spec.SysinfoPath:
+		return RenderS3300Sysinfo(f.state), true
+	default:
+		return "", false
+	}
+}
+
+// renderXEPage renders a GSM7252PS XE FASTPATH read page from state,
+// ok=false if this model is not XE (so the caller falls through). Mirrors
+// Python VirtualHttpFace._render_xe_page (faces/http.py:586-614).
+func (f *HTTPFace) renderXEPage(path string) (string, bool) {
+	spec := f.spec
+	switch path {
+	case spec.DashboardPath:
+		return RenderXEPorts(f.state, ""), true
+	case spec.StatsPath:
+		return RenderXEPortStatistics(f.state), true
+	case spec.PvidPath:
+		return RenderXEPvids(f.state), true
+	case spec.VlanConfigPath:
+		return RenderXEVlans(f.state), true
+	case spec.MacTablePath:
+		return RenderXEMacTable(f.state), true
+	case spec.PoEStatusPath:
+		return RenderXEPoE(f.state, ""), true
+	case spec.LLDPPath:
+		return RenderXELLDP(f.state), true
+	case spec.SysinfoPath:
+		return RenderXESysinfo(f.state), true
+	default:
+		return "", false
+	}
 }
 
 // renderGS110EMXPage renders one of the GAMBIT token-session model's known
