@@ -1,0 +1,1019 @@
+package webui
+
+// writer.go: model-driven web-UI write facade, ported field-for-field from
+// src/netgear_switch/http_write.py at pin 1841111 in
+// python-netgear-switch-library (frozen snapshot worktree
+// go-port-pin-1841111). Any discrepancy between this file and that pin is a
+// bug in this file, not a deliberate deviation, unless called out in a
+// comment. Cert upload (upload_certificate + its helpers) lives in cert.go,
+// a deliberate split from the Python source's single http_write.py.
+//
+// Every mutating op here: (1) enforces protected ports on a disruptive
+// per-port op unless force=true; (2) GETs the target page to scrape a fresh
+// CSRF token where the dialect needs one; (3) POSTs the encoded form; (4)
+// re-GETs and re-parses to confirm the change actually took, returning
+// *model.WriteVerificationError on divergence -- NEVER silently succeeding.
+// FASTPATH applies additionally check the page's own err_flag/err_msg
+// (raiseOnFastpathErrFlag): these pages answer HTTP 200 even when they
+// refuse a write.
+//
+// Unlike snmp.Writer's CyclePoE/ClearPoEFault (which poll with injectable
+// deadlines, snmp.PoeCycleTimeouts), CyclePoE/ClearPoEFault below take no
+// timeouts parameter: HTTP's mechanism is fire-and-forget (a hidden
+// write-only "Port Reset" column, or the Plus CGI's reset form) with no
+// polling loop, mirroring Python's cycle_poe/clear_poe_fault accepting a
+// timeouts parameter purely so the SnmpWriter|NsdpWriter|HttpWriter union
+// typechecks -- it is unused there too. This package deliberately does not
+// import the snmp package to avoid a needless cross-backend dependency; the
+// eventual backend_http.go adapter (root package, which already imports
+// snmp) is expected to drop the timeouts argument when satisfying
+// BackendWriter.CyclePoE/ClearPoEFault, exactly as backend_nsdp.go's
+// adapter does for nsdp.Writer (which has no CyclePoE/ClearPoEFault of its
+// own at all -- see nsdp/writer.go's package doc comment).
+//
+// NOTE on set_pvid/create_vlan/delete_vlan verify parsers (source fidelity,
+// not a Go-side simplification): Python's set_pvid/create_vlan/delete_vlan
+// verify against parse.parse_pvids/parse.parse_vlan_ids -- the PLAIN
+// STANDARD-dialect parsers -- even when called against a FASTPATH/GS110EMX
+// model, NOT the dialect-aware _parse_pvids/_parse_vlan_ids dispatcher
+// http_read.py itself uses for reads. This Go port mirrors that exactly
+// (ParsePVIDs/ParseVLANIDs below, not the parsePVIDs/parseVlanIDs
+// dispatchers in reader.go) even though it means these three write ops are
+// only reliable on the models whose pvid_path/vlan_config_path already
+// render the STANDARD shape -- porting the Python behaviour honestly,
+// per this task's fidelity requirement, rather than silently "fixing" it.
+//
+// NOTE on set_vlan_membership's Plus-CGI "before" value (source fidelity):
+// Python's set_vlan_membership mutates `states[port] = mode` BEFORE using
+// `states.get(port)` as the WriteVerificationError's `before=` value, so
+// `before` is always literally `mode` itself on that path -- not the port's
+// prior membership. That looks like a bug, but it is what the pinned source
+// does, so this port preserves it verbatim (see the comment at the call
+// site below) rather than silently "fixing" it into a more useful value.
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
+
+	"github.com/mithro/go-netgear-switch-library/model"
+)
+
+// --- FASTPATH XUI column coordinates, mirroring http_write.py's module
+// constants verbatim (lines 358-397) ---
+
+const (
+	xuiPortAdmin  = "v_1_2_6"
+	xuiPortIfname = "v_1_2_1"
+
+	xuiPoEIfname     = "v_1_2_1"
+	xuiPoEAdmin      = "v_1_2_2"
+	xuiPoEReset      = "v_1_2_20"
+	xuiPoEResetValue = "Reset"
+
+	xuiEnableValue  = "Enable"
+	xuiDisableValue = "Disable"
+)
+
+// xuiPoEApplyOmits/xuiPoEResetOmits mirror Python's
+// _XUI_POE_APPLY_OMITS/_XUI_POE_RESET_OMITS: the two PoE buttons' own "shed
+// lists" (see writer.go's package doc + dossier D-HTTP-F §2.6) -- APPLY must
+// omit the write-only Port Reset column, RESET must omit every config
+// column, or the write-only action doubles as an unwanted rewrite.
+var (
+	xuiPoEApplyOmits = []string{xuiPoEReset}
+	xuiPoEResetOmits = func() []string {
+		out := make([]string, 0, 18)
+		for n := 2; n < 20; n++ {
+			out = append(out, fmt.Sprintf("v_1_2_%d", n))
+		}
+		return out
+	}()
+)
+
+// xuiEnabled mirrors Python forms/_xui_enabled: the wire value of both
+// admin-mode columns.
+func xuiEnabled(v bool) string {
+	if v {
+		return xuiEnableValue
+	}
+	return xuiDisableValue
+}
+
+// fastpathIfnames returns the ifName spellings a FASTPATH page may use for
+// physical port, mirroring Python's _fastpath_ifnames: the Fully-Managed/
+// M4300 firmwares write "1/0/N", the Smart-Managed-Pro S3300 writes "1/gN"
+// (and "1/xgN" for its 10G ports). Both are tried and the row is confirmed
+// by MATCHING the device's own cell, never by computing a row index from
+// the port number.
+func fastpathIfnames(port int) []string {
+	return []string{
+		fmt.Sprintf("1/0/%d", port),
+		fmt.Sprintf("1/g%d", port),
+		fmt.Sprintf("1/xg%d", port),
+	}
+}
+
+// findXUIRow returns the row of page whose column names physical port, or
+// an error wrapping model.ErrUnsupportedCapability naming what was
+// rendered, mirroring Python's _find_xui_row.
+func findXUIRow(page XuiListPage, port int, column, what string) (XuiRow, error) {
+	for _, ifname := range fastpathIfnames(port) {
+		if row, ok := page.RowFor(column, ifname); ok {
+			return row, nil
+		}
+	}
+	rendered := make([]string, 0, len(page.Rows))
+	for _, r := range page.Rows {
+		v, _ := r.Field(column)
+		rendered = append(rendered, v)
+	}
+	sort.Strings(rendered)
+	return XuiRow{}, fmt.Errorf("%s: port %d is not on this page (it renders %v): %w", what, port, rendered, model.ErrUnsupportedCapability)
+}
+
+// raiseOnFastpathErrFlag surfaces the switch's own rejection of a FASTPATH
+// apply, mirroring Python's _raise_on_fastpath_err_flag: these pages answer
+// HTTP 200 even when they refuse a write, reporting it via hidden
+// err_flag/err_msg fields.
+func raiseOnFastpathErrFlag(html, what string) error {
+	if msg, ok := ParseFastpathErr(html); ok {
+		return fmt.Errorf("switch refused %s: %s: %w", what, msg, model.ErrHTTP)
+	}
+	return nil
+}
+
+// requireFastpathMembershipFor mirrors Python's
+// _require_fastpath_membership_for: refuse a membership page showing a
+// DIFFERENT VLAN than requested (see reader.go's checkFastpathMembershipIsFor,
+// which this duplicates for the write path's own error wording -- Python
+// keeps two near-identical checks too, _check_fastpath_membership_is_for on
+// the read side and _require_fastpath_membership_for on the write side).
+func requireFastpathMembershipFor(page FastpathMembership, vlan int, path string) error {
+	if page.VlanID != nil && *page.VlanID != vlan {
+		return errUnexpectedPage(
+			"%s: asked for VLAN %d but the page shows VLAN %d -- refusing to write to the wrong VLAN", path, vlan, *page.VlanID)
+	}
+	return nil
+}
+
+// poeResetButton returns the PoE page's reset/power-cycle button field,
+// mirroring Python's _poe_reset_button: "v_2_1_3" on every managed model,
+// but only present when the page actually renders a button there (an
+// honest capability check, not an invented one).
+func poeResetButton(page XuiListPage, modelKey string) (string, error) {
+	if _, ok := page.Buttons["v_2_1_3"]; ok {
+		return "v_2_1_3", nil
+	}
+	names := make([]string, 0, len(page.Buttons))
+	for k := range page.Buttons {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return "", fmt.Errorf("model %q PoE page has no reset button (it renders %v): %w", modelKey, names, model.ErrUnsupportedCapability)
+}
+
+// vlanCheckboxRE/vlanCheckboxIndex mirror Python's _vlan_checkbox_index:
+// scans STANDARD-dialect 8021qCf.cgi checkbox inputs named "vlanckN" whose
+// value is the VLAN ID, returning the N whose value matches vlan.
+var vlanCheckboxRE = regexp.MustCompile(`name="vlanck(\d+)"[^>]*value="(\d+)"`)
+
+func vlanCheckboxIndex(html string, vlan int) (int, bool) {
+	for _, m := range vlanCheckboxRE.FindAllStringSubmatch(html, -1) {
+		v, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue
+		}
+		if v == vlan {
+			idx, err := strconv.Atoi(m[1])
+			if err != nil {
+				continue
+			}
+			return idx, true
+		}
+	}
+	return 0, false
+}
+
+// requireXUIMgmtFields returns (page path, field map) for a model's mgmt-IP
+// write, or an error wrapping model.ErrUnsupportedCapability, mirroring
+// Python's _require_xui_mgmt_fields.
+func requireXUIMgmtFields(spec *HTTPModelSpec) (string, *XuiMgmtIPFields, error) {
+	if spec.MgmtIPPath == "" || spec.MgmtIPFields == nil {
+		return "", nil, fmt.Errorf("model %q has no known web management-IP form (no MgmtIPPath/MgmtIPFields in its endpoint spec): %w", spec.ModelKey, model.ErrUnsupportedCapability)
+	}
+	return spec.MgmtIPPath, spec.MgmtIPFields, nil
+}
+
+// mgmtIPChanges returns the field overrides for a STATIC mgmt-IP apply,
+// mirroring Python's _mgmt_ip_changes: the method field is set FIRST (map
+// iteration order is irrelevant on the wire since these are POST form
+// fields, but the comment matters) -- see forms.go's XuiFormApplyForm doc
+// comment for why the method must accompany the address for the firmware to
+// treat the address boxes as meaningful at all.
+func mgmtIPChanges(fields *XuiMgmtIPFields, address, netmask, gateway string) map[string]string {
+	return map[string]string{
+		fields.Mode:    fields.StaticValue,
+		fields.Address: address,
+		fields.Netmask: netmask,
+		fields.Gateway: gateway,
+	}
+}
+
+// requireCSRF returns html's CSRF hash or raises honestly, mirroring
+// Python's _csrf.
+func requireCSRF(html string) (string, error) {
+	token, ok := ParseCSRFHash(html)
+	if !ok {
+		return "", errUnexpectedPage("no CSRF 'hash' token on page before write")
+	}
+	return token, nil
+}
+
+// pvidLookupMap builds a port->vlan lookup from pairs, for set_pvid's
+// verify step.
+func pvidLookupMap(pairs []model.Pvid) map[int]int {
+	m := make(map[int]int, len(pairs))
+	for _, p := range pairs {
+		m[p.Port] = p.Vlan
+	}
+	return m
+}
+
+// sortedRowPorts returns rows' keys in ascending order, for an honest
+// "it renders %v" capability-check message.
+func sortedRowPorts(rows map[int]map[string]string) []int {
+	out := make([]int, 0, len(rows))
+	for p := range rows {
+		out = append(out, p)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// --- Writer ---
+
+// Writer is a model-driven web-UI write facade over one switch, mirroring
+// Python's HttpWriter/AsyncHttpWriter (byte-for-byte mirrors of each other
+// apart from await -- see reader.go's Reader doc comment for why Go's
+// context.Context-first methods need only one type here too).
+type Writer struct {
+	session        Session
+	spec           *HTTPModelSpec
+	model          *model.SwitchModel
+	protectedPorts map[int]bool
+}
+
+// WriterOption configures optional Writer construction parameters (only
+// protected ports today), mirroring snmp.Writer/nsdp.Writer's functional-
+// options pattern.
+type WriterOption func(*Writer)
+
+// WithProtectedPorts marks ports as protected: every disruptive write to a
+// protected port is refused unless force is passed as true, mirroring
+// Python's HttpWriter(..., protected_ports=frozenset({...})).
+func WithProtectedPorts(ports ...int) WriterOption {
+	return func(w *Writer) {
+		for _, p := range ports {
+			w.protectedPorts[p] = true
+		}
+	}
+}
+
+// NewWriter constructs a Writer bound to session and m, mirroring Python
+// HttpWriter.__init__ (http_write.py:497-507). Unlike NewReader, this does
+// NOT gate on HTTPModelSpec.ReadsVerified -- dossier D-HTTP-F §1.5 is
+// explicit that HttpWriter/AsyncHttpWriter never perform that check;
+// individual write ops raise per missing path via requirePath instead.
+// Construction fails only if m has no HTTP backend/spec at all.
+func NewWriter(session Session, m *model.SwitchModel, opts ...WriterOption) (*Writer, error) {
+	spec, err := HTTPSpec(m)
+	if err != nil {
+		return nil, err
+	}
+	w := &Writer{session: session, spec: spec, model: m, protectedPorts: make(map[int]bool)}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w, nil
+}
+
+// guard refuses port when it is protected and force is false, mirroring
+// Python's HttpWriter._guard verbatim (including the exact message text).
+func (w *Writer) guard(port int, force bool) error {
+	if w.protectedPorts[port] && !force {
+		return fmt.Errorf("port %d is protected on %q; pass force=true: %w", port, w.model.Key, model.ErrProtectedPort)
+	}
+	return nil
+}
+
+// poeAdmin reads port's current PoE admin-enabled state via the dialect-
+// aware reader dispatcher (parsePoE, reader.go), mirroring Python's
+// HttpWriter._poe_admin: dialect-aware on purpose, since the FASTPATH PoE
+// page is an XE grid, not a Plus portID-row CGI.
+func (w *Writer) poeAdmin(ctx context.Context, port int) (bool, error) {
+	path, err := requirePath(w.model.Key, w.spec.PoEStatusPath, "PoE status")
+	if err != nil {
+		return false, err
+	}
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return false, err
+	}
+	rows, err := parsePoE(w.spec, html)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range rows {
+		if r.Port == port {
+			return r.AdminEnabled, nil
+		}
+	}
+	return false, nil
+}
+
+// SetPoE sets port's PoE admin state, mirroring Python HttpWriter.set_poe
+// (http_write.py:515-535). FASTPATH models drive the XUI grid
+// (xuiPoEAdmin, the gsm7252ps fix's landing site); every other model drives
+// the Plus-CGI PoEPortConfig.cgi form.
+func (w *Writer) SetPoE(ctx context.Context, port int, on, force bool) error {
+	path, err := requirePath(w.model.Key, w.spec.PoEConfigPath, "web PoE config")
+	if err != nil {
+		return err
+	}
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	if isFastpathDialect(w.spec) {
+		return w.xuiPoEAdmin(ctx, path, port, on)
+	}
+	before, err := w.poeAdmin(ctx, port)
+	if err != nil {
+		return err
+	}
+	page, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	csrf, err := requireCSRF(page)
+	if err != nil {
+		return err
+	}
+	if _, err := w.session.PostForm(ctx, path, PoeApplyForm(port, on, w.spec.IsEPXPoE, csrf)); err != nil {
+		return err
+	}
+	after, err := w.poeAdmin(ctx, port)
+	if err != nil {
+		return err
+	}
+	if after != on {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("PoE port %d did not read back as on=%v", port, on),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// xuiPoEAdmin drives poeInterfaceConfiguration.html's admin-mode column,
+// mirroring Python HttpWriter._xui_poe_admin (http_write.py:537-570) -- the
+// gsm7252ps PoE-over-HTTP fix (dossier D-HTTP-F §2.6): the page's own nav
+// block MUST ride along (XuiRowApplyForm always sends page.Nav) and the
+// write-only Port Reset column must NOT (xuiPoEApplyOmits).
+func (w *Writer) xuiPoEAdmin(ctx context.Context, path string, port int, on bool) error {
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	page, err := ParseXUIListPage(html, path)
+	if err != nil {
+		return err
+	}
+	row, err := findXUIRow(page, port, xuiPoEIfname, fmt.Sprintf("%q PoE", w.model.Key))
+	if err != nil {
+		return err
+	}
+	before, _ := row.Field(xuiPoEAdmin)
+	body, err := XuiRowApplyForm(page, row, map[string]string{xuiPoEAdmin: xuiEnabled(on)}, "v_2_1_2", xuiPoEApplyOmits)
+	if err != nil {
+		return err
+	}
+	applied, err := w.session.PostForm(ctx, page.Action, body)
+	if err != nil {
+		return err
+	}
+	if err := raiseOnFastpathErrFlag(applied, fmt.Sprintf("PoE port %d admin -> %v", port, on)); err != nil {
+		return err
+	}
+	after, err := w.poeAdmin(ctx, port)
+	if err != nil {
+		return err
+	}
+	if after != on {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("PoE port %d did not read back as on=%v on %s", port, on, path),
+			Before: before, // the row's own pre-write text ("Enable"/"Disable"), mismatched in TYPE from After (bool) -- a Python source quirk (before is a string, after is a bool) preserved verbatim.
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// CyclePoE power-cycles port's PD, mirroring Python HttpWriter.cycle_poe
+// (http_write.py:572-592). No timeouts parameter -- see this file's
+// package doc comment.
+func (w *Writer) CyclePoE(ctx context.Context, port int, force bool) error {
+	path, err := requirePath(w.model.Key, w.spec.PoEConfigPath, "web PoE config")
+	if err != nil {
+		return err
+	}
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	if isFastpathDialect(w.spec) {
+		return w.xuiPoEReset(ctx, path, port)
+	}
+	page, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	csrf, err := requireCSRF(page)
+	if err != nil {
+		return err
+	}
+	_, err = w.session.PostForm(ctx, path, PoeResetForm(port, csrf))
+	return err
+}
+
+// ClearPoEFault clears a PoE fault on port by re-running the port's PoE
+// detection, mirroring Python HttpWriter.clear_poe_fault (http_write.py:
+// 594-622): on the managed FASTPATH models this is the SAME hidden
+// write-only "Port Reset" mechanism CyclePoE uses; on the Plus-class CGI UI
+// it is the identical PoEPortConfig.cgi reset form -- a Plus switch has no
+// separate "clear fault" action, the fault clears when detection re-runs.
+// No timeouts parameter -- see this file's package doc comment.
+func (w *Writer) ClearPoEFault(ctx context.Context, port int, force bool) error {
+	path, err := requirePath(w.model.Key, w.spec.PoEConfigPath, "web PoE config")
+	if err != nil {
+		return err
+	}
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	if isFastpathDialect(w.spec) {
+		return w.xuiPoEReset(ctx, path, port)
+	}
+	page, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	csrf, err := requireCSRF(page)
+	if err != nil {
+		return err
+	}
+	_, err = w.session.PostForm(ctx, path, PoeResetForm(port, csrf))
+	return err
+}
+
+// xuiPoEReset presses the FASTPATH PoE page's per-port RESET for port,
+// mirroring Python HttpWriter._xui_poe_reset (http_write.py:624-649). No
+// verify-after-write: v_1_2_20 is a WRITE-ONLY field with no persistent
+// state to read back (exactly like cycle_poe on every other backend) --
+// what IS checked is the page's own err_flag/err_msg.
+func (w *Writer) xuiPoEReset(ctx context.Context, path string, port int) error {
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	page, err := ParseXUIListPage(html, path)
+	if err != nil {
+		return err
+	}
+	row, err := findXUIRow(page, port, xuiPoEIfname, fmt.Sprintf("%q PoE", w.model.Key))
+	if err != nil {
+		return err
+	}
+	button, err := poeResetButton(page, w.model.Key)
+	if err != nil {
+		return err
+	}
+	body, err := XuiRowApplyForm(page, row, map[string]string{xuiPoEReset: xuiPoEResetValue}, button, xuiPoEResetOmits)
+	if err != nil {
+		return err
+	}
+	applied, err := w.session.PostForm(ctx, page.Action, body)
+	if err != nil {
+		return err
+	}
+	return raiseOnFastpathErrFlag(applied, fmt.Sprintf("PoE reset of port %d", port))
+}
+
+// SetPVID sets port's PVID, mirroring Python HttpWriter.set_pvid
+// (http_write.py:651-664). See this file's package doc comment for why
+// this always uses the STANDARD-dialect ParsePVIDs verify, even on a
+// FASTPATH/GS110EMX model -- a faithful port of a Python source quirk, not
+// a Go-side choice.
+func (w *Writer) SetPVID(ctx context.Context, port, vlan int, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	path, err := requirePath(w.model.Key, w.spec.PvidPath, "port PVIDs")
+	if err != nil {
+		return err
+	}
+	page, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	csrf, err := requireCSRF(page)
+	if err != nil {
+		return err
+	}
+	if _, err := w.session.PostForm(ctx, path, PvidForm(port, vlan, csrf)); err != nil {
+		return err
+	}
+	afterHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	afterPairs, err := ParsePVIDs(afterHTML)
+	if err != nil {
+		return err
+	}
+	after := pvidLookupMap(afterPairs)
+	if got, ok := after[port]; !ok || got != vlan {
+		var gotAny any
+		if ok {
+			gotAny = got
+		}
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("PVID for port %d did not read back as %d", port, vlan),
+			Before: nil,
+			After:  gotAny,
+		}
+	}
+	return nil
+}
+
+// SetVlanMembership sets port's membership mode within vlanID, mirroring
+// Python HttpWriter.set_vlan_membership (http_write.py:666-691). FASTPATH
+// models route through setFastpathMembership (the vlan_port_cfg_rw.html
+// configured-view write); every other model uses the classic Plus-CGI
+// 8021qMembe.cgi 3-step read/apply/verify.
+func (w *Writer) SetVlanMembership(ctx context.Context, vlanID, port int, mode model.VlanMode, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	if isFastpathDialect(w.spec) {
+		return w.setFastpathMembership(ctx, vlanID, port, mode)
+	}
+	path, err := requirePath(w.model.Key, w.spec.VlanMembershipPath, "VLAN membership")
+	if err != nil {
+		return err
+	}
+	html, err := w.session.PostForm(ctx, path, map[string]string{"VLAN_ID": strconv.Itoa(vlanID)})
+	if err != nil {
+		return err
+	}
+	states, err := ParseMembership(html, w.model.PortCount)
+	if err != nil {
+		return err
+	}
+	states[port] = mode
+	hidden := MembershipHiddenMem(states, w.model.PortCount)
+	// "before" below is states[port], which now equals mode because of the
+	// mutation two lines up -- see this file's package doc comment: Python
+	// does the identical thing, so `before` on this path is always just the
+	// target mode, never the port's true prior state. Preserved verbatim.
+	before := states[port]
+	csrf, err := requireCSRF(html)
+	if err != nil {
+		return err
+	}
+	if _, err := w.session.PostForm(ctx, path, MembershipForm(vlanID, hidden, csrf)); err != nil {
+		return err
+	}
+	verifyHTML, err := w.session.PostForm(ctx, path, map[string]string{"VLAN_ID": strconv.Itoa(vlanID)})
+	if err != nil {
+		return err
+	}
+	after, err := ParseMembership(verifyHTML, w.model.PortCount)
+	if err != nil {
+		return err
+	}
+	if after[port] != mode {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("VLAN %d port %d did not read back as %s", vlanID, port, mode),
+			Before: before,
+			After:  after[port],
+		}
+	}
+	return nil
+}
+
+// setFastpathMembership sets one port's participation in vlan on the
+// managed FASTPATH web UI, mirroring Python
+// HttpWriter._set_fastpath_membership (http_write.py:693-736). Verification
+// reads the page's CONFIGURED view (hiddenMem), never its CURRENT
+// (hiddenTagged/hiddenUnTagged) egress lists -- see dossier D-HTTP-F §1.3/
+// §2.1: those legitimately disagree for a port that is configured into a
+// VLAN but currently link-down.
+func (w *Writer) setFastpathMembership(ctx context.Context, vlan, port int, mode model.VlanMode) error {
+	getPath, postPath, err := fastpathMembershipPaths(w.spec, w.model.Key)
+	if err != nil {
+		return err
+	}
+	before, err := w.readFastpathMembership(ctx, vlan, getPath, postPath)
+	if err != nil {
+		return err
+	}
+	hidden, err := FastpathHiddenMemWith(before, port, mode)
+	if err != nil {
+		return err
+	}
+	applied, err := w.session.PostForm(ctx, postPath, FastpathMembershipForm(before, vlan, &hidden, true))
+	if err != nil {
+		return err
+	}
+	if err := raiseOnFastpathErrFlag(applied, fmt.Sprintf("VLAN %d port %d -> %s", vlan, port, mode)); err != nil {
+		return err
+	}
+	after, err := w.readFastpathMembership(ctx, vlan, getPath, postPath)
+	if err != nil {
+		return err
+	}
+	if got, ok := after.Configured[port]; !ok || got != mode {
+		var gotAny, beforeAny any
+		if ok {
+			gotAny = got
+		}
+		if v, ok2 := before.Configured[port]; ok2 {
+			beforeAny = v
+		}
+		return &model.WriteVerificationError{
+			Msg: fmt.Sprintf("VLAN %d port %d did not read back as %s on %s (hiddenMem slot %d)",
+				vlan, port, mode, postPath, before.PortSlots[port]),
+			Before: beforeAny,
+			After:  gotAny,
+		}
+	}
+	return nil
+}
+
+// readFastpathMembership mirrors Python
+// HttpWriter._read_fastpath_membership (http_write.py:738-749) -- the same
+// GET-then-conditional-select-POST flow as Reader.ReadFastpathMembership,
+// duplicated here (as the Python source duplicates it) so the Writer needs
+// no Reader dependency and can reuse the getPath/postPath it already
+// resolved.
+func (w *Writer) readFastpathMembership(ctx context.Context, vlan int, getPath, postPath string) (FastpathMembership, error) {
+	html, err := w.session.GetPage(ctx, getPath)
+	if err != nil {
+		return FastpathMembership{}, err
+	}
+	page, err := ParseFastpathMembership(html)
+	if err != nil {
+		return FastpathMembership{}, err
+	}
+	if page.VlanID != nil && *page.VlanID == vlan {
+		return page, nil
+	}
+	body := FastpathMembershipForm(page, vlan, nil, false)
+	respHTML, err := w.session.PostForm(ctx, postPath, body)
+	if err != nil {
+		return FastpathMembership{}, err
+	}
+	page2, err := ParseFastpathMembership(respHTML)
+	if err != nil {
+		return FastpathMembership{}, err
+	}
+	if err := requireFastpathMembershipFor(page2, vlan, postPath); err != nil {
+		return FastpathMembership{}, err
+	}
+	return page2, nil
+}
+
+// CreateVlan creates vlanID, mirroring Python HttpWriter.create_vlan
+// (http_write.py:751-762). name is accepted-but-unused: the web UI's
+// 8021qCf.cgi form has no VLAN-name field (GROUNDED).
+func (w *Writer) CreateVlan(ctx context.Context, vlanID int, name string) error {
+	_ = name
+	path, err := requirePath(w.model.Key, w.spec.VlanConfigPath, "VLAN config")
+	if err != nil {
+		return err
+	}
+	page, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	csrf, err := requireCSRF(page)
+	if err != nil {
+		return err
+	}
+	if _, err := w.session.PostForm(ctx, path, VlanAddForm(vlanID, csrf)); err != nil {
+		return err
+	}
+	afterHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	after, err := ParseVLANIDs(afterHTML)
+	if err != nil {
+		return err
+	}
+	if !intSliceContains(after, vlanID) {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("VLAN %d was not created", vlanID),
+			Before: nil,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// DeleteVlan deletes vlanID, mirroring Python HttpWriter.delete_vlan
+// (http_write.py:764-781). force is accepted-but-unused: VLAN delete
+// disruptiveness is guarded per-member elsewhere, matching the BackendWriter
+// signature (see write_dispatch.go).
+func (w *Writer) DeleteVlan(ctx context.Context, vlanID int, force bool) error {
+	_ = force
+	path, err := requirePath(w.model.Key, w.spec.VlanConfigPath, "VLAN config")
+	if err != nil {
+		return err
+	}
+	page, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	idx, ok := vlanCheckboxIndex(page, vlanID)
+	if !ok {
+		return errUnexpectedPage("VLAN %d not present to delete", vlanID)
+	}
+	csrf, err := requireCSRF(page)
+	if err != nil {
+		return err
+	}
+	if _, err := w.session.PostForm(ctx, path, VlanDeleteForm(vlanID, idx, csrf)); err != nil {
+		return err
+	}
+	afterHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	after, err := ParseVLANIDs(afterHTML)
+	if err != nil {
+		return err
+	}
+	if intSliceContains(after, vlanID) {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("VLAN %d was not deleted", vlanID),
+			Before: nil,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+func intSliceContains(xs []int, v int) bool {
+	for _, x := range xs {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+// Reboot reboots the switch, mirroring Python HttpWriter.reboot
+// (http_write.py:783-795). Capability is resolved BEFORE the force gate, so
+// a model with no reboot endpoint raises the accurate
+// UnsupportedCapabilityError rather than ProtectedPortError. Not part of
+// the root package's BackendWriter interface (which has no Reboot op yet);
+// exported here for source-fidelity completeness and for a future facade
+// task to wire up.
+func (w *Writer) Reboot(ctx context.Context, force bool) error {
+	rebootPath, err := requirePath(w.model.Key, w.spec.RebootPath, "web reboot")
+	if err != nil {
+		return err
+	}
+	if !force {
+		return fmt.Errorf("reboot is disruptive; pass force=true: %w", model.ErrProtectedPort)
+	}
+	landing := w.spec.VlanConfigPath
+	if landing == "" {
+		landing = w.spec.DashboardPath
+	}
+	landingPath, err := requirePath(w.model.Key, landing, "web reboot")
+	if err != nil {
+		return err
+	}
+	page, err := w.session.GetPage(ctx, landingPath)
+	if err != nil {
+		return err
+	}
+	csrf, err := requireCSRF(page)
+	if err != nil {
+		return err
+	}
+	_, err = w.session.PostForm(ctx, rebootPath, RebootForm(csrf))
+	return err
+}
+
+// SetPortEnabled sets port's admin mode, mirroring Python
+// HttpWriter.set_port_enabled (http_write.py:797-844). GS110EMX routes to
+// setGS110EMXPortEnabled (a genuinely different mechanism, its own
+// port_settings.html Physical Mode POST); every other managed model drives
+// the shared FASTPATH XUI grid (portsConfiguration.html). Plus-class models
+// (gs305ep/gs105pe) have port_config_path == "" at this pin and so raise
+// via requirePath -- no Plus-class implementation exists yet, honestly.
+func (w *Writer) SetPortEnabled(ctx context.Context, port int, enabled, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	path, err := requirePath(w.model.Key, w.spec.PortConfigPath, "the port-configuration page")
+	if err != nil {
+		return err
+	}
+	if w.spec.HTMLDialect == HTMLDialectGS110EMX {
+		return w.setGS110EMXPortEnabled(ctx, path, port, enabled)
+	}
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	page, err := ParseXUIListPage(html, path)
+	if err != nil {
+		return err
+	}
+	row, err := findXUIRow(page, port, xuiPortIfname, fmt.Sprintf("%q port configuration", w.model.Key))
+	if err != nil {
+		return err
+	}
+	before, _ := row.Field(xuiPortAdmin)
+	body, err := XuiRowApplyForm(page, row, map[string]string{xuiPortAdmin: xuiEnabled(enabled)}, "v_2_1_2", nil)
+	if err != nil {
+		return err
+	}
+	applied, err := w.session.PostForm(ctx, page.Action, body)
+	if err != nil {
+		return err
+	}
+	if err := raiseOnFastpathErrFlag(applied, fmt.Sprintf("port %d admin mode -> %v", port, enabled)); err != nil {
+		return err
+	}
+	afterHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	afterPage, err := ParseXUIListPage(afterHTML, path)
+	if err != nil {
+		return err
+	}
+	afterRow, err := findXUIRow(afterPage, port, xuiPortIfname, fmt.Sprintf("%q port configuration", w.model.Key))
+	if err != nil {
+		return err
+	}
+	after, _ := afterRow.Field(xuiPortAdmin)
+	if after != xuiEnabled(enabled) {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("port %d admin mode did not read back as %q on %s", port, xuiEnabled(enabled), path),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// setGS110EMXPortEnabled sets port admin mode on the GS110EMX's
+// port_settings.html, mirroring Python
+// HttpWriter._set_gs110emx_port_enabled (http_write.py:846-882). A
+// genuinely different mechanism from the FASTPATH grid: this page has no
+// admin column at all -- disabling means POSTing Physical Mode as Disable.
+// flowControlMode is ECHOED from the port's own current row, never
+// defaulted (see forms.go's GS110EMXPortAdminForm doc comment).
+func (w *Writer) setGS110EMXPortEnabled(ctx context.Context, path string, port int, enabled bool) error {
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	rows, err := ParseGS110EMXPortFormFields(html)
+	if err != nil {
+		return err
+	}
+	fields, ok := rows[port]
+	if !ok {
+		return fmt.Errorf("%q port configuration: port %d is not on this page (it renders %v): %w",
+			w.model.Key, port, sortedRowPorts(rows), model.ErrUnsupportedCapability)
+	}
+	beforeStatus, err := ParseGS110EMXPortStatus(html)
+	if err != nil {
+		return err
+	}
+	was := adminEnabledFor(beforeStatus, port)
+	flow := fields["FLOW_CONTROL_MODE"]
+	if flow == "" {
+		flow = "0"
+	}
+	if _, err := w.session.PostForm(ctx, path, GS110EMXPortAdminForm(port, enabled, flow)); err != nil {
+		return err
+	}
+	afterHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	afterStatus, err := ParseGS110EMXPortStatus(afterHTML)
+	if err != nil {
+		return err
+	}
+	got := adminEnabledFor(afterStatus, port)
+	if got == nil || *got != enabled {
+		var gotAny any
+		if got != nil {
+			gotAny = *got
+		}
+		var wasAny any
+		if was != nil {
+			wasAny = *was
+		}
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("port %d admin mode did not read back as %v on %s", port, enabled, path),
+			Before: wasAny,
+			After:  gotAny,
+		}
+	}
+	return nil
+}
+
+// adminEnabledFor returns statuses[i].AdminEnabled for the row whose Port
+// equals port, or nil if absent -- mirrors Python's
+// `next((p.admin_enabled for p in status if p.port == port), None)`.
+func adminEnabledFor(statuses []model.PortStatus, port int) *bool {
+	for _, s := range statuses {
+		if s.Port == port {
+			v := s.AdminEnabled
+			return &v
+		}
+	}
+	return nil
+}
+
+// SetMgmtIP sets the switch's static management address through its web
+// UI, mirroring Python HttpWriter.set_mgmt_ip (http_write.py:884-940).
+//
+// The APPLY on this path is UNVERIFIED against live hardware, and
+// deliberately so -- applying it to a real reachable switch would move the
+// address the session is using and risk stranding the device. What IS
+// exercised here: the page/field resolution, the shared XUI apply machinery
+// (submit_flag, err_flag refusal check) SetPortEnabled/SetVlanMembership
+// already prove live, and this method's own verify-after-write readback
+// against the mock. See dossier D-HTTP-F §2.7 for the full caveat -- do not
+// treat this op as "live-verified" in the same sense as those two.
+func (w *Writer) SetMgmtIP(ctx context.Context, address, netmask, gateway string, force bool) error {
+	path, fields, err := requireXUIMgmtFields(w.spec)
+	if err != nil {
+		return err
+	}
+	if !force {
+		return fmt.Errorf("set_mgmt_ip moves the address this session is using and can leave the switch unreachable; pass force=true: %w", model.ErrProtectedPort)
+	}
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	page, err := ParseXUIFormPage(html, path)
+	if err != nil {
+		return err
+	}
+	body, err := XuiFormApplyForm(page, mgmtIPChanges(fields, address, netmask, gateway), fields.ApplyButton)
+	if err != nil {
+		return err
+	}
+	applied, err := w.session.PostForm(ctx, page.Action, body)
+	if err != nil {
+		return err
+	}
+	if err := raiseOnFastpathErrFlag(applied, fmt.Sprintf("management IP -> %s/%s", address, netmask)); err != nil {
+		return err
+	}
+	afterHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	afterPage, err := ParseXUIFormPage(afterHTML, path)
+	if err != nil {
+		return err
+	}
+	gotAddr, gotMask, gotGw := afterPage.Fields[fields.Address], afterPage.Fields[fields.Netmask], afterPage.Fields[fields.Gateway]
+	if gotAddr != address || gotMask != netmask || gotGw != gateway {
+		return &model.WriteVerificationError{
+			Msg: fmt.Sprintf("management IP did not read back as %s/%s via %s on %s", address, netmask, gateway, path),
+			Before: [3]string{
+				page.Fields[fields.Address], page.Fields[fields.Netmask], page.Fields[fields.Gateway],
+			},
+			After: [3]string{gotAddr, gotMask, gotGw},
+		}
+	}
+	return nil
+}
