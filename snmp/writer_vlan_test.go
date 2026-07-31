@@ -64,18 +64,27 @@ func (c *scriptedWriteClient) SetMany(_ context.Context, vbs []SetVarbind) error
 
 // --- fixture builders --------------------------------------------------
 
-// vlanTables builds a name+egress+untagged table set for one VLAN,
-// mirroring test_snmp_write.py's _vlan_tables().
+// vlanTables builds a name+egress+untagged table set for one VLAN, with the
+// device's egress/untagged octets at the default 8-byte width, mirroring
+// test_snmp_write.py's _vlan_tables().
 func vlanTables(vid int, member, untagged []int) map[string][]Row {
+	return vlanTablesWidth(vid, member, untagged, 8)
+}
+
+// vlanTablesWidth is vlanTables with an explicit device bitmap width, for
+// tests pinning RMW width preservation (D-REC Topic B) against a real
+// measured device width like the GSM7252PS's 79 bytes -- far wider than
+// this table's 52-port model formula width of 8.
+func vlanTablesWidth(vid int, member, untagged []int, widthBytes int) map[string][]Row {
 	return map[string][]Row{
 		Dot1qVlanStaticName: {
 			NewStrRow(fmt.Sprintf("%s.%d", Dot1qVlanStaticName, vid), "iot"),
 		},
 		Dot1qVlanStaticEgress: {
-			NewBytesRow(fmt.Sprintf("%s.%d", Dot1qVlanStaticEgress, vid), EncodePortBitmap(member, 8)),
+			NewBytesRow(fmt.Sprintf("%s.%d", Dot1qVlanStaticEgress, vid), EncodePortBitmap(member, widthBytes)),
 		},
 		Dot1qVlanStaticUntagged: {
-			NewBytesRow(fmt.Sprintf("%s.%d", Dot1qVlanStaticUntagged, vid), EncodePortBitmap(untagged, 8)),
+			NewBytesRow(fmt.Sprintf("%s.%d", Dot1qVlanStaticUntagged, vid), EncodePortBitmap(untagged, widthBytes)),
 		},
 	}
 }
@@ -325,6 +334,55 @@ func TestSetVlanMembershipBitmapsAre8BytesFor52PortModel(t *testing.T) {
 				t.Errorf("%s length = %d, want 8", sv.OID, got)
 			}
 		}
+	}
+}
+
+// TestSetVlanMembershipRMWPreservesDeviceWidthOf79Bytes proves the D-REC
+// Topic B / reconciliation issue #3 fix: when the device reports its
+// egress/untagged PortLists at a real measured width (79 bytes, as
+// GSM7252PS actually does -- far wider than this 52-port model's formula
+// width of 8), SetVlanMembership's read-modify-write must SET back bitmaps
+// at that SAME 79-byte width, not re-derive a narrower one via
+// EncodePortBitmap(..., 8)/VlanBitmapWidth. A prior version of this method
+// re-encoded the already-DECODED `before` port lists at vlanEncodeWidth (8),
+// silently narrowing the SET below the device's real fixed PortList width --
+// exactly what a stricter Q-BRIDGE agent rejects outright.
+func TestSetVlanMembershipRMWPreservesDeviceWidthOf79Bytes(t *testing.T) {
+	client := newScriptedWriteClient(vlanTablesWidth(90, []int{1, 2, 10}, []int{1, 2}, 79), applyVlanBitmaps)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetVlanMembership(context.Background(), 90, 25, model.VlanUntagged, true); err != nil {
+		t.Fatalf("SetVlanMembership: %v", err)
+	}
+	egressOID := fmt.Sprintf("%s.90", Dot1qVlanStaticEgress)
+	untaggedOID := fmt.Sprintf("%s.90", Dot1qVlanStaticUntagged)
+	var egressSV, untaggedSV *SetVarbind
+	for i := range client.sets {
+		switch client.sets[i].OID {
+		case egressOID:
+			egressSV = &client.sets[i]
+		case untaggedOID:
+			untaggedSV = &client.sets[i]
+		}
+	}
+	if egressSV == nil || untaggedSV == nil {
+		t.Fatalf("sets = %+v, want both egress and untagged varbinds", client.sets)
+	}
+	if got := len(egressSV.Value.([]byte)); got != 79 {
+		t.Errorf("egress SET width = %d, want 79 (the device's own width preserved)", got)
+	}
+	if got := len(untaggedSV.Value.([]byte)); got != 79 {
+		t.Errorf("untagged SET width = %d, want 79", got)
+	}
+	wantEgress := []int{1, 2, 10, 25}
+	if got := DecodePortBitmap(egressSV.Value.([]byte)); !intSlicesEqual(got, wantEgress) {
+		t.Errorf("egress decoded = %v, want %v (port 25 added, others kept)", got, wantEgress)
+	}
+	wantUntagged := []int{1, 2, 25}
+	if got := DecodePortBitmap(untaggedSV.Value.([]byte)); !intSlicesEqual(got, wantUntagged) {
+		t.Errorf("untagged decoded = %v, want %v (25 untagged, others kept)", got, wantUntagged)
 	}
 }
 
