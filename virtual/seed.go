@@ -293,6 +293,10 @@ func SeedGSM7252PS() *State {
 
 	s.SysObjectID = "1.3.6.1.4.1.4526.10.100.14"
 
+	// Real fixed Q-BRIDGE PortList width, measured LIVE (read-only) on this
+	// switch @10.1.5.22: dot1qVlanStaticEgressPorts is 79 bytes wide.
+	s.VLANPortListWidth = model.Ptr(79)
+
 	return s
 }
 
@@ -503,6 +507,13 @@ func SeedGSM7228PS() *State {
 
 	s.SysObjectID = "1.3.6.1.4.1.4526.100.10.19"
 
+	// Real fixed Q-BRIDGE PortList width, measured LIVE (read-only) on this
+	// switch @10.1.5.11: dot1qVlanStaticEgressPorts is 45 bytes wide -- a
+	// third distinct width alongside the GSM7252PS's 79 and the M4300s'
+	// 131, and still wider than its 52 physical ports need (LAG
+	// pseudo-ports).
+	s.VLANPortListWidth = model.Ptr(45)
+
 	return s
 }
 
@@ -627,6 +638,10 @@ func SeedM4300_24X() *State {
 	s.SysDescr = "NETGEAR M4300-24X (XSM4324CS) Managed Switch"
 
 	s.SysObjectID = "1.3.6.1.4.1.4526.10.100.24"
+
+	// Real fixed Q-BRIDGE PortList width, measured LIVE (read-only) on the
+	// M4300 @10.1.5.13: dot1qVlanStaticEgressPorts is 131 bytes wide.
+	s.VLANPortListWidth = model.Ptr(131)
 
 	return s
 }
@@ -754,6 +769,10 @@ func SeedM4300_16X() *State {
 	s.SysDescr = "NETGEAR M4300-16X (XSM4316) Managed Switch"
 
 	s.SysObjectID = "1.3.6.1.4.1.4526.10.100.16"
+
+	// Real fixed Q-BRIDGE PortList width, measured LIVE (read-only) on this
+	// switch @10.1.5.20: dot1qVlanStaticEgressPorts is 131 bytes wide.
+	s.VLANPortListWidth = model.Ptr(131)
 
 	return s
 }

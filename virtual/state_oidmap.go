@@ -65,7 +65,16 @@ func resolveVendorOids(m *model.SwitchModel) *snmp.VendorOids {
 func (s *State) OIDMap() map[string]OIDEntry {
 	m := s.mustModel()
 	v := resolveVendorOids(m)
+	// Prefer the device's REAL fixed PortList width (live-measured, seeded
+	// on State.VLANPortListWidth) so the mock is an INDEPENDENT source of
+	// truth for the wire width -- not a re-derivation of the same
+	// snmp.VlanBitmapWidth formula the writer uses (D-REC Topic B). Falls
+	// back to the physical-port-only formula for a model whose real width
+	// hasn't been measured.
 	vlanWidth := snmp.VlanBitmapWidth(m.PortCount)
+	if s.VLANPortListWidth != nil {
+		vlanWidth = *s.VLANPortListWidth
+	}
 	out := make(map[string]OIDEntry)
 
 	// dot1dBaseBridgeAddress.0: reuses NsdpMac -- on real hardware the SNMP
