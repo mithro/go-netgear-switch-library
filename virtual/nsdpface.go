@@ -18,6 +18,7 @@ package virtual
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
@@ -37,6 +38,33 @@ type NsdpFace struct {
 	mu   sync.Mutex
 	conn *net.UDPConn
 	wg   sync.WaitGroup
+
+	// saltMu guards the v2 auth challenge: saltCounter drives a deterministic
+	// rotation (reproducible, no wall-clock/RNG, yet "rotates on every read"
+	// like real hardware) and salt holds the last one issued on an
+	// AUTH_V2_SALT read, against which the next v2 write token is validated.
+	saltMu      sync.Mutex
+	salt        [4]byte
+	saltCounter uint32
+}
+
+// nextSalt issues a fresh 4-byte AUTH_V2_SALT and stores it for the next v2
+// write's token validation. Deterministic (Knuth multiplicative hash of a
+// counter), so the mock is reproducible.
+func (f *NsdpFace) nextSalt() [4]byte {
+	f.saltMu.Lock()
+	defer f.saltMu.Unlock()
+	f.saltCounter++
+	binary.BigEndian.PutUint32(f.salt[:], f.saltCounter*2654435761)
+	return f.salt
+}
+
+// currentSalt returns the last salt nextSalt issued -- the challenge the next
+// v2 write token must fold against.
+func (f *NsdpFace) currentSalt() [4]byte {
+	f.saltMu.Lock()
+	defer f.saltMu.Unlock()
+	return f.salt
 }
 
 // NewNsdpFace builds an NsdpFace serving state, bound to host (typically
@@ -163,7 +191,28 @@ func (f *NsdpFace) readResponse(req nsdp.Packet) nsdp.Packet {
 		ServerMAC: append([]byte(nil), f.state.NsdpMac[:]...),
 		Sequence:  req.Sequence,
 	}
+	// AUTH_V2_PASSWORD (0x001A) is write-only: a READ naming it returns error
+	// 3 (read-only), live-observed on a GS110EMX (auth.py:38).
+	if tags[nsdp.TagAuthV2Password] {
+		resp.Result = nsdp.ResultReadOnly
+		resp.ErrorAttr = uint16(nsdp.TagAuthV2Password)
+		return resp
+	}
 	resp.TLVs = f.state.NsdpTlvs(tags)
+	// AUTH_V2_ENCPASS (0x0014) advertises the write-auth scheme; AUTH_V2_SALT
+	// (0x0017) is a fresh rotating challenge -- neither is a NsdpTlvs state
+	// projection, so answer them here.
+	if tags[nsdp.TagAuthV2Encpass] {
+		scheme := byte(nsdp.EncpassV1)
+		if f.state.NsdpAuthV2 {
+			scheme = byte(nsdp.EncpassV2)
+		}
+		resp.TLVs = append(resp.TLVs, nsdp.TLVEntry{Tag: nsdp.TagAuthV2Encpass, Value: []byte{0x00, 0x00, 0x00, scheme}})
+	}
+	if tags[nsdp.TagAuthV2Salt] {
+		salt := f.nextSalt()
+		resp.TLVs = append(resp.TLVs, nsdp.TLVEntry{Tag: nsdp.TagAuthV2Salt, Value: append([]byte(nil), salt[:]...)})
+	}
 	return resp
 }
 
@@ -183,11 +232,46 @@ func (f *NsdpFace) readResponse(req nsdp.Packet) nsdp.Packet {
 // this repo is plain ASCII, so this path is not expected to trigger in
 // practice.
 func (f *NsdpFace) writeResponse(req nsdp.Packet) (*nsdp.Packet, error) {
+	resp := nsdp.Packet{
+		Op:        nsdp.OpWriteResponse,
+		ClientMAC: req.ClientMAC,
+		ServerMAC: append([]byte(nil), f.state.NsdpMac[:]...),
+		Sequence:  req.Sequence,
+	}
+
+	// v2 SKUs: the write MUST lead with a valid AUTH_V2_PASSWORD token folded
+	// against the salt this fake last issued (CurrentNsdpSalt) and its own MAC.
+	// A v1 PASSWORD offered here is error 13 blamed on PASSWORD (the
+	// "v1 to v2-only firmware" wiring case); a wrong token is error 13 blamed
+	// on AUTH_V2_PASSWORD; ordering it non-first is not accepted.
+	if f.state.NsdpAuthV2 {
+		if len(req.TLVs) == 0 || req.TLVs[0].Tag != nsdp.TagAuthV2Password {
+			resp.Result = nsdp.ResultBadPasswordV2
+			resp.ErrorAttr = uint16(nsdp.TagPassword)
+			return &resp, nil
+		}
+		salt := f.currentSalt()
+		expected, err := nsdp.AuthV2Password(f.state.NsdpPassword, f.state.NsdpMac[:], salt[:])
+		if err != nil {
+			return nil, err
+		}
+		if !bytes.Equal(req.TLVs[0].Value, expected) {
+			resp.Result = nsdp.ResultBadPasswordV2
+			resp.ErrorAttr = uint16(nsdp.TagAuthV2Password)
+			return &resp, nil
+		}
+		for _, t := range req.TLVs[1:] {
+			f.state.ApplyNsdpWrite(t.Tag, t.Value)
+		}
+		resp.Result = nsdp.ResultSuccess
+		return &resp, nil
+	}
+
+	// v1 SKUs: validate the XOR PASSWORD TLV.
 	expected, err := nsdp.EncodePasswordV1(f.state.NsdpPassword)
 	if err != nil {
 		return nil, err
 	}
-
 	passwordOK := false
 	for _, t := range req.TLVs {
 		if t.Tag == nsdp.TagPassword && bytes.Equal(t.Value, expected) {
@@ -195,18 +279,10 @@ func (f *NsdpFace) writeResponse(req nsdp.Packet) (*nsdp.Packet, error) {
 			break
 		}
 	}
-
-	resp := nsdp.Packet{
-		Op:        nsdp.OpWriteResponse,
-		ClientMAC: req.ClientMAC,
-		ServerMAC: append([]byte(nil), f.state.NsdpMac[:]...),
-		Sequence:  req.Sequence,
-	}
 	if !passwordOK {
 		resp.Result = nsdp.ResultBadPassword
 		return &resp, nil
 	}
-
 	for _, t := range req.TLVs {
 		if t.Tag != nsdp.TagPassword {
 			f.state.ApplyNsdpWrite(t.Tag, t.Value)

@@ -273,6 +273,13 @@ type State struct {
 	Hostname     string
 	NsdpPassword string
 	NsdpMac      [6]byte
+	// NsdpAuthV2, when true, makes a fake serving this state require NSDP v2
+	// salted write auth (AUTH_V2_ENCPASS reads 0x10; AUTH_V2_SALT is a rotating
+	// readable challenge; AUTH_V2_PASSWORD is a write-only token) instead of v1
+	// XOR -- LIVE-MEASURED on a GS110EMX (fw 1.0.2.8). The rotating salt itself
+	// is transient per-connection challenge state, so it lives on NsdpFace, not
+	// here (Snapshot copies logical switch state, not a serving session).
+	NsdpAuthV2 bool
 
 	SysDescr          string
 	SysObjectID       string
@@ -404,6 +411,7 @@ func (s *State) Snapshot() *State {
 		Hostname:                  s.Hostname,
 		NsdpPassword:              s.NsdpPassword,
 		NsdpMac:                   s.NsdpMac,
+		NsdpAuthV2:                s.NsdpAuthV2,
 		SysDescr:                  s.SysDescr,
 		SysObjectID:               s.SysObjectID,
 		Dot1dBaseMacASCII:         s.Dot1dBaseMacASCII,
