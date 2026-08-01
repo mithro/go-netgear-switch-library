@@ -16,6 +16,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/mithro/go-netgear-switch-library/fastpath"
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/nsdp"
 	"github.com/mithro/go-netgear-switch-library/snmp"
@@ -160,6 +161,43 @@ type Switch struct {
 	// Closed by Close().
 	httpSessionCache *lazyHTTPSession
 
+	// cliClient, if non-nil, is used AS-IS by every FASTPATH-CLI consumer
+	// (backend_cli.go's buildCLIReader/buildCLIWriter) instead of a default
+	// SSH/telnet session this Switch would otherwise build+cache. Mirrors
+	// httpClient/nsdpClient; ONE injected fastpath.Session spans CLI reads
+	// AND writes (a CLI session is a single interactive shell), so no split
+	// read/write field is drawn -- exactly like NSDP/HTTP.
+	cliClient fastpath.Session
+
+	// cliPassword resolves the FASTPATH-CLI login password lazily, INDEPENDENT
+	// of the other password cells (mirroring nsdpPassword/httpPassword's own
+	// independence -- see nsdpPassword's doc comment). Consumed by
+	// backend_cli.go's default-session builder.
+	cliPassword *resolveOnce
+
+	// cliUsername is the FASTPATH-CLI login username (default "admin"). The
+	// per-model CliModelSpec carries no username (the device prompt is the
+	// same regardless), so it lives here, set via WithCLIUsername.
+	cliUsername string
+
+	// sshPort / telnetPort override the CLI transport's TCP port when set
+	// (nil = SSH's default 22 / the model's CliModelSpec.TelnetPort). Set via
+	// WithSSHPort/WithTelnetPort -- needed to dial a fake's ephemeral loopback
+	// listener (the virtual SSH/telnet faces, Task 12) in tests and the
+	// cross-language suite.
+	sshPort    *int
+	telnetPort *int
+
+	// cliSessionMu guards cliSessionCache below.
+	cliSessionMu sync.Mutex
+	// cliSessionCache holds the lazily-built DEFAULT fastpath.Session per
+	// transport kind (ssh/telnet) this Switch built for itself -- keyed by
+	// kind so an explicit per-op WithReadBackend(SSH)+Write-over-telnet never
+	// reuses the wrong transport's shell. Each entry is shared by the reader
+	// AND writer for that kind (one login, one interactive shell), mirroring
+	// Python's SyncSwitch._built_cli_client. Closed by Close().
+	cliSessionCache map[cliTransportKind]*lazyCLISession
+
 	// protectedPorts is stored sorted ascending with duplicates removed
 	// (this codebase's canonical form for Python's frozenset[int]; see
 	// config.go's protectedPorts helper for the same convention).
@@ -291,6 +329,56 @@ func WithHTTPClient(session webui.Session) SwitchOption {
 	return func(sw *Switch) { sw.httpClient = session }
 }
 
+// WithCLIPassword sets the FASTPATH-CLI login password literally (a plain
+// string), mirroring WithHTTPPassword/WithNSDPPassword. INDEPENDENT of the
+// other password cells -- see Switch.cliPassword's doc comment.
+func WithCLIPassword(s string) SwitchOption {
+	return func(sw *Switch) {
+		sw.cliPassword = newResolveOnce(func() (*string, error) { return &s, nil })
+	}
+}
+
+// WithCLIPasswordResolver stashes r as the FASTPATH-CLI login-password
+// resolver, invoked at most once, lazily, on first CLI session use. Passing
+// this option never causes r to run during New/FromConfig.
+func WithCLIPasswordResolver(r func() (*string, error)) SwitchOption {
+	return func(sw *Switch) { sw.cliPassword = newResolveOnce(r) }
+}
+
+// WithCLIUsername overrides the FASTPATH-CLI login username (default
+// "admin"). WithSSHPassword is an alias for WithCLIPassword kept for callers
+// who think in transport terms; there is only ONE CLI credential pair.
+func WithCLIUsername(username string) SwitchOption {
+	return func(sw *Switch) { sw.cliUsername = username }
+}
+
+// WithSSHPassword is an alias for WithCLIPassword (SSH and telnet share the
+// one FASTPATH-CLI credential pair), for callers who think in transport
+// terms.
+func WithSSHPassword(s string) SwitchOption { return WithCLIPassword(s) }
+
+// WithSSHPort overrides the TCP port the SSH CLI transport dials (default
+// 22) -- needed to reach a virtual SSH face's ephemeral loopback port.
+func WithSSHPort(port int) SwitchOption {
+	return func(sw *Switch) { p := port; sw.sshPort = &p }
+}
+
+// WithTelnetPort overrides the TCP port the telnet CLI transport dials
+// (default the model's CliModelSpec.TelnetPort) -- needed to reach a virtual
+// telnet face's ephemeral loopback port.
+func WithTelnetPort(port int) SwitchOption {
+	return func(sw *Switch) { p := port; sw.telnetPort = &p }
+}
+
+// WithCLIClient injects an already-built fastpath.Session, used as-is by the
+// CLI reader AND writer instead of a default SSH/telnet session this Switch
+// would otherwise build+cache. Primarily for tests. Mirrors WithHTTPClient.
+// An injected client is never Closed by Switch.Close (this Switch does not
+// own it).
+func WithCLIClient(session fastpath.Session) SwitchOption {
+	return func(sw *Switch) { sw.cliClient = session }
+}
+
 // WithBackend pins EVERY op on this Switch to backend by default, unless a
 // per-call ReadOption/Write.Backend override says otherwise (which still
 // wins). Absent this option, a Switch has no pinned default and each op
@@ -335,6 +423,9 @@ func New(m *model.SwitchModel, host string, opts ...SwitchOption) (*Switch, erro
 		snmpWriteCommunity: newResolveOnce(nil),
 		nsdpPassword:       newResolveOnce(nil),
 		httpPassword:       newResolveOnce(nil),
+		cliPassword:        newResolveOnce(nil),
+		cliUsername:        "admin",
+		cliSessionCache:    make(map[cliTransportKind]*lazyCLISession),
 		protectedPorts:     []int{},
 		readerCache:        make(map[model.Backend]BackendReader),
 		writerCache:        make(map[model.Backend]BackendWriter),
@@ -413,11 +504,27 @@ func (s *Switch) Close() error {
 	cache := s.httpSessionCache
 	s.httpSessionCache = nil
 	s.httpSessionMu.Unlock()
-	if cache == nil {
-		return nil
+	if cache != nil {
+		if closable, ok := cache.builtSession().(interface{ Close() }); ok {
+			closable.Close()
+		}
 	}
-	if closable, ok := cache.builtSession().(interface{ Close() }); ok {
-		closable.Close()
+
+	// Release every FASTPATH-CLI shell this Switch built for itself (one per
+	// transport kind). Unlike an HTTP session (a cookie jar with nothing to
+	// close on the wire), a CLI session is a live SSH/telnet connection whose
+	// socket MUST be closed -- Python's own SyncSwitch.close() forgets to do
+	// this (a real socket leak, transport dossier §0/§4.3); the Go port
+	// deliberately does NOT reproduce that bug. An INJECTED cliClient
+	// (WithCLIClient) is never closed here -- this Switch does not own it.
+	s.cliSessionMu.Lock()
+	cliCaches := s.cliSessionCache
+	s.cliSessionCache = make(map[cliTransportKind]*lazyCLISession)
+	s.cliSessionMu.Unlock()
+	for _, c := range cliCaches {
+		if built := c.builtSession(); built != nil {
+			_ = built.Close()
+		}
 	}
 	return nil
 }
