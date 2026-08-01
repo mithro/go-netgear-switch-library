@@ -19,6 +19,7 @@
 // CliWriter._run/_in_mode) -- see that file's doc comment for the
 // counted-unwind hazard (protocol dossier risk #5) `inMode` guards against.
 // This file does not duplicate that logic, only drives it.
+
 package fastpath
 
 import (

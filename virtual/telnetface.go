@@ -271,7 +271,7 @@ func (f *TelnetFace) acceptLoop(ln net.Listener) {
 		go func() {
 			defer f.wg.Done()
 			defer f.trackConn(conn, false)
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			f.serveConn(conn)
 		}()
 	}

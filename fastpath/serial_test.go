@@ -123,7 +123,7 @@ type fakeSerialPort struct {
 	closed      bool
 }
 
-func (p *fakeSerialPort) Read(buf []byte) (int, error) {
+func (p *fakeSerialPort) Read(_ []byte) (int, error) {
 	if p.readErr != nil {
 		return 0, p.readErr
 	}
@@ -168,7 +168,7 @@ func TestSerialTransportReadAfterCloseIsBareIOEOF(t *testing.T) {
 
 	buf := make([]byte, 16)
 	n, err := tr.Read(buf)
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("Read() after Close() = (%d, %v), want (_, io.EOF) [bare, via == not just errors.Is]", n, err)
 	}
 }

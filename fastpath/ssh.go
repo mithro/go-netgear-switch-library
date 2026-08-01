@@ -56,6 +56,7 @@
 //     that same Go-idiom deviation and returns real errors from Close
 //     instead of swallowing them -- callers wanting Python's
 //     never-raise-on-teardown behavior can discard the error themselves.
+
 package fastpath
 
 import (
@@ -162,14 +163,14 @@ func NewSSHTransport(cfg SSHConfig) (Transport, error) {
 	}
 	sconn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("%w: SSH connect/auth failed: %w", ErrCliTransport, err)
 	}
 	client := ssh.NewClient(sconn, chans, reqs)
 
 	t, err := newSSHShellTransport(client, conn, timeout)
 	if err != nil {
-		client.Close() // also closes conn (Client.Close tears down the whole chain down to it).
+		_ = client.Close() // also closes conn (Client.Close tears down the whole chain down to it).
 		return nil, fmt.Errorf("%w: SSH connect/auth failed: %w", ErrCliTransport, err)
 	}
 	return t, nil
@@ -208,7 +209,7 @@ func newSSHShellTransport(client *ssh.Client, conn net.Conn, readTimeout time.Du
 	// arguments, so paramiko's own defaults apply: term "vt100", width
 	// 80, height 24.
 	if err := session.RequestPty("vt100", 24, 80, ssh.TerminalModes{}); err != nil {
-		session.Close()
+		_ = session.Close()
 		return nil, err
 	}
 	// StdinPipe/StdoutPipe expose the raw channel directly (must be
@@ -219,18 +220,18 @@ func newSSHShellTransport(client *ssh.Client, conn net.Conn, readTimeout time.Du
 	// a wrapped error, once the channel is drained and closed.
 	stdin, err := session.StdinPipe()
 	if err != nil {
-		session.Close()
+		_ = session.Close()
 		return nil, err
 	}
 	stdout, err := session.StdoutPipe()
 	if err != nil {
-		session.Close()
+		_ = session.Close()
 		return nil, err
 	}
 	// Shell mode, not exec (ssh.py:104) -- FASTPATH needs one live
 	// interactive PTY channel for multiple commands.
 	if err := session.Shell(); err != nil {
-		session.Close()
+		_ = session.Close()
 		return nil, err
 	}
 	return &sshTransport{

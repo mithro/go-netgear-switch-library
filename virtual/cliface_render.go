@@ -12,6 +12,7 @@
 // ever printed -- the CPU/LAG pseudo-interfaces in state never appear on a
 // `show port all` / `show vlan` page, exactly as on the real switch."
 // (cli_fastpath.py:1-8)
+
 package virtual
 
 import (

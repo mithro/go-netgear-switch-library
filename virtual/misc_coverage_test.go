@@ -15,8 +15,8 @@ import (
 
 func TestTelnetServerConn_WriteEscapesIAC(t *testing.T) {
 	c1, c2 := net.Pipe()
-	defer c1.Close()
-	defer c2.Close()
+	defer func() { _ = c1.Close() }()
+	defer func() { _ = c2.Close() }()
 	got := make(chan []byte, 1)
 	go func() {
 		buf, _ := io.ReadAll(c2)
@@ -30,7 +30,7 @@ func TestTelnetServerConn_WriteEscapesIAC(t *testing.T) {
 	if n != 3 {
 		t.Fatalf("Write returned n=%d, want 3", n)
 	}
-	c1.Close()
+	_ = c1.Close()
 	wire := <-got
 	want := []byte{telnetIAC, telnetIAC, 'a', telnetIAC, telnetIAC}
 	if string(wire) != string(want) {
@@ -75,7 +75,7 @@ func TestFromWireValue_AllTypes(t *testing.T) {
 func TestHTTPFaceApplyPoE(t *testing.T) {
 	st := SeedGSM7252PS()
 	// applyPoE addresses state.Poe[portID+1]; find a seeded PoE port.
-	var portZeroBased int = -1
+	portZeroBased := -1
 	for p := range st.Poe {
 		portZeroBased = p - 1
 		break

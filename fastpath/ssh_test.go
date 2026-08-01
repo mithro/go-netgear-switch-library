@@ -130,7 +130,7 @@ func newLegacySSHTestServerWithHandler(t *testing.T, username, password string, 
 		// firmware offers, so a successful round trip proves the
 		// client actually negotiated it rather than falling back to
 		// a modern default.
-		ServerConfigCallback: func(ctx gliderssh.Context) *gossh.ServerConfig {
+		ServerConfigCallback: func(_ gliderssh.Context) *gossh.ServerConfig {
 			return &gossh.ServerConfig{
 				Config: gossh.Config{KeyExchanges: []string{legacySSHKeyExchange}},
 			}
@@ -142,8 +142,8 @@ func newLegacySSHTestServerWithHandler(t *testing.T, username, password string, 
 	if err != nil {
 		t.Fatalf("net.Listen() error = %v", err)
 	}
-	go srv.Serve(ln)
-	t.Cleanup(func() { srv.Close() })
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
 
 	hostStr, portStr, err := net.SplitHostPort(ln.Addr().String())
 	if err != nil {
@@ -218,7 +218,7 @@ func TestSSHTransportRunRoundTripThroughShellDriver(t *testing.T) {
 
 	buf := make([]byte, 16)
 	n, err := transport.Read(buf)
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("Read() after Close() = (%d, %v), want (_, io.EOF) [bare, via errors.Is-independent ==]", n, err)
 	}
 }
@@ -270,7 +270,7 @@ func TestSSHTransportReadTimesOutInsteadOfHanging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSSHTransport() error = %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	driver := NewShellDriver(transport, ShellDriverConfig{})
 	ctx := context.Background()

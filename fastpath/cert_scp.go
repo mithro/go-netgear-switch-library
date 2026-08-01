@@ -22,6 +22,7 @@
 // missing Go feature, and this package deliberately does not fake an SCP
 // path for gsm7228ps; (2) Go has no equivalent upstream glue layer in this
 // slice to resolve the profile first the way a future Python caller would.
+
 package fastpath
 
 import (

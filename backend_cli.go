@@ -227,17 +227,17 @@ var _ BackendWriter = (*cliWriterAdapter)(nil)
 // CreateVlan delegates to the embedded Writer's CreateVLAN (name-casing
 // bridge only).
 func (a *cliWriterAdapter) CreateVlan(ctx context.Context, vlanID int, name string) error {
-	return a.Writer.CreateVLAN(ctx, vlanID, name)
+	return a.CreateVLAN(ctx, vlanID, name)
 }
 
 // DeleteVlan delegates to the embedded Writer's DeleteVLAN.
 func (a *cliWriterAdapter) DeleteVlan(ctx context.Context, vlanID int, force bool) error {
-	return a.Writer.DeleteVLAN(ctx, vlanID, force)
+	return a.DeleteVLAN(ctx, vlanID, force)
 }
 
 // SetVlanMembership delegates to the embedded Writer's SetVLANMembership.
 func (a *cliWriterAdapter) SetVlanMembership(ctx context.Context, vlanID, port int, mode model.VlanMode, force bool) error {
-	return a.Writer.SetVLANMembership(ctx, vlanID, port, mode, force)
+	return a.SetVLANMembership(ctx, vlanID, port, mode, force)
 }
 
 // lazyCLISession defers fastpath.Session construction -- the SSH/telnet dial,

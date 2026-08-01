@@ -55,6 +55,7 @@
 //     caused by our own Close() is passed through unmodified -- exercising
 //     that path needs real (or PTY) hardware, a documented gap for Task
 //     14/slice 11 (see this file's package doc note and the task report).
+
 package fastpath
 
 import (
@@ -221,13 +222,13 @@ func NewSerialTransport(cfg SerialConfig) (Transport, error) {
 		return nil, fmt.Errorf("%w: console open/login failed: %w", ErrCliTransport, err)
 	}
 	if err := port.SetReadTimeout(timeout); err != nil {
-		port.Close()
+		_ = port.Close()
 		return nil, fmt.Errorf("%w: console open/login failed: %w", ErrCliTransport, err)
 	}
 
 	t := newSerialTransport(port)
 	if err := serialLogin(t, cfg.Username, cfg.Password); err != nil {
-		port.Close()
+		_ = port.Close()
 		return nil, fmt.Errorf("%w: console open/login failed: %w", ErrCliTransport, err)
 	}
 	return t, nil

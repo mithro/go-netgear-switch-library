@@ -41,6 +41,7 @@
 // NOT a from-scratch design cross-checked only against the Go parsers.
 // Every column/header/title/spacing choice there mirrors that source
 // exactly; see that file's own doc comment for the mapping.
+
 package virtual
 
 import (

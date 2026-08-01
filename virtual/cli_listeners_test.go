@@ -110,10 +110,10 @@ func TestSSHFaceRoundTripThroughRealFastpathClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SSHFace.Start() error = %v", err)
 	}
-	defer face.Stop()
+	defer func() { _ = face.Stop() }()
 
 	driver := dialSSHDriver(t, port, "admin", "s3cret")
-	defer driver.Close()
+	defer func() { _ = driver.Close() }()
 
 	reader, err := fastpath.NewReader(driver, m)
 	if err != nil {
@@ -138,7 +138,7 @@ func TestSSHFaceWrongPasswordIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SSHFace.Start() error = %v", err)
 	}
-	defer face.Stop()
+	defer func() { _ = face.Stop() }()
 
 	_, err = fastpath.NewSSHTransport(fastpath.SSHConfig{
 		Host: "127.0.0.1", Port: port,
@@ -172,10 +172,10 @@ func TestTelnetFaceRoundTripThroughRealFastpathClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TelnetFace.Start() error = %v", err)
 	}
-	defer face.Stop()
+	defer func() { _ = face.Stop() }()
 
 	driver := dialTelnetDriver(t, port, "admin", "s3cret")
-	defer driver.Close()
+	defer func() { _ = driver.Close() }()
 
 	reader, err := fastpath.NewReader(driver, m)
 	if err != nil {
@@ -204,7 +204,7 @@ func TestTelnetFaceWrongPasswordIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TelnetFace.Start() error = %v", err)
 	}
-	defer face.Stop()
+	defer func() { _ = face.Stop() }()
 
 	transport, err := fastpath.NewTelnetTransport(fastpath.TelnetConfig{
 		Host: "127.0.0.1", Port: port,
@@ -217,7 +217,7 @@ func TestTelnetFaceWrongPasswordIsRejected(t *testing.T) {
 		// the password) is that Setup fails instead -- see below.
 		return
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 	driver := fastpath.NewShellDriver(transport, fastpath.ShellDriverConfig{})
 	if err := driver.Setup(context.Background()); err == nil {
 		t.Fatal("ShellDriver.Setup() with wrong telnet password succeeded, want error (fake must fail closed)")
@@ -248,13 +248,13 @@ func TestSSHFaceConcurrentConnectionsIndependentModeStacksSharedState(t *testing
 	if err != nil {
 		t.Fatalf("SSHFace.Start() error = %v", err)
 	}
-	defer face.Stop()
+	defer func() { _ = face.Stop() }()
 
 	ctx := context.Background()
 	driverA := dialSSHDriver(t, port, "admin", "s3cret")
-	defer driverA.Close()
+	defer func() { _ = driverA.Close() }()
 	driverB := dialSSHDriver(t, port, "admin", "s3cret")
-	defer driverB.Close()
+	defer func() { _ = driverB.Close() }()
 
 	// A drives itself deep into interface-config mode and stays there.
 	if out, err := driverA.Run(ctx, "configure"); err != nil || out != "" {
@@ -465,7 +465,7 @@ func TestSSHFaceStopWithoutClientDisconnectingIsStillBounded(t *testing.T) {
 	}
 
 	driver := dialSSHDriver(t, port, "admin", "s3cret")
-	defer driver.Close() // closed AFTER Stop, deliberately -- proving Stop didn't need it first.
+	defer func() { _ = driver.Close() }() // closed AFTER Stop, deliberately
 
 	done := make(chan error, 1)
 	go func() { done <- face.Stop() }()
@@ -492,7 +492,7 @@ func TestTelnetFaceStopWithoutClientDisconnectingIsStillBounded(t *testing.T) {
 	}
 
 	driver := dialTelnetDriver(t, port, "admin", "s3cret")
-	defer driver.Close()
+	defer func() { _ = driver.Close() }()
 
 	done := make(chan error, 1)
 	go func() { done <- face.Stop() }()
@@ -545,7 +545,7 @@ func TestVirtualSwitchBindsSSHAndTelnetFacesForCLIModel(t *testing.T) {
 	if err := sw.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer sw.Stop()
+	defer func() { _ = sw.Stop() }()
 
 	if sw.SSHPort == 0 {
 		t.Error("SSHPort = 0, want a bound port for a BackendSSH model")
@@ -555,9 +555,9 @@ func TestVirtualSwitchBindsSSHAndTelnetFacesForCLIModel(t *testing.T) {
 	}
 
 	sshDriver := dialSSHDriver(t, sw.SSHPort, "admin", "s3cret")
-	defer sshDriver.Close()
+	defer func() { _ = sshDriver.Close() }()
 	telnetDriver := dialTelnetDriver(t, sw.TelnetPort, "admin", "s3cret")
-	defer telnetDriver.Close()
+	defer func() { _ = telnetDriver.Close() }()
 
 	m, err := model.GetModel("gsm7252ps")
 	if err != nil {

@@ -43,7 +43,7 @@ func newFakeTelnetServer(t *testing.T, responses map[string]string, hangOnCmd st
 	}
 	t.Cleanup(func() {
 		close(srv.stop)
-		ln.Close()
+		_ = ln.Close()
 	})
 	go srv.serve(responses, hangOnCmd)
 	return srv
@@ -54,7 +54,7 @@ func (s *fakeTelnetServer) serve(responses map[string]string, hangOnCmd string) 
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// IAC DO ECHO -- the client must reply IAC WONT ECHO (refuse), never
 	// enabling it.
@@ -199,7 +199,7 @@ func TestTelnetTransportLoginAndRunRoundTripThroughShellDriver(t *testing.T) {
 
 	buf := make([]byte, 16)
 	n, err := transport.Read(buf)
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("Read() after Close() = (%d, %v), want (_, io.EOF) [bare, via errors.Is-independent ==]", n, err)
 	}
 }
@@ -225,7 +225,7 @@ func TestTelnetTransportConnectFailureWrapsErrCliTransport(t *testing.T) {
 		}
 		return hostStr, p
 	}()
-	ln.Close()
+	_ = ln.Close()
 
 	_, err = NewTelnetTransport(TelnetConfig{
 		Host:     host,
@@ -264,7 +264,7 @@ func TestTelnetTransportReadTimesOutInsteadOfHanging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTelnetTransport() error = %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	driver := NewShellDriver(transport, ShellDriverConfig{})
 	ctx := context.Background()
@@ -306,7 +306,7 @@ func TestTelnetTransportReadTimesOutInsteadOfHanging(t *testing.T) {
 // interleaved with ordinary data bytes.
 func TestTelnetConnStripsSubnegotiationAndUnescapesIAC(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	defer func() { _ = serverConn.Close() }()
 
 	done := make(chan struct{})
 	var negotiationReply []byte

@@ -59,11 +59,13 @@
 //     file's doc comment for the failure-mode rationale) -- session.go's
 //     10,000-iteration readUntil loop has no wall-clock bound of its own,
 //     so a wedged/never-responding switch must be caught here.
+
 package fastpath
 
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -307,7 +309,7 @@ func (t *telnetTransport) Read(p []byte) (int, error) {
 		_ = t.conn.SetReadDeadline(time.Now().Add(t.readTimeout))
 	}
 	n, err := t.tc.Read(p)
-	if err != nil && err != io.EOF && t.closed.Load() {
+	if err != nil && !errors.Is(err, io.EOF) && t.closed.Load() {
 		return n, io.EOF
 	}
 	return n, err
@@ -397,7 +399,7 @@ func NewTelnetTransport(cfg TelnetConfig) (Transport, error) {
 
 	t := &telnetTransport{tc: newTelnetConn(conn), conn: conn, readTimeout: timeout}
 	if err := telnetLogin(t, cfg.Username, cfg.Password); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("%w: telnet connect/login failed: %w", ErrCliTransport, err)
 	}
 	return t, nil

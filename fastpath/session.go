@@ -42,6 +42,7 @@
 //     them here lets this file's own tests exercise the counted-unwind
 //     hazard (protocol dossier risk #5) against a scripted Session
 //     directly, without needing a CliModelSpec or Writer.
+
 package fastpath
 
 import (
@@ -239,7 +240,7 @@ func (d *ShellDriver) readUntil(allowPassword bool) (string, error) {
 			return text, nil
 		}
 		if n == 0 {
-			if err != nil && err != io.EOF {
+			if err != nil && !errors.Is(err, io.EOF) {
 				return "", fmt.Errorf("%w: read failed: %w", ErrCliTransport, err)
 			}
 			// Channel closed with no prompt seen (mirrors Python's
@@ -359,7 +360,7 @@ func (d *ShellDriver) RunSCPCopy(ctx context.Context, command, scpPassword strin
 			return transcript.String(), nil
 		}
 		if n == 0 {
-			if err != nil && err != io.EOF {
+			if err != nil && !errors.Is(err, io.EOF) {
 				return "", fmt.Errorf("%w: read failed: %w", ErrCliTransport, err)
 			}
 			break
@@ -413,7 +414,7 @@ func (d *ShellDriver) RunWriteMemory(ctx context.Context, command string, prestu
 			return transcript.String(), nil
 		}
 		if n == 0 {
-			if err != nil && err != io.EOF {
+			if err != nil && !errors.Is(err, io.EOF) {
 				return "", fmt.Errorf("%w: read failed: %w", ErrCliTransport, err)
 			}
 			break

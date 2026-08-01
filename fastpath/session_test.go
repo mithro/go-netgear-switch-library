@@ -85,7 +85,7 @@ type responseQueue struct {
 	i         int
 }
 
-func (q *responseQueue) respond(written string) string {
+func (q *responseQueue) respond(_ string) string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.i >= len(q.responses) {
@@ -330,16 +330,16 @@ func (s *scriptedSession) Run(ctx context.Context, command string) (string, erro
 	}
 	return "", nil
 }
-func (s *scriptedSession) RunSCPCopy(ctx context.Context, command, scpPassword string) (string, error) {
+func (s *scriptedSession) RunSCPCopy(_ context.Context, _, _ string) (string, error) {
 	return "", nil
 }
-func (s *scriptedSession) RunWriteMemory(ctx context.Context, command string, prestuff bool) (string, error) {
+func (s *scriptedSession) RunWriteMemory(_ context.Context, _ string, _ bool) (string, error) {
 	return "", nil
 }
 func (s *scriptedSession) Close() error { return nil }
 
 func TestRunAcceptsEmptyOutput(t *testing.T) {
-	sess := &scriptedSession{runFn: func(ctx context.Context, command string) (string, error) {
+	sess := &scriptedSession{runFn: func(_ context.Context, _ string) (string, error) {
 		return "", nil
 	}}
 	if err := run(context.Background(), sess, "vlan 10"); err != nil {
@@ -348,7 +348,7 @@ func TestRunAcceptsEmptyOutput(t *testing.T) {
 }
 
 func TestRunAcceptsWhitespaceOnlyOutput(t *testing.T) {
-	sess := &scriptedSession{runFn: func(ctx context.Context, command string) (string, error) {
+	sess := &scriptedSession{runFn: func(_ context.Context, _ string) (string, error) {
 		return "  \r\n", nil
 	}}
 	if err := run(context.Background(), sess, "vlan 10"); err != nil {
@@ -357,7 +357,7 @@ func TestRunAcceptsWhitespaceOnlyOutput(t *testing.T) {
 }
 
 func TestRunRejectsNonEmptyOutput(t *testing.T) {
-	sess := &scriptedSession{runFn: func(ctx context.Context, command string) (string, error) {
+	sess := &scriptedSession{runFn: func(_ context.Context, _ string) (string, error) {
 		return "% Invalid input detected at '^' marker.", nil
 	}}
 	err := run(context.Background(), sess, "poe")
@@ -371,7 +371,7 @@ func TestRunRejectsNonEmptyOutput(t *testing.T) {
 
 func TestRunPropagatesTransportError(t *testing.T) {
 	wantErr := fmt.Errorf("%w: boom", ErrCliTransport)
-	sess := &scriptedSession{runFn: func(ctx context.Context, command string) (string, error) {
+	sess := &scriptedSession{runFn: func(_ context.Context, _ string) (string, error) {
 		return "", wantErr
 	}}
 	err := run(context.Background(), sess, "poe")
@@ -383,7 +383,7 @@ func TestRunPropagatesTransportError(t *testing.T) {
 // --- inMode: the counted-unwind hazard --------------------------------------
 
 func TestInModeAllSucceedUnwindsEveryEnteredLevel(t *testing.T) {
-	sess := &scriptedSession{runFn: func(ctx context.Context, command string) (string, error) {
+	sess := &scriptedSession{runFn: func(_ context.Context, _ string) (string, error) {
 		return "", nil // every command accepted
 	}}
 	enter := []string{"configure terminal", "interface 1/0/7"}
@@ -407,7 +407,7 @@ func TestInModePartialEnterFailureUnwindsOnlyEnteredLevels(t *testing.T) {
 	// must unwind exactly 1 level (the one that actually succeeded), never
 	// 0 and never len(enter)==3.
 	enter := []string{"level1", "level2-rejected", "level3-never-reached"}
-	sess := &scriptedSession{runFn: func(ctx context.Context, command string) (string, error) {
+	sess := &scriptedSession{runFn: func(_ context.Context, command string) (string, error) {
 		if command == "level2-rejected" {
 			return "% Invalid input detected at '^' marker.", nil
 		}
@@ -439,7 +439,7 @@ func TestInModeBodyFailureUnwindsAllEnteredLevels(t *testing.T) {
 	// every enter level really was entered.
 	enter := []string{"vlan database"}
 	body := []string{"vlan name 10 bad name with spaces"}
-	sess := &scriptedSession{runFn: func(ctx context.Context, command string) (string, error) {
+	sess := &scriptedSession{runFn: func(_ context.Context, command string) (string, error) {
 		if command == body[0] {
 			return "ERROR: VLAN 10 does not exist", nil
 		}
@@ -467,7 +467,7 @@ func TestInModeUnwindUsesRawRunNotWrappedRun(t *testing.T) {
 	// surface as inMode's returned error (which must remain the ORIGINAL
 	// failure, not be masked by an unwind failure).
 	enter := []string{"level1", "level2-rejected"}
-	sess := &scriptedSession{runFn: func(ctx context.Context, command string) (string, error) {
+	sess := &scriptedSession{runFn: func(_ context.Context, command string) (string, error) {
 		switch command {
 		case "level2-rejected":
 			return "% Invalid input detected at '^' marker.", nil
@@ -495,7 +495,7 @@ func TestInModeNoLevelsEnteredNoUnwind(t *testing.T) {
 	// The very first enter command is rejected: entered stays 0, so the
 	// unwind must issue ZERO exits, not len(enter).
 	enter := []string{"configure terminal", "interface 1/0/7", "switchport mode general"}
-	sess := &scriptedSession{runFn: func(ctx context.Context, command string) (string, error) {
+	sess := &scriptedSession{runFn: func(_ context.Context, _ string) (string, error) {
 		return "% Invalid input detected at '^' marker.", nil
 	}}
 	err := inMode(context.Background(), sess, enter, nil, "exit")
@@ -509,7 +509,7 @@ func TestInModeNoLevelsEnteredNoUnwind(t *testing.T) {
 }
 
 func TestInModeEmptyEnterRunsBodyDirectly(t *testing.T) {
-	sess := &scriptedSession{runFn: func(ctx context.Context, command string) (string, error) {
+	sess := &scriptedSession{runFn: func(_ context.Context, _ string) (string, error) {
 		return "", nil
 	}}
 	if err := inMode(context.Background(), sess, nil, []string{"no ip http secure-server"}, "exit"); err != nil {
@@ -544,7 +544,7 @@ func TestShellDriverRunSCPCopyDrivesTOFUAndPassword(t *testing.T) {
 	// Script the multi-step interactive exchange: TOFU prompt -> "yes",
 	// then Password prompt -> scp password, then success + shell prompt.
 	step := 0
-	transport.responder = func(written string) string {
+	transport.responder = func(_ string) string {
 		step++
 		switch step {
 		case 1: // reply to the initial "copy ..." command
@@ -581,7 +581,7 @@ func TestShellDriverRunSCPCopyDrivesTOFUAndPassword(t *testing.T) {
 func TestShellDriverRunSCPCopyOverwriteConfirmIsBareY(t *testing.T) {
 	transport := &fakeTransport{}
 	step := 0
-	transport.responder = func(written string) string {
+	transport.responder = func(_ string) string {
 		step++
 		switch step {
 		case 1:
@@ -665,7 +665,7 @@ func TestShellDriverRunWriteMemoryPrestuffSingleWrite(t *testing.T) {
 func TestShellDriverRunWriteMemoryNonPrestuffWaitsForConfirm(t *testing.T) {
 	transport := &fakeTransport{}
 	step := 0
-	transport.responder = func(written string) string {
+	transport.responder = func(_ string) string {
 		step++
 		switch step {
 		case 1:

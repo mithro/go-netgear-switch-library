@@ -24,6 +24,7 @@
 // gated on reads_verified"); that gate lives in the facade dispatch layer
 // (Python's cli_reads_supported/SyncSwitch._reader_for), out of scope for
 // this package.
+
 package fastpath
 
 import (
