@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mithro/go-netgear-switch-library/nsdp"
 )
@@ -95,5 +96,76 @@ func TestNsdpFaceV2PasswordReadIsWriteOnly(t *testing.T) {
 	}
 	if resp.ErrorAttr != uint16(nsdp.TagAuthV2Password) {
 		t.Fatalf("ErrorAttr = %#x, want AUTH_V2_PASSWORD (%#x)", resp.ErrorAttr, uint16(nsdp.TagAuthV2Password))
+	}
+}
+
+// TestNsdpFaceV2LockoutEscalatesThenSilences mirrors the pin's
+// test_face_v2_repeated_failures_escalate_then_lock: consecutive wrong v2
+// tokens come back "bad password" (error 13), then escalate to "locked out"
+// (error 14), then the switch goes SILENT (no reply -> the client's write-
+// response read times out). A short client timeout keeps the silent phase fast.
+func TestNsdpFaceV2LockoutEscalatesThenSilences(t *testing.T) {
+	port, _ := startNsdpFace(t, SeedGS110EMX())
+	client, err := nsdp.NewUDPClient("127.0.0.1",
+		nsdp.WithServerPort(port), nsdp.WithClientPort(0),
+		nsdp.WithClientMAC([]byte{0, 0, 0, 0, 0, 1}),
+		nsdp.WithTimeout(400*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	pvid, _ := nsdp.PvidTLV(1, 5)
+
+	var sawBad, sawLocked, sawSilent bool
+	for i := 0; i < 10; i++ {
+		_, werr := client.Write(ctx, []nsdp.TLVEntry{pvid}, "wrong")
+		if werr == nil {
+			t.Fatalf("write %d with wrong password unexpectedly succeeded", i)
+		}
+		switch msg := werr.Error(); {
+		case strings.Contains(msg, "bad password"):
+			sawBad = true
+		case strings.Contains(msg, "locked"):
+			sawLocked = true
+		default: // no reply -> read-deadline timeout: the silent lockout phase
+			sawSilent = true
+		}
+		if sawSilent {
+			break
+		}
+	}
+	if !sawBad || !sawLocked || !sawSilent {
+		t.Fatalf("v2 lockout escalation: sawBad=%v sawLocked=%v sawSilent=%v (want all true)",
+			sawBad, sawLocked, sawSilent)
+	}
+}
+
+// TestNsdpFaceV2LockoutCounterResetsAfterSuccess mirrors the pin's
+// test_face_lockout_counter_resets_after_success: three wrong tokens (below
+// the escalate threshold, so still "bad password") followed by one correct
+// write, which succeeds and clears the failure counter back to zero.
+func TestNsdpFaceV2LockoutCounterResetsAfterSuccess(t *testing.T) {
+	st := SeedGS110EMX()
+	port, face := startNsdpFace(t, st)
+	client := nsdpTestClient(t, port)
+	ctx := context.Background()
+	pvid, _ := nsdp.PvidTLV(1, 5)
+
+	for i := 0; i < 3; i++ {
+		if _, err := client.Write(ctx, []nsdp.TLVEntry{pvid}, "wrong"); err == nil {
+			t.Fatalf("wrong-password write %d unexpectedly succeeded", i)
+		}
+	}
+	if _, err := client.Write(ctx, []nsdp.TLVEntry{pvid}, st.NsdpPassword); err != nil {
+		t.Fatalf("correct write after 3 failures: %v", err)
+	}
+
+	// Stop the face (wg.Wait establishes happens-before with the serve
+	// goroutine that owns authFailures) before reading the counter race-free.
+	if err := face.Stop(); err != nil {
+		t.Fatalf("face.Stop: %v", err)
+	}
+	if face.authFailures != 0 {
+		t.Fatalf("authFailures = %d after a successful write, want 0 (counter did not reset)", face.authFailures)
 	}
 }

@@ -26,6 +26,17 @@ import (
 	"github.com/mithro/go-netgear-switch-library/nsdp"
 )
 
+// v2 lockout shape (approximate -- the real GS110EMX thresholds are firmware
+// rate-based, not a clean counter; see docs/hardware-findings.md). Consecutive
+// wrong v2 write tokens return error 13 (ResultBadPasswordV2) up to
+// v2EscalateAt, then error 14 (ResultLockedV2), then no reply at all once past
+// v2SilenceAt. A successful write resets the counter. Mirrors faces/nsdp.py's
+// _V2_ESCALATE_AT / _V2_SILENCE_AT verbatim.
+const (
+	v2EscalateAt = 3
+	v2SilenceAt  = 5
+)
+
 // NsdpFace is a UDP NSDP command-responder agent serving a State. Runs its
 // receive loop on a dedicated goroutine, bound to an ephemeral UDP port on
 // host. Construct with NewNsdpFace; call Start to bind and begin serving,
@@ -46,6 +57,14 @@ type NsdpFace struct {
 	saltMu      sync.Mutex
 	salt        [4]byte
 	saltCounter uint32
+
+	// authFailures counts consecutive failed v2 write auths, driving the
+	// deterministic lockout escalation (v2EscalateAt/v2SilenceAt). Touched only
+	// on the serve goroutine (writeResponse), so it needs no lock. Kept here on
+	// the face rather than on State (where Python's nsdp_auth_failures lives)
+	// for the same reason as salt: State is deep-copied by Snapshot and must
+	// stay a pure data projection.
+	authFailures int
 }
 
 // nextSalt issues a fresh 4-byte AUTH_V2_SALT and stores it for the next v2
@@ -65,6 +84,16 @@ func (f *NsdpFace) currentSalt() [4]byte {
 	f.saltMu.Lock()
 	defer f.saltMu.Unlock()
 	return f.salt
+}
+
+// saltIssued reports whether any AUTH_V2_SALT has been handed out yet -- the
+// Go analogue of Python's `nsdp_last_salt is not None` guard. A v2 write
+// arriving before the client ever read a salt can never present a valid token
+// and is treated as an auth failure.
+func (f *NsdpFace) saltIssued() bool {
+	f.saltMu.Lock()
+	defer f.saltMu.Unlock()
+	return f.saltCounter != 0
 }
 
 // NewNsdpFace builds an NsdpFace serving state, bound to host (typically
@@ -239,30 +268,55 @@ func (f *NsdpFace) writeResponse(req nsdp.Packet) (*nsdp.Packet, error) {
 		Sequence:  req.Sequence,
 	}
 
-	// v2 SKUs: the write MUST lead with a valid AUTH_V2_PASSWORD token folded
-	// against the salt this fake last issued (CurrentNsdpSalt) and its own MAC.
-	// A v1 PASSWORD offered here is error 13 blamed on PASSWORD (the
-	// "v1 to v2-only firmware" wiring case); a wrong token is error 13 blamed
-	// on AUTH_V2_PASSWORD; ordering it non-first is not accepted.
+	// v2 SKUs: the write must carry a valid AUTH_V2_PASSWORD token folded
+	// against the salt this fake last issued and its own MAC. The library LEADS
+	// with the token (BuildWriteRequestV2), but validation is position-
+	// independent, matching the pin. A wrong/absent token increments a failure
+	// counter driving a deterministic lockout: error 13 (bad password) up to
+	// v2EscalateAt, then error 14 (locked), then silence past v2SilenceAt; a
+	// successful write resets it. A v1 PASSWORD offered here has no v2 token ->
+	// error 13 blamed on PASSWORD (the "v1 to v2-only firmware" wiring case,
+	// which CheckResult keys its "use v2" hint off); a wrong token-first packet
+	// is blamed on AUTH_V2_PASSWORD -- error_attr echoes req.TLVs[0].Tag.
 	if f.state.NsdpAuthV2 {
-		if len(req.TLVs) == 0 || req.TLVs[0].Tag != nsdp.TagAuthV2Password {
-			resp.Result = nsdp.ResultBadPasswordV2
-			resp.ErrorAttr = uint16(nsdp.TagPassword)
-			return &resp, nil
+		// Past the silence threshold the switch stops answering writes entirely:
+		// return a nil packet so serve drops it with no reply, exactly as the
+		// real switch goes silent under sustained v2 auth failure.
+		if f.authFailures > v2SilenceAt {
+			return nil, nil
+		}
+		var token []byte
+		for _, t := range req.TLVs {
+			if t.Tag == nsdp.TagAuthV2Password {
+				token = t.Value
+				break
+			}
 		}
 		salt := f.currentSalt()
 		expected, err := nsdp.AuthV2Password(f.state.NsdpPassword, f.state.NsdpMac[:], salt[:])
 		if err != nil {
 			return nil, err
 		}
-		if !bytes.Equal(req.TLVs[0].Value, expected) {
-			resp.Result = nsdp.ResultBadPasswordV2
-			resp.ErrorAttr = uint16(nsdp.TagAuthV2Password)
+		if token == nil || !f.saltIssued() || !bytes.Equal(token, expected) {
+			f.authFailures++
+			if f.authFailures > v2EscalateAt {
+				resp.Result = nsdp.ResultLockedV2
+			} else {
+				resp.Result = nsdp.ResultBadPasswordV2
+			}
+			if len(req.TLVs) > 0 {
+				resp.ErrorAttr = uint16(req.TLVs[0].Tag)
+			}
 			return &resp, nil
 		}
-		for _, t := range req.TLVs[1:] {
-			f.state.ApplyNsdpWrite(t.Tag, t.Value)
+		// Authenticated: apply every config TLV (all but the auth token) and
+		// reset the lockout counter.
+		for _, t := range req.TLVs {
+			if t.Tag != nsdp.TagAuthV2Password {
+				f.state.ApplyNsdpWrite(t.Tag, t.Value)
+			}
 		}
+		f.authFailures = 0
 		resp.Result = nsdp.ResultSuccess
 		return &resp, nil
 	}
