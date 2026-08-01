@@ -23,14 +23,19 @@ The Python library is the behavioural reference:
 - Repo: `/home/tim/github/mithro/python-netgear-switch-library`
   (`github.com/mithro/python-netgear-switch-library`)
 - **Pinned reference:** branch `main` @
-  `1841111c6d0b55ad3eece915e57ba115a0cfdd12` (2026-07-31), frozen as a
+  `7ebfe5d` (2026-08-01), frozen as a
   detached read-only snapshot worktree at
-  `/home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-1841111`
+  `/home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-7ebfe5d`
   — **implementers read the snapshot path, never the live checkout**, which
   the user actively develops (pin history: `b73e7519` → `aaab577` →
-  `1aa1274` → `1841111`; slices 01–05 were built against `1aa1274`, see the
-  reconciliation note below). Re-pin deliberately at slice boundaries (new
-  snapshot worktree + doc update); parity claims are always against the pin.
+  `1aa1274` → `1841111` (slice 06) → `7ebfe5d`; slices 01–05 were built against
+  `1aa1274`, slice 06 against `1841111`, see the reconciliation note below).
+  **Re-pin policy (user directive 2026-08-01): re-pin to latest live Python
+  `main` at every slice boundary AUTOMATICALLY — new snapshot worktree + doc
+  update, no user gate.** Parity claims are always against the current pin. The
+  `1841111`→`7ebfe5d` drift (NSDP v2 write auth, `capabilities.py` oracle,
+  published Sphinx docs, minor CLI/HTTP tweaks) is folded into owning slices per
+  `2026-07-31-reference-drift-and-reconciliation.md`.
 - **Five non-negotiable design principles (normative):** the reference owner
   recorded these in the reference's root `CLAUDE.md` (they bind this port
   too, and sharpen the standing goal): (1) **fail fast and loud; never

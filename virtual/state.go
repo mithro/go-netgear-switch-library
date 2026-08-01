@@ -45,6 +45,33 @@ type PortSim struct {
 	TxUcast  *uint64
 	RxErrors *uint64
 	TxErrors *uint64
+	// SwitchportMode is the FASTPATH CLI-only "switchport mode
+	// access|general|trunk" running-config value (slice-07, ported from
+	// Python PortSim.switchport_mode: str = "general", state.py:143), which
+	// gates whether a per-port `vlan participation`/`vlan tagging`/`vlan
+	// pvid` CLI write actually takes effect (see virtual/cliface.go's
+	// general() gate) -- live-proven on an M4300-24X: those commands are
+	// ACCEPTED but INERT while the port is in "switchport mode access".
+	// NOT part of any SNMP/NSDP/HTTP projection: no captured MIB/TLV/web
+	// page exposes it.
+	//
+	// Go has no per-field struct-literal defaults, unlike Python's
+	// dataclass default, and every seed in this package builds its (very
+	// large) port tables via bare struct literals rather than NewPortSim
+	// (see seed.go's own doc comment), so this field's Go zero value ""
+	// deliberately stands in for "not yet explicitly configured over CLI"
+	// on every existing seed, rather than requiring every port literal in
+	// every seed to spell out `SwitchportMode: "general"`. cliface.go's
+	// general() gate treats "" the same as an explicit "general" UNLESS
+	// the model/port has a measured VlanMembershipLockedPorts entry
+	// documenting it as access/trunk instead (e.g. every M4300-24X port,
+	// live-proven -- see that field's own seed.go doc comment): the SAME
+	// underlying live finding, observed over the HTTP VLAN-membership page
+	// there and over the CLI here. Once this face executes an explicit
+	// "switchport mode <mode>" command, this field holds that literal
+	// mode string ("access"/"general"/"trunk") and takes precedence over
+	// both defaults.
+	SwitchportMode string
 	// Description is ifAlias. nil means this port's ifAlias column instance
 	// is entirely absent (never configured) -- never a fabricated "".
 	Description *string
@@ -54,7 +81,7 @@ type PortSim struct {
 // ethernetCsmacd). Non-physical rows (LAGs, CPU, VLAN interfaces) must set
 // IfType explicitly after construction.
 func NewPortSim(name string, admin, link bool, speed int) *PortSim {
-	return &PortSim{Name: name, Admin: admin, Link: link, Speed: speed, IfType: 6}
+	return &PortSim{Name: name, Admin: admin, Link: link, Speed: speed, IfType: 6, SwitchportMode: "general"}
 }
 
 // VlanSim is one dot1q VLAN: display name plus egress-member and untagged
@@ -102,6 +129,23 @@ type PoeSim struct {
 	Admin   bool
 	Detect  int
 	PowerMw int
+	// CliStatusLagReads is how many more CLI `show poe port info all` reads
+	// still report the pre-enable "Disabled" status after PoE was
+	// administratively re-enabled, ported from Python PoeSim's
+	// cli_status_lag_reads: int = 0 (state.py:253).
+	//
+	// MEASURED ON HARDWARE (M4300-16X, 10.1.5.20, FASTPATH 12.0.19.15,
+	// 2026-07-30): right after `poe` re-enabled port 1/0/1 the table still
+	// said "Disabled"; the same port read "Searching" moments later. That
+	// column is a DETECTION state, and it lags the admin write -- which
+	// made a single immediate read-back report a perfectly good SetPoE as
+	// a verification failure. The mock reproduces the lag (one stale read)
+	// so fastpath.Writer.SetPoE's polling is actually exercised instead of
+	// passing by accident; SNMP's pethPsePortAdminEnable has no such lag
+	// and is deliberately unaffected. Consumed (and decremented) by
+	// cliPoeStatusText in cliface_render.go; set by CliFace.applyPoeAdmin
+	// on an off->on transition.
+	CliStatusLagReads int
 }
 
 // SensorSim is one box sensor reading (fan RPM / PSU watts / temperature).
@@ -281,6 +325,14 @@ type State struct {
 	// a deliberate live counter-example pair, not an oversight.
 	VlanMembershipPage        *VlanMembershipPageSim
 	VlanMembershipLockedPorts map[int]bool
+
+	// Reboots is the number of reboots requested through a protocol face
+	// (slice-07: the FASTPATH CLI's "reload", virtual/cliface.go's
+	// RunWriteMemory), ported from Python's VirtualSwitchState.reboots: int
+	// = 0 (state.py:448). A reload cannot actually restart this mock, so
+	// this counter is the only observable record that the request was
+	// issued -- not part of any SNMP/NSDP/HTTP projection.
+	Reboots int
 }
 
 // NewState builds a blank-but-valid State for modelKey, with the same
@@ -367,6 +419,7 @@ func (s *State) Snapshot() *State {
 		ScpCertDeploy:             cloneScpCertDeploy(s.ScpCertDeploy),
 		VlanMembershipPage:        cloneVlanMembershipPage(s.VlanMembershipPage),
 		VlanMembershipLockedPorts: cloneIntBoolMap(s.VlanMembershipLockedPorts),
+		Reboots:                   s.Reboots,
 	}
 	return cp
 }
