@@ -597,3 +597,404 @@ func parsePVIDs(text string) []model.Pvid {
 	}
 	return out
 }
+
+// ---------------------------------------------------------------------
+// Entity parsers, part 2: show mac-addr-table / show lldp remote-device
+// all / show poe port info all / show environment / show network (or
+// show ip management) / show interface ethernet <iface>. Ported
+// field-for-field from the pinned python-netgear-switch-library @
+// 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362,
+// src/netgear_switch/protocols/cli/parse.py (parse.py:398-676), dossier
+// §2.14-§2.19.
+// ---------------------------------------------------------------------
+
+// Column indices for parseMacTable, mirroring Python's
+// _MAC_VLAN/_MAC_ADDR/_MAC_IFINDEX (parse.py:716): header is "VLAN ID |
+// MAC Address | Interface | IfIndex | Status" -- the Interface column
+// (index 2) is DELIBERATELY skipped; MacEntry.Port comes from IfIndex
+// (index 3), not any interface-name parsing.
+const (
+	macVlan = iota
+	macAddr
+	_ // Interface (unused)
+	macIfindex
+)
+
+// parseMacTable parses "show mac-addr-table" into one model.MacEntry per
+// FDB row, mirroring Python parse_mac_table (parse.py:718-731) EXACTLY.
+// Port is the IfIndex column value itself -- "49 for 1/0/49, 418 for lag
+// 1, 417 for the CPU/Management row -- the same ifIndex the SNMP FDB join
+// yields" -- NEVER a _phys_port-derived physical port number, so LAG and
+// CPU rows are kept, not dropped. A malformed MAC (fails macTextRE after
+// upper-casing) silently drops the row rather than erroring. VlanID may be
+// nil only if that cell fails to parse as an int; a row is dropped only
+// when IfIndex itself fails to parse.
+func parseMacTable(text string) []model.MacEntry {
+	var out []model.MacEntry
+	for _, cells := range iterTableRows(text, "") {
+		if len(cells) <= macIfindex {
+			continue
+		}
+		mac := strings.ToUpper(strings.TrimSpace(cells[macAddr]))
+		if !macTextRE.MatchString(mac) {
+			continue
+		}
+		ifindex, ok := parseInt(cells[macIfindex])
+		if !ok {
+			continue
+		}
+		var vlan *int
+		if v, ok := parseInt(cells[macVlan]); ok {
+			vlan = &v
+		}
+		out = append(out, model.MacEntry{Mac: mac, Port: ifindex, VlanID: vlan})
+	}
+	return out
+}
+
+// Column indices for parseLLDP, mirroring Python's
+// _LLDP_IFACE/_LLDP_CHASSIS/_LLDP_PORTID/_LLDP_SYSNAME (parse.py:746):
+// header is "Local Interface | RemID | Chassis ID | Port ID | System
+// Name" -- RemID (index 1) is DELIBERATELY never read.
+const (
+	lldpIface = iota
+	_         // RemID (unused)
+	lldpChassis
+	lldpPortID
+	lldpSysName
+)
+
+// parseLLDP parses "show lldp remote-device all" into one
+// model.LLDPNeighbor per neighbour row, mirroring Python parse_lldp
+// (parse.py:748-766) EXACTLY. A local-interface row printed with NO
+// neighbour (a bare "1/0/6" with empty trailing cells) is dropped by the
+// blank-Chassis-ID check -- not a zero-valued neighbour. RemotePortDesc is
+// ALWAYS nil: "this command has no port-description column (SNMP's
+// lldpRemPortDesc is the source for it)". Chassis ID is uppercased to
+// match the SNMP/HTTP backends. "lag N"/pseudo-interface local ports are
+// dropped via physPort returning ok=false.
+func parseLLDP(text string) []model.LLDPNeighbor {
+	var out []model.LLDPNeighbor
+	for _, cells := range iterTableRows(text, "") {
+		if len(cells) == 0 {
+			continue
+		}
+		localPort, ok := physPort(cells[lldpIface])
+		if !ok {
+			continue
+		}
+		if len(cells) <= lldpSysName || strings.TrimSpace(cells[lldpChassis]) == "" {
+			continue
+		}
+		var sysName, chassisID, portID *string
+		if v := strings.TrimSpace(cells[lldpSysName]); v != "" {
+			sysName = &v
+		}
+		if v := strings.ToUpper(strings.TrimSpace(cells[lldpChassis])); v != "" {
+			chassisID = &v
+		}
+		if v := strings.TrimSpace(cells[lldpPortID]); v != "" {
+			portID = &v
+		}
+		out = append(out, model.LLDPNeighbor{
+			LocalPort:       localPort,
+			RemoteSysName:   sysName,
+			RemotePortDesc:  nil,
+			RemoteChassisID: chassisID,
+			RemotePortID:    portID,
+		})
+	}
+	return out
+}
+
+// PoE header-name column labels parsePoE resolves by NAME, not fixed
+// index, mirroring Python's _POE_INTF_HDR/_POE_OUTPUT_MW_HDR/
+// _POE_STATUS_HDR (parse.py:791-793). This is THE fix the dossier calls
+// out (§2.16 risk #1, "a REAL bug fixed live" per the pinned git log): the
+// M4300 firmware OMITS the "Temperature" column gsm7252ps prints, shifting
+// every fixed index after it -- so every column consulted here MUST be
+// located via headerColumns, never a hardcoded position.
+const (
+	poeIntfHdr     = "Intf"
+	poeOutputMwHdr = "Power (mW)" // the live draw, NOT "Max Power (mW)"
+	poeStatusHdr   = "Status"     // the PSE state, NOT "Fault Status"
+)
+
+// poeDetectText maps a (lower-cased) PoE Status substring to its
+// model.PoEDetect value, tried in this EXACT order, mirroring Python's
+// _POE_DETECT_TEXT dict (parse.py:795-800): matching is SUBSTRING, not
+// equality -- real device text is "Delivering Power" (contains
+// "delivering"), "Searching", "Disabled", or anything containing "Fault".
+// Python 3.7+ dict iteration order is insertion order (delivering,
+// searching, disabled, fault); a Go map must not be relied on for
+// iteration order, so this is an explicit ordered slice instead.
+var poeDetectText = []struct {
+	substr string
+	detect model.PoEDetect
+}{
+	{"delivering", model.PoEDetectDelivering},
+	{"searching", model.PoEDetectSearching},
+	{"disabled", model.PoEDetectDisabled},
+	{"fault", model.PoEDetectFault},
+}
+
+// indexOf returns the index of target in names, or ok=false if absent,
+// mirroring Python list.index()'s "found or not" outcome (parsePoE
+// catches the ValueError it would raise; this returns ok=false instead).
+func indexOf(names []string, target string) (int, bool) {
+	for i, n := range names {
+		if n == target {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// parsePoE parses "show poe port info all" into one model.PoEStatus per
+// PSE port, mirroring Python parse_poe (parse.py:802-831) EXACTLY. If ANY
+// of the three required header names (Intf/Power (mW)/Status) is missing,
+// returns nil (Python: []) rather than erroring -- a silent-but-honest
+// degrade. There is NO admin column on this device output: AdminEnabled is
+// INFERRED as "detect is not Disabled" (documented inference, not a
+// fabricated field) -- "a searching/delivering PSE port is
+// administratively on".
+func parsePoE(text string) []model.PoEStatus {
+	names := headerColumns(text, "")
+	intfI, ok := indexOf(names, poeIntfHdr)
+	if !ok {
+		return nil
+	}
+	mwI, ok := indexOf(names, poeOutputMwHdr)
+	if !ok {
+		return nil
+	}
+	statusI, ok := indexOf(names, poeStatusHdr)
+	if !ok {
+		return nil
+	}
+	last := intfI
+	if mwI > last {
+		last = mwI
+	}
+	if statusI > last {
+		last = statusI
+	}
+	var out []model.PoEStatus
+	for _, cells := range iterTableRows(text, "") {
+		if len(cells) <= last {
+			continue
+		}
+		port, ok := physPort(cells[intfI])
+		if !ok {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(cells[statusI]))
+		detect := model.PoEDetectUnknown
+		for _, d := range poeDetectText {
+			if strings.Contains(status, d.substr) {
+				detect = d.detect
+				break
+			}
+		}
+		var powerMw *int
+		if v, ok := parseInt(cells[mwI]); ok {
+			powerMw = &v
+		}
+		out = append(out, model.PoEStatus{
+			Port:         port,
+			AdminEnabled: detect != model.PoEDetectDisabled,
+			Detect:       detect,
+			PowerMw:      powerMw,
+		})
+	}
+	return out
+}
+
+// Column indices for parseEnvironment's three independently-scanned
+// sub-tables, mirroring Python's _ENV_TEMP_DESC/_ENV_TEMP_VALUE/
+// _ENV_FAN_DESC/_ENV_FAN_SPEED/_ENV_PSU_DESC/_ENV_PSU_STATE
+// (parse.py:858-860).
+const (
+	envTempDesc  = 2
+	envTempValue = 3
+	envFanDesc   = 2
+	envFanSpeed  = 4
+	envPsuDesc   = 2
+	envPsuState  = 4
+)
+
+// parseEnvironment parses "show environment" into a flat []model.Sensor
+// spanning all three of its sub-tables (Temperature Sensors / Fans / Power
+// supplies), mirroring Python parse_environment (parse.py:862-905)
+// EXACTLY. THREE INDEPENDENT calls to iterTableRows, each with a different
+// after= substring -- each re-scans from line 0 to find its own marker
+// then its own ruler, so the sub-tables are located completely separately,
+// never by continuing from where the previous scan left off. Emission
+// order is FIXED: all temperature sensors, then all fans, then all power
+// sensors (never interleaved). A fan reporting non-numeric text ("Not
+// Supported", "-") is SKIPPED entirely -- absent, not a zero-value Sensor.
+// PSU health is a synthetic float flag: 1.0 if state case-insensitively
+// equals exactly "operational", else 0.0 for ANY other state text. The PSU
+// sub-table header text varies by firmware ("Power supplies:" on
+// gsm7252ps/gsm7228ps vs "Power Modules:" on M4300 12.0.13.8+) -- resolved
+// by a plain substring containment check on the WHOLE input text before
+// the third iterTableRows call.
+func parseEnvironment(text string) []model.Sensor {
+	var out []model.Sensor
+	for _, cells := range iterTableRows(text, "Temperature Sensors:") {
+		if len(cells) <= envTempValue {
+			continue
+		}
+		value, ok := parseInt(cells[envTempValue])
+		if !ok {
+			continue
+		}
+		out = append(out, model.Sensor{
+			Name:  strings.TrimSpace(cells[envTempDesc]),
+			Kind:  "temperature",
+			Value: float64(value),
+			Unit:  "C",
+		})
+	}
+	for _, cells := range iterTableRows(text, "Fans:") {
+		if len(cells) <= envFanSpeed {
+			continue
+		}
+		rpm, ok := parseInt(cells[envFanSpeed])
+		if !ok {
+			continue // "Not Supported"/"-" -- absent, not zero
+		}
+		out = append(out, model.Sensor{
+			Name:  strings.TrimSpace(cells[envFanDesc]),
+			Kind:  "fan",
+			Value: float64(rpm),
+			Unit:  "RPM",
+		})
+	}
+	psuAfter := "Power Modules:"
+	if strings.Contains(text, "Power supplies:") {
+		psuAfter = "Power supplies:"
+	}
+	for _, cells := range iterTableRows(text, psuAfter) {
+		if len(cells) <= envPsuState {
+			continue
+		}
+		state := strings.ToLower(strings.TrimSpace(cells[envPsuState]))
+		value := 0.0
+		if state == "operational" {
+			value = 1.0
+		}
+		out = append(out, model.Sensor{
+			Name:  strings.TrimSpace(cells[envPsuDesc]),
+			Kind:  "power",
+			Value: value,
+			Unit:  "state",
+		})
+	}
+	return out
+}
+
+// parseMgmtIP parses "show network" (or M4300's "show ip management") into
+// a model.MgmtIPConfig, mirroring Python parse_mgmt_ip (parse.py:934-951)
+// EXACTLY. "show network" labels the mode field "Configured IPv4
+// Protocol"; M4300's "show ip management" labels the SAME concept
+// "Method" -- EITHER label is accepted ("Configured IPv4 Protocol" tried
+// first). Mode: exact match "DHCP" (case-normalized) -> DHCP; any OTHER
+// non-empty text -> Static; empty/absent -> Unknown. Address/Netmask/
+// Gateway are nil if the field is empty/absent (never an empty-string
+// pointer). BaseMac is validated against macTextRE after uppercasing --
+// an unparseable MAC becomes nil, never a raw invalid string.
+func parseMgmtIP(text string) model.MgmtIPConfig {
+	fields := labelledValues(text)
+	proto := fields["Configured IPv4 Protocol"]
+	if proto == "" {
+		proto = fields["Method"]
+	}
+	proto = strings.ToUpper(strings.TrimSpace(proto))
+	mode := model.IPModeUnknown
+	switch {
+	case proto == "DHCP":
+		mode = model.IPModeDHCP
+	case proto != "":
+		mode = model.IPModeStatic
+	}
+	mac := strings.ToUpper(strings.TrimSpace(fields["Burned In MAC Address"]))
+	var baseMac *string
+	if macTextRE.MatchString(mac) {
+		baseMac = &mac
+	}
+	var address, netmask, gateway *string
+	if v := fields["IP Address"]; v != "" {
+		address = &v
+	}
+	if v := fields["Subnet Mask"]; v != "" {
+		netmask = &v
+	}
+	if v := fields["Default Gateway"]; v != "" {
+		gateway = &v
+	}
+	return model.MgmtIPConfig{
+		Mode:    mode,
+		Address: address,
+		Netmask: netmask,
+		Gateway: gateway,
+		BaseMac: baseMac,
+	}
+}
+
+// parseUint64 is the uint64 value of text with surrounding whitespace
+// trimmed, or ok=false for empty/non-numeric/negative text. Traffic
+// counters are the only field in this package wide enough to need this
+// (rather than parseInt): FASTPATH 64-bit octet counters can exceed
+// math.MaxInt32 (dossier §2.19, e.g. an M4300 rx_bytes of
+// 15294247267585), and model.PortStats' counter fields are *uint64 to
+// match the SNMP/NSDP/HTTP backends' own ifHCInOctets/ifHCOutOctets shape.
+// Mirrors Python _int's "unparseable -> None, never a fabricated 0"
+// contract for this field width.
+func parseUint64(text string) (uint64, bool) {
+	v, err := strconv.ParseUint(strings.TrimSpace(text), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// interfaceCounterLabels are the "show interface ethernet <iface>" label
+// lines parseInterfaceCounters reads, mirroring Python's inline label
+// strings (parse.py:968-985), aligned to the SNMP backend's GetStats
+// fields (ifHCInOctets, ifHCOutOctets, ifHCInUcastPkts, ifHCOutUcastPkts,
+// ifInErrors, ifOutErrors respectively).
+const (
+	counterRxBytesLabel   = "Total Packets Received (Octets)"
+	counterTxBytesLabel   = "Total Packets Transmitted (Octets)"
+	counterRxPacketsLabel = "Unicast Packets Received"
+	counterTxPacketsLabel = "Unicast Packets Transmitted"
+	counterRxErrorsLabel  = "Total Packets Received with MAC Errors"
+	counterTxErrorsLabel  = "Total Transmit Errors"
+)
+
+// parseInterfaceCounters parses "show interface ethernet <iface>" into a
+// model.PortStats, mirroring Python parse_interface_counters
+// (parse.py:976-986) EXACTLY. port is a CALLER-SUPPLIED parameter, not
+// derived from the text -- "the command output carries no interface
+// number" (the caller is CliReader.GetStats, a later task, which already
+// knows the physical port it queried this text for). Any missing/
+// unparseable field yields nil, never a fabricated 0.
+func parseInterfaceCounters(text string, port int) model.PortStats {
+	fields := labelledValues(text)
+	get := func(label string) *uint64 {
+		if v, ok := parseUint64(fields[label]); ok {
+			return &v
+		}
+		return nil
+	}
+	return model.PortStats{
+		Port:      port,
+		RxBytes:   get(counterRxBytesLabel),
+		TxBytes:   get(counterTxBytesLabel),
+		RxPackets: get(counterRxPacketsLabel),
+		TxPackets: get(counterTxPacketsLabel),
+		RxErrors:  get(counterRxErrorsLabel),
+		TxErrors:  get(counterTxErrorsLabel),
+	}
+}
