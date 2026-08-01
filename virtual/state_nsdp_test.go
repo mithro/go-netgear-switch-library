@@ -239,3 +239,75 @@ func TestApplyNsdpWriteTooShortValueIsANoOp(t *testing.T) {
 		t.Errorf("Mgmt.Mode after empty DHCP_MODE value = %q, want dhcp (unchanged, a no-op)", st.Mgmt.Mode)
 	}
 }
+
+// TestNsdpTlvsProjectsPortNames proves the fake serves PORT_NAME (0xB000) as
+// one TLV per port ALWAYS -- the seeded description for port 8 ("rumpus") and a
+// bare port-only TLV for every undescribed port (matching real GS110EMX row
+// counts). The description is the SAME per-port field the HTTP/SNMP projections
+// use (single source of truth).
+func TestNsdpTlvsProjectsPortNames(t *testing.T) {
+	st := SeedGS110EMX()
+	tlvs := st.NsdpTlvs(map[nsdp.Tag]bool{nsdp.TagPortName: true})
+	if len(tlvs) != len(st.Ports) {
+		t.Fatalf("PORT_NAME TLV count = %d, want one per port (%d)", len(tlvs), len(st.Ports))
+	}
+	byPort := map[int][]byte{}
+	for _, tlv := range tlvs {
+		if tlv.Tag != nsdp.TagPortName {
+			t.Fatalf("projected tag = %#x, want TagPortName", tlv.Tag)
+		}
+		byPort[int(tlv.Value[0])] = tlv.Value[1:]
+	}
+	if got := string(byPort[8]); got != "rumpus" {
+		t.Errorf("port 8 PORT_NAME = %q, want rumpus", got)
+	}
+	for _, port := range []int{1, 2, 6, 9, 10} {
+		if len(byPort[port]) != 0 {
+			t.Errorf("port %d PORT_NAME = %q, want bare (undescribed)", port, byPort[port])
+		}
+	}
+}
+
+// TestApplyNsdpWriteVLANDestroyResetsPvids covers the VLAN_DESTROY (0x2C00)
+// apply the virtual fake needs so a Go-lib DeleteVlan round-trips: the VLAN is
+// removed AND every PVID that pointed at it drops back to VLAN 1 (a PVID may
+// not name a VLAN that no longer exists).
+func TestApplyNsdpWriteVLANDestroyResetsPvids(t *testing.T) {
+	st := SeedGS110EMX()
+	st.Pvids[3] = 90 // point a PVID at VLAN 90 so we can prove it resets
+	if _, ok := st.Vlans[90]; !ok {
+		t.Fatal("precondition: VLAN 90 must exist in the seed")
+	}
+	st.ApplyNsdpWrite(nsdp.TagVLANDestroy, []byte{0x00, 0x5A}) // vlan 90, 2-byte BE
+	if _, ok := st.Vlans[90]; ok {
+		t.Error("VLAN 90 still present after VLAN_DESTROY, want removed")
+	}
+	if st.Pvids[3] != 1 {
+		t.Errorf("Pvids[3] = %d after destroying its VLAN, want reset to 1", st.Pvids[3])
+	}
+}
+
+// TestApplyNsdpWriteVLANDestroyUnknownVlanIsNoOp: destroying a VLAN the switch
+// does not have changes nothing (mirrors Python's `if pop(...) is not None`).
+func TestApplyNsdpWriteVLANDestroyUnknownVlanIsNoOp(t *testing.T) {
+	st := SeedGS110EMX()
+	before := st.Snapshot()
+	st.ApplyNsdpWrite(nsdp.TagVLANDestroy, []byte{0x0F, 0xA0}) // vlan 4000, absent
+	if !reflect.DeepEqual(st, before) {
+		t.Error("destroying a non-existent VLAN mutated state, want a no-op")
+	}
+}
+
+// TestApplyNsdpWritePortName covers the PORT_NAME (0xB000) apply: a described
+// write sets the port's Description; a bare port-only write clears it to nil.
+func TestApplyNsdpWritePortName(t *testing.T) {
+	st := SeedGS110EMX()
+	st.ApplyNsdpWrite(nsdp.TagPortName, append([]byte{0x02}, []byte("uplink")...))
+	if st.Ports[2].Description == nil || *st.Ports[2].Description != "uplink" {
+		t.Errorf("port 2 Description = %v, want \"uplink\"", st.Ports[2].Description)
+	}
+	st.ApplyNsdpWrite(nsdp.TagPortName, []byte{0x02}) // bare -> clears
+	if st.Ports[2].Description != nil {
+		t.Errorf("port 2 Description = %v after bare write, want nil", st.Ports[2].Description)
+	}
+}

@@ -43,19 +43,17 @@ const (
 	noPoEReadMsg = "NSDP has no PoE status tag (" + nsdpSweepEvidence + "); use the HTTP backend for PoE"
 )
 
-// fullDeviceTags is the tag set GetDevice requests to build an NsdpDevice in
-// one round trip -- identity, mgmt IP, per-port status/stats, VLANs/PVIDs, and
-// the QoS/mirroring/IGMP/broadcast-filtering/loop-detection tags. Ported from
-// Python's _FULL_DEVICE_TAGS. One tag the pin's list also carries is NOT here:
-// PORT_NAME (0xB000, per-port operator descriptions) -- the pin reads it into
-// NsdpDevice.port_names and surfaces it as PortStatus.name, whereas this
-// package has the write-side builder (write_tlv.go) but not yet the read
-// projection, parser, or NsdpDevice field. That NSDP read-side reconciliation
-// is tracked in the project ledger, not marked inline.
+// fullDeviceTags is every tag ParseDevice knows how to decode, requested
+// together so GetDevice returns the COMPLETE NsdpDevice in one round trip --
+// identity, mgmt IP, per-port status/names/stats, VLANs/PVIDs, and the QoS/
+// mirroring/IGMP/broadcast-filtering/loop-detection tags. Mirrors Python's
+// _FULL_DEVICE_TAGS exactly, including order (PORT_NAME sits at position 4,
+// between HOSTNAME and IP_ADDRESS).
 var fullDeviceTags = []Tag{
 	TagModel,
 	TagMAC,
 	TagHostname,
+	TagPortName,
 	TagIPAddress,
 	TagNetmask,
 	TagGateway,
@@ -146,6 +144,15 @@ func (r *Reader) device(ctx context.Context, tags []Tag) (model.NsdpDevice, erro
 // port name), LinkUp is s.Speed != LinkSpeedDown, and SpeedMbps is
 // s.Speed.SpeedMbps() or nil when that's 0 (Python's `speed_mbps or None`).
 func mapPorts(dev model.NsdpDevice) []model.PortStatus {
+	// PORT_STATUS carries no name, but PORT_NAME (0xB000) does; GetPorts
+	// requests both, so Name reports the same operator descriptions the HTTP
+	// backend does instead of a blanket nil. names[port] is nil for a port with
+	// no PORT_NAME TLV (map zero value) OR one that answered a bare port-only
+	// TLV (undescribed) -- both mirror Python's names.get(port) returning None.
+	names := make(map[int]*string, len(dev.PortNames))
+	for _, n := range dev.PortNames {
+		names[n.PortID] = n.Name
+	}
 	out := make([]model.PortStatus, 0, len(dev.PortStatus))
 	for _, s := range dev.PortStatus {
 		var speedMbps *int
@@ -154,7 +161,7 @@ func mapPorts(dev model.NsdpDevice) []model.PortStatus {
 		}
 		out = append(out, model.PortStatus{
 			Port:         s.PortID,
-			Name:         nil,
+			Name:         names[s.PortID],
 			AdminEnabled: true,
 			LinkUp:       s.Speed != model.LinkSpeedDown,
 			SpeedMbps:    speedMbps,
@@ -230,13 +237,13 @@ func mapMgmtIP(dev model.NsdpDevice) model.MgmtIPConfig {
 // GetPorts reads per-port link/speed status, mapped onto the shared
 // model.PortStatus type (see mapPorts for the exact field-mapping quirks).
 //
-// Requests, via device: TagPortCount, TagPortStatus (plus TagModel,
-// prepended by withModel). The pin's get_ports also requests PORT_NAME to
-// fill PortStatus.name; that read-side reconciliation is pending (see
-// fullDeviceTags' note), so this list is PORT_COUNT+PORT_STATUS for now and
-// every PortStatus.Name is left nil.
+// Requests, via device: TagPortCount, TagPortStatus, TagPortName (plus
+// TagModel, prepended by withModel), mirroring Python's
+// get_ports/[Tag.PORT_COUNT, Tag.PORT_STATUS, Tag.PORT_NAME] -- PORT_NAME
+// carries the per-port operator descriptions mapPorts folds into
+// PortStatus.Name.
 func (r *Reader) GetPorts(ctx context.Context) ([]model.PortStatus, error) {
-	dev, err := r.device(ctx, []Tag{TagPortCount, TagPortStatus})
+	dev, err := r.device(ctx, []Tag{TagPortCount, TagPortStatus, TagPortName})
 	if err != nil {
 		return nil, err
 	}

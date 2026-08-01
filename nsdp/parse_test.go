@@ -134,6 +134,50 @@ func TestParsePortPvidWrongLength(t *testing.T) {
 	}
 }
 
+func TestParsePortName(t *testing.T) {
+	// port byte + UTF-8 description
+	pn, err := nsdp.ParsePortName(append([]byte{0x06}, []byte("rumpus")...))
+	if err != nil {
+		t.Fatalf("ParsePortName: %v", err)
+	}
+	if pn.PortID != 6 || pn.Name == nil || *pn.Name != "rumpus" {
+		t.Errorf("ParsePortName = %+v (name %v), want PortID=6 name=rumpus", pn, pn.Name)
+	}
+
+	// a bare 1-byte TLV (port only) is how a real GS110EMX reports an
+	// undescribed port -> nil Name, NOT an empty string.
+	bare, err := nsdp.ParsePortName([]byte{0x03})
+	if err != nil {
+		t.Fatalf("ParsePortName(bare): %v", err)
+	}
+	if bare.PortID != 3 || bare.Name != nil {
+		t.Errorf("ParsePortName(bare) = %+v (name %v), want PortID=3 name=nil", bare, bare.Name)
+	}
+
+	// trailing NUL padding is stripped
+	padded, err := nsdp.ParsePortName(append([]byte{0x07}, []byte("lab\x00\x00")...))
+	if err != nil {
+		t.Fatalf("ParsePortName(padded): %v", err)
+	}
+	if padded.Name == nil || *padded.Name != "lab" {
+		t.Errorf("ParsePortName(padded) name = %v, want \"lab\"", padded.Name)
+	}
+
+	// NUL-only description strips to empty -> nil (undescribed)
+	nulOnly, err := nsdp.ParsePortName([]byte{0x08, 0x00})
+	if err != nil {
+		t.Fatalf("ParsePortName(nulOnly): %v", err)
+	}
+	if nulOnly.Name != nil {
+		t.Errorf("ParsePortName(nulOnly) name = %v, want nil", nulOnly.Name)
+	}
+
+	// empty value: the port byte is mandatory
+	if _, err := nsdp.ParsePortName(nil); err == nil || !strings.Contains(err.Error(), "at least 1 byte") {
+		t.Errorf("ParsePortName(empty) error = %v, want 'at least 1 byte'", err)
+	}
+}
+
 // --- test_parse_serial_requires_0x01_prefix ---
 
 func TestParseSerial(t *testing.T) {

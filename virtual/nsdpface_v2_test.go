@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/nsdp"
 )
 
@@ -167,5 +168,39 @@ func TestNsdpFaceV2LockoutCounterResetsAfterSuccess(t *testing.T) {
 	}
 	if face.authFailures != 0 {
 		t.Fatalf("authFailures = %d after a successful write, want 0 (counter did not reset)", face.authFailures)
+	}
+}
+
+// TestNsdpFaceServesPortNames is the Go-reader <-> Go-fake cross-check for
+// PORT_NAME: a real nsdp.Reader over a real UDPClient reads GetPorts from the
+// v2 GS110EMX fake over UDP loopback and sees the seeded per-port descriptions
+// (port 8 "rumpus", every other port undescribed/nil) folded into
+// PortStatus.Name -- exercising the fake's PORT_NAME projection, the wire
+// codec, ParsePortName, and mapPorts end to end.
+func TestNsdpFaceServesPortNames(t *testing.T) {
+	port, _ := startNsdpFace(t, SeedGS110EMX())
+	m, err := model.GetModel("gs110emx")
+	if err != nil {
+		t.Fatalf("GetModel(gs110emx): %v", err)
+	}
+	reader, err := nsdp.NewReader(nsdpTestClient(t, port), m)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	ports, err := reader.GetPorts(context.Background())
+	if err != nil {
+		t.Fatalf("GetPorts: %v", err)
+	}
+	byPort := map[int]model.PortStatus{}
+	for _, p := range ports {
+		byPort[p.Port] = p
+	}
+	if p8 := byPort[8]; p8.Name == nil || *p8.Name != "rumpus" {
+		t.Errorf("port 8 Name = %v, want \"rumpus\"", p8.Name)
+	}
+	for _, port := range []int{1, 2, 6, 9, 10} {
+		if p := byPort[port]; p.Name != nil {
+			t.Errorf("port %d Name = %v, want nil (undescribed)", port, p.Name)
+		}
 	}
 }

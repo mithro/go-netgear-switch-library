@@ -1073,6 +1073,22 @@ func (s *State) NsdpTlvs(tags map[nsdp.Tag]bool) []nsdp.TLVEntry {
 			out = append(out, nsdp.TLVEntry{Tag: nsdp.TagPortStatus, Value: []byte{byte(port), speedByte, 0x01}}) //nolint:gosec // port is a 1-based port number, always well under 256
 		}
 	}
+	if tags[nsdp.TagPortName] {
+		// One PORT_NAME TLV per port ALWAYS -- a real GS110EMX answers every
+		// port, emitting a bare 1-byte TLV (the port byte only) for an
+		// undescribed port; skipping those would make the mock's row count
+		// disagree with hardware. Description is the SAME per-port field the
+		// SNMP ifAlias / HTTP backends project (single source of truth, exactly
+		// as Python's sim.description feeds both IF_ALIAS and PORT_NAME).
+		for _, port := range sortedIntKeys(s.Ports) {
+			sim := s.Ports[port]
+			value := []byte{byte(port)} //nolint:gosec // port is a 1-based port number, always well under 256
+			if sim.Description != nil {
+				value = append(value, []byte(*sim.Description)...)
+			}
+			out = append(out, nsdp.TLVEntry{Tag: nsdp.TagPortName, Value: value})
+		}
+	}
 	if tags[nsdp.TagPortStatistics] {
 		// Real hardware returns a PORT_STATISTICS TLV for EVERY port, with
 		// zeroed counters on an idle port (verified on a real GS105PE, whose
@@ -1251,6 +1267,38 @@ func (s *State) ApplyNsdpWrite(tag nsdp.Tag, value []byte) {
 			s.Mgmt.Mode = "dhcp"
 		} else {
 			s.Mgmt.Mode = "static"
+		}
+	case nsdp.TagVLANDestroy:
+		// Write-only action carrying the 2-byte VLAN id (ngadmin
+		// ATTR_VLAN_DESTROY 0x2C00). Destroying a VLAN also drops every port's
+		// PVID that pointed at it back to the default VLAN 1 -- a PVID may not
+		// name a VLAN that no longer exists. Mirrors Python's apply_nsdp_write.
+		if len(value) < 2 {
+			return
+		}
+		vid := int(binary.BigEndian.Uint16(value[0:2]))
+		if _, ok := s.Vlans[vid]; ok {
+			delete(s.Vlans, vid)
+			for port, pv := range s.Pvids {
+				if pv == vid {
+					s.Pvids[port] = 1
+				}
+			}
+		}
+	case nsdp.TagPortName:
+		// Per-port operator description (0xB000). value is the port byte + the
+		// UTF-8 name; a bare 1-byte value clears the description (nil, not "").
+		// No NSDP writer emits this, but the fake applies it for parity with
+		// Python's apply_nsdp_write so a crafted PORT_NAME write round-trips.
+		if len(value) == 0 {
+			return
+		}
+		if sim := s.Ports[int(value[0])]; sim != nil {
+			if text := strings.TrimRight(string(value[1:]), "\x00"); text != "" {
+				sim.Description = &text
+			} else {
+				sim.Description = nil
+			}
 		}
 	}
 	// REBOOT / FACTORY_RESET / unrecognized tag: deliberate no-op.

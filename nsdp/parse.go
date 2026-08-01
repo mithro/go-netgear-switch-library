@@ -88,6 +88,30 @@ func ParsePortPvid(data []byte) (model.NsdpPortPvid, error) {
 	}, nil
 }
 
+// ParsePortName decodes a PORT_NAME TLV value (tag 0xB000): a 1-based port
+// byte followed by the operator description as UTF-8. Mirrors Python
+// protocols.nsdp.parsers.parse_port_name. A bare 1-byte TLV (the port byte
+// with no text) is how a real GS110EMX reports a port with NO description, so
+// it maps to a nil Name -- deliberately distinct from an empty-string
+// description a caller could not tell apart. Trailing NUL padding is stripped.
+// An empty value (0 bytes) is an error: the port byte is mandatory.
+//
+// The description bytes are taken as Go's native string (valid UTF-8 decodes
+// exactly as Python's utf-8 decode does; malformed UTF-8 follows Go's string
+// semantics rather than Python's per-byte errors="replace", the same already-
+// documented cross-language divergence as every other decoded text field).
+func ParsePortName(data []byte) (model.NsdpPortName, error) {
+	if len(data) == 0 {
+		return model.NsdpPortName{}, errNSDP("PORT_NAME TLV must be at least 1 byte, got 0")
+	}
+	text := strings.TrimRight(string(data[1:]), "\x00")
+	var name *string
+	if text != "" {
+		name = &text
+	}
+	return model.NsdpPortName{PortID: int(data[0]), Name: name}, nil
+}
+
 // ParseSerial decodes a SERIAL_NUMBER TLV value (tag 0x7800), mirroring
 // Python parsers.parse_serial: the first byte must be the fixed prefix 0x01,
 // and the remaining bytes are ASCII-decoded (non-ASCII bytes replaced with
@@ -274,6 +298,7 @@ func ParseDevice(packet Packet) (model.NsdpDevice, error) {
 		loopDetection      *bool
 
 		portStatus  []model.NsdpPortStatus
+		portNames   []model.NsdpPortName
 		portStats   []model.NsdpPortStatistics
 		vlanMembers []model.NsdpVlanMembership
 		pvids       []model.NsdpPortPvid
@@ -342,6 +367,12 @@ func ParseDevice(packet Packet) (model.NsdpDevice, error) {
 				return model.NsdpDevice{}, err
 			}
 			portStatus = append(portStatus, st)
+		case TagPortName:
+			pn, err := ParsePortName(tlv.Value)
+			if err != nil {
+				return model.NsdpDevice{}, err
+			}
+			portNames = append(portNames, pn)
 		case TagPortStatistics:
 			st, err := ParsePortStatistics(tlv.Value)
 			if err != nil {
@@ -411,6 +442,7 @@ func ParseDevice(packet Packet) (model.NsdpDevice, error) {
 		SerialNumber:       serialNumber,
 		VlanEngine:         vlanEngine,
 		PortStatus:         portStatus,
+		PortNames:          portNames,
 		PortStatistics:     portStats,
 		VlanMembers:        vlanMembers,
 		PortPvids:          pvids,
