@@ -204,6 +204,12 @@ type UDPClient struct {
 
 	mu       sync.Mutex
 	sequence uint32
+	// authScheme is the configured write-auth scheme: "auto" (detect via
+	// AUTH_V2_ENCPASS on the first write), "v1", or "v2". Default "auto".
+	// resolvedScheme caches the outcome ("v1"/"v2") after the first resolve
+	// so the ENCPASS read happens at most once. Both guarded by mu.
+	authScheme     string
+	resolvedScheme string
 
 	transceive transceiveFunc
 }
@@ -234,6 +240,20 @@ func WithClientMAC(mac []byte) Option { return func(c *UDPClient) { c.ClientMAC 
 // request-building, op-check, and CheckResult logic without a real socket.
 func withTransceiver(fn transceiveFunc) Option { return func(c *UDPClient) { c.transceive = fn } }
 
+// WithAuthScheme forces the write-auth scheme: "v1" (XOR password), "v2"
+// (salted token), or "auto" (the default: detect via AUTH_V2_ENCPASS on the
+// first write). Mirrors Python nsdp_udp.py's auth_scheme constructor keyword.
+// An unrecognized value is treated as "auto".
+func WithAuthScheme(scheme string) Option {
+	return func(c *UDPClient) {
+		if scheme == "v1" || scheme == "v2" {
+			c.authScheme = scheme
+		} else {
+			c.authScheme = "auto"
+		}
+	}
+}
+
 // NewUDPClient constructs a UDPClient for host, applying opts over the
 // documented defaults, then resolving ClientMAC per dossier §5.7's exact
 // precedence:
@@ -251,6 +271,7 @@ func NewUDPClient(host string, opts ...Option) (*UDPClient, error) {
 		ClientPort: DefaultClientPort,
 		ServerPort: DefaultServerPort,
 		Timeout:    DefaultTimeout,
+		authScheme: "auto",
 		transceive: realTransceive,
 	}
 	for _, opt := range opts {
@@ -372,7 +393,7 @@ func (c *UDPClient) Read(ctx context.Context, tags []Tag) (*Packet, error) {
 // so anything that isn't actually a WRITE_RESPONSE is rejected before its
 // Result field is ever consulted.
 func (c *UDPClient) Write(ctx context.Context, tlvs []TLVEntry, password string) (*Packet, error) {
-	req, err := BuildWriteRequest(c.ClientMAC, zeroMAC, c.nextSeq(), password, tlvs)
+	req, err := c.buildAuthWrite(ctx, tlvs, password)
 	if err != nil {
 		return nil, err
 	}
@@ -387,6 +408,81 @@ func (c *UDPClient) Write(ctx context.Context, tlvs []TLVEntry, password string)
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// firstTLVValue returns the value of the first TLV in packet with tag, or nil
+// if absent. Mirrors Python client.first_tlv_value.
+func firstTLVValue(packet Packet, tag Tag) []byte {
+	for _, t := range packet.TLVs {
+		if t.Tag == tag {
+			return t.Value
+		}
+	}
+	return nil
+}
+
+// resolveScheme returns the write-auth scheme ("v1" or "v2"), detecting it via
+// an AUTH_V2_ENCPASS read the FIRST time when configured "auto" and caching the
+// result so at most one ENCPASS read ever happens. A forced "v1"/"v2" skips the
+// read. Mirrors Python nsdp_udp.py's _resolve_scheme. The read runs without the
+// lock held (it does I/O); the cache write is serialized under mu.
+func (c *UDPClient) resolveScheme(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	if c.resolvedScheme != "" {
+		s := c.resolvedScheme
+		c.mu.Unlock()
+		return s, nil
+	}
+	forced := c.authScheme
+	c.mu.Unlock()
+
+	if forced == "v1" || forced == "v2" {
+		c.mu.Lock()
+		c.resolvedScheme = forced
+		c.mu.Unlock()
+		return forced, nil
+	}
+
+	resp, err := c.Read(ctx, []Tag{TagAuthV2Encpass})
+	if err != nil {
+		return "", err
+	}
+	scheme := "v1"
+	if EncpassIsV2(firstTLVValue(*resp, TagAuthV2Encpass)) {
+		scheme = "v2"
+	}
+	c.mu.Lock()
+	c.resolvedScheme = scheme
+	c.mu.Unlock()
+	return scheme, nil
+}
+
+// buildAuthWrite builds the authenticated WRITE_REQUEST for the resolved
+// scheme, mirroring Python nsdp_udp.py's _build_auth_write. For v2 it reads a
+// FRESH AUTH_V2_SALT (the switch rotates it every read), folds the token
+// against the salt and the switch's own MAC (the salt response's ServerMAC),
+// and builds the token-FIRST v2 write; for v1 it prepends the XOR password TLV.
+func (c *UDPClient) buildAuthWrite(ctx context.Context, tlvs []TLVEntry, password string) (Packet, error) {
+	scheme, err := c.resolveScheme(ctx)
+	if err != nil {
+		return Packet{}, err
+	}
+	if scheme == "v2" {
+		saltResp, err := c.Read(ctx, []Tag{TagAuthV2Salt})
+		if err != nil {
+			return Packet{}, err
+		}
+		salt := firstTLVValue(*saltResp, TagAuthV2Salt)
+		if len(salt) == 0 {
+			return Packet{}, errNSDP("switch selected NSDP v2 write auth but returned no AUTH_V2_SALT (0x0017)")
+		}
+		token, err := AuthV2Password(password, saltResp.ServerMAC, salt)
+		if err != nil {
+			return Packet{}, err
+		}
+		return BuildWriteRequestV2(c.ClientMAC, zeroMAC, c.nextSeq(), token, tlvs), nil
+	}
+	return BuildWriteRequest(c.ClientMAC, zeroMAC, c.nextSeq(), password, tlvs)
 }
 
 // Compile-time interface satisfaction checks.
