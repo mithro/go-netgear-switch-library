@@ -154,6 +154,34 @@ const (
 	// Actions (write-only)
 	TagReboot       Tag = 0x0013
 	TagFactoryReset Tag = 0x0400
+	// TagVLANDestroy (write-only, 2-byte VLAN id) destroys a VLAN. GROUNDED in
+	// ngadmin's C source (lib/src/vlan.c::ngadmin_VLANDestroy builds
+	// newShortAttr(ATTR_VLAN_DESTROY, vlan)) -- the evidence that replaced this
+	// library's earlier unproven "NSDP has no VLAN create/destroy tag" claim.
+	// Un-exercised on hardware; verify-after-write is the runtime guard.
+	TagVLANDestroy Tag = 0x2C00
+	// TagPortName (per-port description write, port byte + UTF-8 name) mirrors
+	// the read shape; un-exercised on hardware like TagVLANDestroy.
+	TagPortName Tag = 0xB000
+)
+
+// NSDP response error codes (the high byte of the 2-byte Result field, i.e.
+// Result >> 8) and their whole-value Result forms, mirroring Python
+// protocols/nsdp/write.py's RESULT_* and protocol.py's ERROR_* constants.
+// v1 (0x0700) has been handled since slice 05; the v2 codes below are
+// consumed once CheckResult is enriched to name the blamed attribute (see the
+// progress ledger's NSDP-v2 reconciliation scope).
+const (
+	ErrorDenied       = 0x07 // v1 XOR auth denied (ngadmin ERROR_DENIED)
+	ErrorReadOnly     = 0x03 // a READ named a write-only tag
+	ErrorWriteOnly    = 0x04 // a WRITE led with a write-only tag out of order
+	ErrorAuthRejected = 0x0D // v2 salted-auth token refused (error 13)
+	ErrorLocked       = 0x0E // v2 write lockout after repeated failures (error 14)
+
+	ResultBadPasswordV2 = 0x0D00
+	ResultLockedV2      = 0x0E00
+	ResultReadOnly      = 0x0300
+	ResultWriteOnly     = 0x0400
 )
 
 // errNSDP wraps model.ErrNSDP with a formatted message, mirroring the
