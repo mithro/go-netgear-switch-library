@@ -1,0 +1,96 @@
+package fastpath
+
+// coverage_test.go: direct unit tests for small helpers and the serial
+// transport's byte plumbing that the higher-level tests don't drive on every
+// branch. Real assertions, not coverage theater.
+
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+func TestDefaultSleep_ZeroReturnsImmediately(t *testing.T) {
+	if err := defaultSleep(context.Background(), 0); err != nil {
+		t.Fatalf("defaultSleep(0): %v", err)
+	}
+	if err := defaultSleep(context.Background(), -time.Second); err != nil {
+		t.Fatalf("defaultSleep(negative): %v", err)
+	}
+}
+
+func TestDefaultSleep_PositiveDurationSleeps(t *testing.T) {
+	start := time.Now()
+	if err := defaultSleep(context.Background(), 2*time.Millisecond); err != nil {
+		t.Fatalf("defaultSleep(2ms): %v", err)
+	}
+	if time.Since(start) < time.Millisecond {
+		t.Fatalf("defaultSleep(2ms) returned too fast")
+	}
+}
+
+func TestDefaultSleep_CancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := defaultSleep(ctx, 0); err == nil {
+		t.Fatalf("defaultSleep(0, cancelled): want ctx err, got nil")
+	}
+	if err := defaultSleep(ctx, time.Hour); err == nil {
+		t.Fatalf("defaultSleep(1h, cancelled): want ctx err, got nil")
+	}
+}
+
+func TestFormatPointerHelpers(t *testing.T) {
+	if got := derefOrEmpty(nil); got != "" {
+		t.Fatalf("derefOrEmpty(nil) = %q, want \"\"", got)
+	}
+	s := "hi"
+	if got := derefOrEmpty(&s); got != "hi" {
+		t.Fatalf("derefOrEmpty(&s) = %q, want \"hi\"", got)
+	}
+	if got := formatIntPtr(nil); got != "none" {
+		t.Fatalf("formatIntPtr(nil) = %q, want \"none\"", got)
+	}
+	n := 42
+	if got := formatIntPtr(&n); got != "42" {
+		t.Fatalf("formatIntPtr(&42) = %q, want \"42\"", got)
+	}
+	if got := formatStrPtr(nil); got != "none" {
+		t.Fatalf("formatStrPtr(nil) = %q, want \"none\"", got)
+	}
+	if got := formatStrPtr(&s); got != `"hi"` {
+		t.Fatalf("formatStrPtr(&s) = %q, want quoted", got)
+	}
+	if got := formatIntList([]int{1, 2, 3}); got != "[1, 2, 3]" {
+		t.Fatalf("formatIntList([1,2,3]) = %q", got)
+	}
+	if got := formatIntList(nil); got != "[]" {
+		t.Fatalf("formatIntList(nil) = %q, want \"[]\"", got)
+	}
+}
+
+func TestSerialTransport_WriteReadCloseViaFakePort(t *testing.T) {
+	port := &fakeSerialPort{}
+	tr := &serialTransport{port: port}
+
+	n, err := tr.Write([]byte("show version\r\n"))
+	if err != nil || n == 0 {
+		t.Fatalf("serialTransport.Write: n=%d err=%v", n, err)
+	}
+	if len(port.writes) != 1 || port.writes[0] != "show version\r\n" {
+		t.Fatalf("fake port did not receive the write: %v", port.writes)
+	}
+
+	// A timed-out read (fake returns (0,nil)) surfaces as (0, nil) pre-Close.
+	buf := make([]byte, 8)
+	if rn, rerr := tr.Read(buf); rn != 0 || rerr != nil {
+		t.Fatalf("pre-Close Read: want (0,nil), got (%d,%v)", rn, rerr)
+	}
+
+	if err := tr.Close(); err != nil {
+		t.Fatalf("serialTransport.Close: %v", err)
+	}
+	if !port.closed {
+		t.Fatalf("Close did not close the underlying port")
+	}
+}
