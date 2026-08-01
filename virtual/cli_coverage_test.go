@@ -51,14 +51,19 @@ func TestCliFaceCyclePoEDrivesApplyPoeReset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Pick a PoE port from the seed.
-	var poePort int
-	for p := range st.Poe {
-		poePort = p
-		break
+	// Pick a PoE port with an actual powered device (PowerMw != 0) so that
+	// after the off->reset->on cycle it returns to "delivering" (a reset does
+	// not conjure a PD onto an empty port -- that would end in "searching" and
+	// the cycle's delivering-verify would never be satisfied). Deterministic:
+	// lowest such port number, not map-iteration order.
+	poePort := 0
+	for p, psim := range st.Poe {
+		if psim.PowerMw != 0 && (poePort == 0 || p < poePort) {
+			poePort = p
+		}
 	}
 	if poePort == 0 {
-		t.Skip("no PoE ports seeded for gsm7252ps")
+		t.Skip("no delivering PoE port seeded for gsm7252ps")
 	}
 	if err := writer.CyclePoE(context.Background(), poePort, fastpath.DefaultPoeCycleTimeouts(), true); err != nil {
 		t.Fatalf("CyclePoE: %v", err)
