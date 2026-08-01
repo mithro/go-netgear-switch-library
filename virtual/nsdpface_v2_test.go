@@ -53,3 +53,47 @@ func TestNsdpFaceV2WriteRoundTrip(t *testing.T) {
 		t.Fatalf("v2 write not applied to shared state: Pvids[1] = %d, want 5", st.Pvids[1])
 	}
 }
+
+// TestNsdpFaceV1WriteRoundTrip covers the fake's v1 write path (a Plus SKU,
+// NsdpAuthV2 false): the client auto-detects v1 via AUTH_V2_ENCPASS=0x01 and
+// sends the XOR PASSWORD write.
+func TestNsdpFaceV1WriteRoundTrip(t *testing.T) {
+	st := SeedGS105PE() // v1 (NsdpAuthV2 == false)
+	port, face := startNsdpFace(t, st)
+	client := nsdpTestClient(t, port)
+	ctx := context.Background()
+
+	pvid, _ := nsdp.PvidTLV(1, 5)
+	if _, err := client.Write(ctx, []nsdp.TLVEntry{pvid}, st.NsdpPassword); err != nil {
+		t.Fatalf("v1 write round-trip failed: %v", err)
+	}
+	if _, err := client.Write(ctx, []nsdp.TLVEntry{pvid}, "wrong-v1-pw"); err == nil {
+		t.Fatal("wrong v1 password was accepted")
+	}
+	if err := face.Stop(); err != nil {
+		t.Fatalf("face.Stop: %v", err)
+	}
+	if st.Pvids[1] != 5 {
+		t.Fatalf("v1 write not applied: Pvids[1] = %d, want 5", st.Pvids[1])
+	}
+}
+
+// TestNsdpFaceV2PasswordReadIsWriteOnly covers the readResponse write-only
+// branch: a READ naming AUTH_V2_PASSWORD (0x001A) comes back with error 3
+// (read-only) blamed on that tag. The client itself does not raise on a read
+// result code (reads work even when writes are locked, matching the pin), so
+// the caller inspects the response's Result.
+func TestNsdpFaceV2PasswordReadIsWriteOnly(t *testing.T) {
+	port, _ := startNsdpFace(t, SeedGS110EMX())
+	client := nsdpTestClient(t, port)
+	resp, err := client.Read(context.Background(), []nsdp.Tag{nsdp.TagAuthV2Password})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if resp.Result != nsdp.ResultReadOnly {
+		t.Fatalf("Result = %#04x, want ResultReadOnly (%#04x)", resp.Result, nsdp.ResultReadOnly)
+	}
+	if resp.ErrorAttr != uint16(nsdp.TagAuthV2Password) {
+		t.Fatalf("ErrorAttr = %#x, want AUTH_V2_PASSWORD (%#x)", resp.ErrorAttr, uint16(nsdp.TagAuthV2Password))
+	}
+}

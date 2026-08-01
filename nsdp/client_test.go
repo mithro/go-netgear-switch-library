@@ -604,3 +604,29 @@ func TestUDPClient_V2NegotiationDrivesTokenFirstWrite(t *testing.T) {
 		t.Fatalf("config TLV (PVID) must follow the token: %+v", sawWrite.TLVs)
 	}
 }
+
+func TestCheckResult_AllBranches(t *testing.T) {
+	if err := CheckResult(Packet{Result: ResultSuccess}); err != nil {
+		t.Errorf("success: want nil, got %v", err)
+	}
+	wantSubstr(t, CheckResult(Packet{Result: ResultLockedV2, ErrorAttr: uint16(TagPortPVID)}), "locked out")
+	wantSubstr(t, CheckResult(Packet{Result: ResultReadOnly, ErrorAttr: uint16(TagAuthV2Password)}), "not readable")
+	wantSubstr(t, CheckResult(Packet{Result: ResultWriteOnly}), "not writable")
+	// error 13 on a non-PASSWORD attribute is a genuine bad password (not the
+	// v1-to-v2 wiring hint).
+	wantSubstr(t, CheckResult(Packet{Result: ResultBadPasswordV2, ErrorAttr: uint16(TagAuthV2Password)}), "bad password")
+}
+
+func TestWithAuthScheme_NormalizesInvalid(t *testing.T) {
+	c, err := NewUDPClient("127.0.0.1", WithAuthScheme("bogus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.authScheme != "auto" {
+		t.Errorf("WithAuthScheme(\"bogus\") -> %q, want \"auto\"", c.authScheme)
+	}
+	c2, _ := NewUDPClient("127.0.0.1", WithAuthScheme("v2"))
+	if c2.authScheme != "v2" {
+		t.Errorf("WithAuthScheme(\"v2\") -> %q, want \"v2\"", c2.authScheme)
+	}
+}
