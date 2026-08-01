@@ -5,11 +5,38 @@ package virtual
 // assertions on real behavior, not coverage theater.
 
 import (
+	"io"
+	"net"
 	"strconv"
 	"testing"
 
 	"github.com/gosnmp/gosnmp"
 )
+
+func TestTelnetServerConn_WriteEscapesIAC(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	got := make(chan []byte, 1)
+	go func() {
+		buf, _ := io.ReadAll(c2)
+		got <- buf
+	}()
+	tc := newTelnetServerConn(c1)
+	n, err := tc.Write([]byte{telnetIAC, 'a', telnetIAC})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("Write returned n=%d, want 3", n)
+	}
+	c1.Close()
+	wire := <-got
+	want := []byte{telnetIAC, telnetIAC, 'a', telnetIAC, telnetIAC}
+	if string(wire) != string(want) {
+		t.Fatalf("wire bytes = % x, want % x", wire, want)
+	}
+}
 
 func TestFromWireValue_AllTypes(t *testing.T) {
 	cases := []struct {

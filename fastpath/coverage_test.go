@@ -7,9 +7,38 @@ package fastpath
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"testing"
 	"time"
 )
+
+func TestTelnetConn_WriteEscapesIAC(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	got := make(chan []byte, 1)
+	go func() {
+		buf, _ := io.ReadAll(c2)
+		got <- buf
+	}()
+	tc := &telnetConn{conn: c1}
+	// Data with a literal 0xFF must be doubled (IAC IAC) on the wire.
+	n, err := tc.Write([]byte{tnIAC, 'a', tnIAC})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("Write returned n=%d, want 3 (caller byte count, not escaped)", n)
+	}
+	c1.Close()
+	wire := <-got
+	// 0xFF 'a' 0xFF -> 0xFF 0xFF 'a' 0xFF 0xFF (each IAC doubled).
+	want := []byte{tnIAC, tnIAC, 'a', tnIAC, tnIAC}
+	if string(wire) != string(want) {
+		t.Fatalf("wire bytes = % x, want % x", wire, want)
+	}
+}
 
 func TestDefaultSleep_ZeroReturnsImmediately(t *testing.T) {
 	if err := defaultSleep(context.Background(), 0); err != nil {
