@@ -65,6 +65,27 @@ func BuildWriteRequest(clientMAC, serverMAC []byte, sequence uint32, password st
 	return pkt, nil
 }
 
+// BuildWriteRequestV2 builds a v2-authenticated WRITE_REQUEST: the 8-byte
+// AUTH_V2_PASSWORD (0x001A) token FIRST, then the config TLVs. Mirrors Python
+// write.build_write_request_v2. The token ordering is LOAD-BEARING and
+// live-verified on a GS110EMX: leading with the token authenticates and
+// applies the write (result 0); trailing it after the config change is
+// rejected error 13, and leading with a malformed token is error 4. The
+// caller must have just read a fresh AUTH_V2_SALT so the token (computed via
+// AuthV2Password) matches the switch's stored challenge. No error return: the
+// token is pre-computed bytes, unlike the v1 builder's ASCII-password encode.
+func BuildWriteRequestV2(clientMAC, serverMAC []byte, sequence uint32, authToken []byte, tlvs []TLVEntry) Packet {
+	pkt := Packet{
+		Op:        OpWriteRequest,
+		ClientMAC: clientMAC,
+		ServerMAC: serverMAC,
+		Sequence:  sequence,
+	}
+	pkt.TLVs = append(pkt.TLVs, TLVEntry{Tag: TagAuthV2Password, Value: authToken})
+	pkt.TLVs = append(pkt.TLVs, tlvs...)
+	return pkt
+}
+
 // PvidTLV builds a PORT_PVID TLV (tag 0x3000): port (1 byte) + VLAN ID
 // (big-endian uint16), mirroring Python write.pvid_tlv's
 // `bytes([port]) + struct.pack(">H", vlan)`.

@@ -74,3 +74,25 @@ func TestPacketErrorAttrRoundTrip(t *testing.T) {
 		t.Fatalf("request ErrorAttr = %#x, want 0", rgot.ErrorAttr)
 	}
 }
+
+func TestBuildWriteRequestV2_TokenFirst(t *testing.T) {
+	token := []byte{0xc4, 0xaf, 0x7c, 0x00, 0xa6, 0xc4, 0x1a, 0x7d}
+	pvid, _ := PvidTLV(1, 90)
+	pkt := BuildWriteRequestV2([]byte{1, 2, 3, 4, 5, 6}, zeroMAC, 3, token, []TLVEntry{pvid})
+	if pkt.Op != OpWriteRequest {
+		t.Fatalf("op = %v, want WriteRequest", pkt.Op)
+	}
+	if len(pkt.TLVs) != 2 {
+		t.Fatalf("TLV count = %d, want 2 (token + pvid)", len(pkt.TLVs))
+	}
+	// The AUTH_V2_PASSWORD token MUST be first (load-bearing ordering).
+	if pkt.TLVs[0].Tag != TagAuthV2Password {
+		t.Fatalf("TLVs[0].Tag = %#x, want TagAuthV2Password FIRST", pkt.TLVs[0].Tag)
+	}
+	if !bytes.Equal(pkt.TLVs[0].Value, token) {
+		t.Fatalf("token = % x, want % x", pkt.TLVs[0].Value, token)
+	}
+	if pkt.TLVs[1].Tag != TagPortPVID {
+		t.Fatalf("TLVs[1].Tag = %#x, want the config TLV (PVID) after the token", pkt.TLVs[1].Tag)
+	}
+}
