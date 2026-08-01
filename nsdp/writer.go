@@ -13,9 +13,12 @@ package nsdp
 // before/after on mismatch) -- never a raw client Read call directly,
 // mirroring Python's NsdpWriter holding its own private NsdpReader.
 // Disruptive per-port writes to a protected port are refused unless
-// force=true. Writes NSDP has no tag for (PoE, per-port admin, VLAN
-// create/delete) return an error wrapping model.ErrUnsupportedCapability --
-// never a silent no-op.
+// force=true. VLAN create/delete ARE supported over NSDP (create = write an
+// empty VLAN_MEMBERS record for a not-yet-listed id; delete = the
+// VLAN_DESTROY action tag 0x2C00), matching the pin's nsdp_write.py, which
+// replaced its own earlier unproven "NSDP has no VLAN create/destroy tag"
+// refusal. Writes NSDP genuinely has no tag for (PoE, per-port admin) return
+// an error wrapping model.ErrUnsupportedCapability -- never a silent no-op.
 //
 // NOTE on scope: Python's NsdpWriter also defines cycle_poe/clear_poe_fault
 // (both unconditionally raising the same PoE-unsupported error as set_poe,
@@ -48,18 +51,15 @@ import (
 // instead of duplicating the string.
 const NoPoEWriteMsg = "NSDP has no PoE control tag; use the HTTP backend (Slice 6) for PoE"
 
-// Exact unsupported-write messages for the two remaining unsupported
-// writes, mirroring Python nsdp_write.py's _NO_PORT_ADMIN/
-// _NO_VLAN_LIFECYCLE module constants verbatim. Unexported: nothing outside
-// this package needs to reproduce these two messages independently (unlike
-// NoPoEWriteMsg above).
-const (
-	noPortAdminMsg = "no per-port admin-enable is available on these Plus models: NSDP has no " +
-		"admin-enable tag, and the web UI has no grounded port-enable endpoint " +
-		"(UNVERIFIED-pending-capture)"
-	noVLANLifecycleMsg = "NSDP has no VLAN create/destroy tag on these Plus models; only VLAN " +
-		"membership/PVID are writable over NSDP"
-)
+// noPortAdminMsg is the exact unsupported-write message for the one
+// remaining unsupported per-port write, mirroring Python nsdp_write.py's
+// _NO_PORT_ADMIN module constant verbatim. Unexported: nothing outside this
+// package needs to reproduce it independently (unlike NoPoEWriteMsg above).
+// (The pin's former _NO_VLAN_LIFECYCLE constant is gone -- VLAN create/delete
+// are now implemented over NSDP; see CreateVlan/DeleteVlan below.)
+const noPortAdminMsg = "no per-port admin-enable is available on these Plus models: NSDP has no " +
+	"admin-enable tag, and the web UI has no grounded port-enable endpoint " +
+	"(UNVERIFIED-pending-capture)"
 
 // unsupportedWrite wraps model.ErrUnsupportedCapability with msg verbatim,
 // mirroring Python's raise UnsupportedCapabilityError(msg).
@@ -396,18 +396,95 @@ func (w *Writer) SetPortEnabled(_ context.Context, _ int, _ bool, _ bool) error 
 	return unsupportedWrite(noPortAdminMsg)
 }
 
-// CreateVlan always returns an error wrapping
-// model.ErrUnsupportedCapability: NSDP has no VLAN create/destroy tag on
-// these Plus models. Mirrors Python's NsdpWriter.create_vlan. Every
-// parameter is accepted-but-unused; see SetPoE's doc comment.
-func (w *Writer) CreateVlan(_ context.Context, _ int, _ string) error {
-	return unsupportedWrite(noVLANLifecycleMsg)
+// vlanIDs projects a VLAN list to just its ids, mirroring the
+// `[v.vlan_id for v in vlans]` comprehensions Python's create_vlan/
+// delete_vlan put in their WriteVerificationError before/after payloads.
+func vlanIDs(vlans []model.VLANInfo) []int {
+	out := make([]int, len(vlans))
+	for i := range vlans {
+		out[i] = vlans[i].VlanID
+	}
+	return out
 }
 
-// DeleteVlan always returns an error wrapping
-// model.ErrUnsupportedCapability: NSDP has no VLAN create/destroy tag on
-// these Plus models. Mirrors Python's NsdpWriter.delete_vlan. Every
-// parameter is accepted-but-unused; see SetPoE's doc comment.
-func (w *Writer) DeleteVlan(_ context.Context, _ int, _ bool) error {
-	return unsupportedWrite(noVLANLifecycleMsg)
+// CreateVlan creates vlanID by writing an EMPTY VLAN_MEMBERS record for it,
+// then verifies it appears in the device's VLAN table. Ported from Python's
+// NsdpWriter.create_vlan.
+//
+// NSDP has no separate "add VLAN" action: the 802.1Q table is exactly the
+// set of ids carrying a VLAN_MEMBERS (0x2800) record, so writing one for an
+// id the switch does not yet list IS the create (ngadmin does the same --
+// ngadmin_setVLANDotConf only ever writes the membership attribute). name is
+// accepted and IGNORED: the tag carries a VLAN id and two port bitmaps, no
+// name field, and no name tag exists in the measured inventory -- a name is
+// silently unstorable here rather than pretended. Unlike Python's signature
+// this backend method takes no force parameter (Python accepts one but
+// del's it: creating an empty VLAN moves no port, so there is nothing to
+// protect). An id already present is a no-op return (no write, no error),
+// exactly like Python's early `return`.
+func (w *Writer) CreateVlan(ctx context.Context, vlanID int, name string) error {
+	_ = name // see doc comment: no name tag exists; silently unstorable.
+	existing, err := w.reader.GetVLANs(ctx)
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(existing, func(v model.VLANInfo) bool { return v.VlanID == vlanID }) {
+		return nil // already present: creating it again is a no-op, not an error
+	}
+	tlv, err := VlanMembersTLV(vlanID, nil, nil, w.model.PortCount)
+	if err != nil {
+		return err
+	}
+	if _, err := w.client.Write(ctx, []TLVEntry{tlv}, w.password); err != nil {
+		return err
+	}
+	after, err := w.reader.GetVLANs(ctx)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(after, func(v model.VLANInfo) bool { return v.VlanID == vlanID }) {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("VLAN %d was not created over NSDP", vlanID),
+			Before: nil,
+			After:  vlanIDs(after),
+		}
+	}
+	return nil
+}
+
+// DeleteVlan deletes vlanID with the VLAN_DESTROY action tag (0x2C00), then
+// verifies it is gone from the device's VLAN table. Ported from Python's
+// NsdpWriter.delete_vlan.
+//
+// Grounded in ngadmin's ngadmin_VLANDestroy (see VLANDestroyTLV). Deleting a
+// VLAN drops every member port out of it, so it is force-gated exactly like
+// the other disruptive writes: force=false ALWAYS refuses (wrapping
+// model.ErrProtectedPort), regardless of whether any port is individually
+// protected -- the whole VLAN is the blast radius. verify-after-write is the
+// runtime guard.
+func (w *Writer) DeleteVlan(ctx context.Context, vlanID int, force bool) error {
+	if !force {
+		return fmt.Errorf(
+			"deleting VLAN %d removes every member port from it; pass force=True to override: %w",
+			vlanID, model.ErrProtectedPort)
+	}
+	before, err := w.reader.GetVLANs(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := w.client.Write(ctx, []TLVEntry{VLANDestroyTLV(vlanID)}, w.password); err != nil {
+		return err
+	}
+	after, err := w.reader.GetVLANs(ctx)
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(after, func(v model.VLANInfo) bool { return v.VlanID == vlanID }) {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("VLAN %d was not deleted over NSDP", vlanID),
+			Before: vlanIDs(before),
+			After:  vlanIDs(after),
+		}
+	}
+	return nil
 }

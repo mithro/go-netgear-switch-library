@@ -3,9 +3,9 @@ package nsdp
 // write_tlv.go: standalone value-TLV builders for the write TLVs the
 // 1841111->7ebfe5d re-pin added, ported from pin protocols/nsdp/write.py's
 // vlan_destroy_tlv / port_name_tlv (both pure, no I/O). They mirror the pin's
-// own standalone-function structure; the Writer wiring that calls them
-// (DeleteVlan via VLAN_DESTROY, a per-port description write) is the remaining
-// NSDP-v2/tag-surface reconciliation step -- see the progress ledger.
+// own standalone-function structure. VLANDestroyTLV is wired into
+// Writer.DeleteVlan (writer.go); PortNameTLV has no writer method yet (the
+// pin exposes no per-port-name write on NsdpWriter either).
 
 import "encoding/binary"
 
