@@ -490,7 +490,12 @@ func ScpProfile(m *model.SwitchModel) (*ScpCertProfile, error) {
 	}
 	profile, ok := scpCertProfiles[m.Key]
 	if !ok {
-		return nil, fmt.Errorf("model %q has no known copy-scp SSL-certificate deploy profile: %w", m.Key, model.ErrUnsupportedCapability)
+		// Today this branch only ever fires for gsm7228ps (the other 3 CLI
+		// models all carry a profile, dossier §1.7) -- a REAL mechanism
+		// difference, not a missing Go feature: quoting the pin's own
+		// justification (commands.py:365-366) verbatim so a caller sees WHY,
+		// not just that the lookup failed.
+		return nil, fmt.Errorf("model %q has no known copy-scp SSL-certificate deploy profile (the Smart Managed Pro line uses an HTTP multipart upload instead and is deliberately absent here): %w", m.Key, model.ErrUnsupportedCapability)
 	}
 	return profile, nil
 }

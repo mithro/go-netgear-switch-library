@@ -1,17 +1,18 @@
-// writer.go: CliWriter -- shared write-op helpers plus the VLAN lifecycle
-// (CreateVLAN/DeleteVLAN/SetVLANMembership) and SetPVID, ported field-for-
-// field from the pinned python-netgear-switch-library @
+// writer.go: CliWriter -- shared write-op helpers, the VLAN lifecycle
+// (CreateVLAN/DeleteVLAN/SetVLANMembership) and SetPVID (Task 9, dossier
+// §4.1-§4.5), plus PoE (SetPoE/CyclePoE/ClearPoEFault), SetPortEnabled,
+// SetMgmtIP and Reboot (Task 10, dossier §4.6-§4.9). Ported field-for-field
+// from the pinned python-netgear-switch-library @
 // 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362, src/netgear_switch/cli_write.py
-// (666 lines), dossier §4.1-§4.5 (protocol dossier
+// (666 lines), dossier (protocol dossier
 // docs/superpowers/plans/2026-08-01-slice-07-dossier-cli-protocol.md). Any
 // discrepancy between this file and the pin is a bug in this file, not a
 // deliberate deviation, unless called out in a comment.
 //
-// PoE/port-admin/mgmt-IP/reboot (dossier §4.6-§4.9, cli_write.py's
-// remaining CliWriter methods) are Task 10's job, added to this SAME Writer
-// type in a sibling file -- the constructor, guard, generalMode prelude and
-// the vlan()/portMode() before/after-snapshot helpers below are shared by
-// both files since VLAN/PVID writes are the first to need them.
+// The SCP certificate deploy (dossier §4.10, cli_write.py's module-level
+// deploy_certificate_scp) lives in cert_scp.go instead, since it is NOT a
+// Writer method at all in the pin -- a standalone function over a raw
+// Session -- see that file's doc comment.
 //
 // The `run`/`inMode` config-mode accept/reject convention this file relies
 // on is already ported in session.go (Task 5, mirroring Python
@@ -22,13 +23,16 @@ package fastpath
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mithro/go-netgear-switch-library/model"
+	"github.com/mithro/go-netgear-switch-library/snmp"
 )
 
 // Writer is a model-driven FASTPATH CLI write facade over one already-
@@ -45,6 +49,88 @@ type Writer struct {
 	model          *model.SwitchModel
 	protectedPorts map[int]bool
 	reader         *Reader
+
+	// clock/sleep are the injectable time seam SetPoE/CyclePoE/
+	// ClearPoEFault's verify-after-write poll loops use (Task 10, dossier
+	// §4.6) -- default to time.Now/defaultSleep, mirroring
+	// snmp.Writer.clock/sleep (snmp/writer.go, snmp/writer_cycle.go)
+	// exactly, including the WithClock option below. Every other Writer
+	// method (VLAN/PVID, Task 9; SetPortEnabled/SetMgmtIP/Reboot, Task 10)
+	// ignores these -- their verification is a single immediate read, never
+	// a poll.
+	clock func() time.Time
+	sleep func(ctx context.Context, d time.Duration) error
+}
+
+// PoeCycleTimeouts is aliased from snmp.PoeCycleTimeouts, so
+// CyclePoE/ClearPoEFault's signatures match the root package's
+// BackendWriter interface (write_dispatch.go: `timeouts
+// snmp.PoeCycleTimeouts`) EXACTLY -- a future fastpath backend wiring can
+// satisfy BackendWriter with zero adapter code. Mirrors the root package's
+// own alias.go re-export of the identical type. fastpath already imports
+// snmp for parseVersion's DetectModelFromSysDescr reuse (parse.go), so this
+// introduces no new cross-package dependency.
+type PoeCycleTimeouts = snmp.PoeCycleTimeouts
+
+// DefaultPoeCycleTimeouts returns the production PoE-cycle deadlines (30s
+// off / 60s on / 2s poll), mirroring Python's module-level
+// _DEFAULT_POE_TIMEOUTS = PoeCycleTimeouts() (cli_write.py) -- the same
+// numeric defaults as snmp.DefaultPoeCycleTimeouts, reused directly rather
+// than redeclared. SetPoE (whose public signature has no timeouts
+// parameter, matching BackendWriter.SetPoE exactly) always polls with
+// these; CyclePoE/ClearPoEFault take timeouts as an explicit per-call
+// parameter instead (matching BackendWriter.CyclePoE/ClearPoEFault), so a
+// caller wanting non-default SetPoE deadlines has no seam for that today --
+// same limitation the pin's own Go-facing surface would have if it dropped
+// the keyword-only timeouts parameter the same way.
+func DefaultPoeCycleTimeouts() PoeCycleTimeouts {
+	return snmp.DefaultPoeCycleTimeouts()
+}
+
+// defaultSleep is the production Sleep implementation: waits for d (a
+// no-op if d <= 0) unless ctx is cancelled first, in which case it returns
+// ctx.Err() -- identical to snmp package's defaultSleep (snmp/
+// writer_cycle.go), duplicated here rather than exported from snmp since
+// it is a private implementation detail of the polling seam, not part of
+// that package's public API.
+func defaultSleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// WithClock overrides the Writer's time source and poll-sleep function --
+// the injectable clock/sleep seam SetPoE/CyclePoE/ClearPoEFault's poll
+// loops use, mirroring Python's set_poe/cycle_poe/clear_poe_fault accepting
+// clock=time.monotonic/sleep=time.sleep as per-call keyword arguments, but
+// as a Writer-level (constructor-time) option instead -- the identical
+// adaptation snmp.WithClock already makes (snmp/writer_cycle.go) for the
+// SAME reason: tests inject a fake now/sleep pair to drive the poll state
+// machine deterministically with zero real wall-clock delay. Either
+// argument may be nil to leave that seam at its default (time.Now /
+// defaultSleep).
+func WithClock(now func() time.Time, sleep func(ctx context.Context, d time.Duration) error) WriterOption {
+	return func(w *Writer) {
+		if now != nil {
+			w.clock = now
+		}
+		if sleep != nil {
+			w.sleep = sleep
+		}
+	}
 }
 
 // WriterOption configures optional Writer construction parameters (only
@@ -85,6 +171,8 @@ func NewWriter(session Session, m *model.SwitchModel, opts ...WriterOption) (*Wr
 		model:          m,
 		protectedPorts: make(map[int]bool),
 		reader:         reader,
+		clock:          time.Now,
+		sleep:          defaultSleep,
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -426,4 +514,384 @@ func formatIntPtr(p *int) string {
 		return "none"
 	}
 	return strconv.Itoa(*p)
+}
+
+// ---------------------------------------------------------------------
+// PoE (dossier §4.6) -- the m4300-24x device-limit gate
+// ---------------------------------------------------------------------
+
+// requirePoE mirrors Python CliWriter._require_poe (dossier §4.6,
+// cli_write.py:419-439): the write-side echo of GetPoE's read-side gate
+// (reader.go's unsupportedReadOp, "PoE (model has no PSE ports)") -- the
+// SAME underlying hardware fact. This is a REAL device limitation, not a
+// missing op to build: the M4300-24X has zero PSE ports and its firmware
+// therefore does not carry the `poe` command at ALL, live-probed 2026-07-30
+// on 10.1.5.13 ("poe ?" in interface config mode answers "%% Unrecognized
+// command", vs full help on the PoE-equipped M4300-16X). SetPoE/CyclePoE/
+// ClearPoEFault all reach this before issuing a single command on a gated
+// model -- SetPoE calls it FIRST (before its own guard); CyclePoE/
+// ClearPoEFault call their shared guard FIRST and only reach this via
+// poeReset second, exactly mirroring the pin's differing call order for
+// the two shapes (cli_write.py:441-569).
+func (w *Writer) requirePoE() error {
+	if w.model.PoEPortCount == 0 {
+		return fmt.Errorf(
+			"model %q has no PSE ports, so its firmware has no 'poe' command (verified live: 'poe ?' -> '%% Unrecognized command'): %w",
+			w.model.Key, model.ErrUnsupportedCapability,
+		)
+	}
+	return nil
+}
+
+// poeStatus returns port's current PoE status via w's internal reader, or
+// nil if the port is absent from the table, mirroring Python
+// CliWriter._poe_status (cli_write.py:414-416).
+func (w *Writer) poeStatus(ctx context.Context, port int) (*model.PoEStatus, error) {
+	statuses, err := w.reader.GetPoE(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range statuses {
+		if statuses[i].Port == port {
+			return &statuses[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// portStatus returns port's current operational status via w's internal
+// reader, or nil if the port is absent from the table, mirroring Python
+// CliWriter._port_status (cli_write.py:596-597, used by SetPortEnabled
+// below).
+func (w *Writer) portStatus(ctx context.Context, port int) (*model.PortStatus, error) {
+	statuses, err := w.reader.GetPorts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range statuses {
+		if statuses[i].Port == port {
+			return &statuses[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// SetPoE sets port's PoE admin state to on and polls until it reads back
+// correctly. Ported from Python CliWriter.set_poe (cli_write.py:441-487,
+// dossier §4.6).
+//
+// requirePoE() runs FIRST, before guard -- a gated model (m4300-24x) never
+// even reaches the protected-port check. guard(port, force) fires ONLY
+// when turning PoE OFF (on == false); enabling PoE is never refused, even
+// on a protected port. Command sequence: `configure` -> `interface
+// <iface>` -> `poe` (on) or `no poe` (off) -> `exit` `exit`.
+//
+// Verification POLLS rather than reading once immediately: dossier §4.6
+// documents a MEASURED hardware fact -- PoE detect state lags the admin
+// write, so an immediate single read can report a WORKING write as a
+// failure. Deadline = w.clock() + DefaultPoeCycleTimeouts().Off (turning
+// off) or .On (turning on); the loop checks the predicate BEFORE ever
+// sleeping.
+func (w *Writer) SetPoE(ctx context.Context, port int, on bool, force bool) error {
+	if err := w.requirePoE(); err != nil {
+		return err
+	}
+	if !on {
+		if err := w.guard(port, force); err != nil {
+			return err
+		}
+	}
+	before, err := w.poeStatus(ctx, port)
+	if err != nil {
+		return err
+	}
+	if err := inMode(
+		ctx, w.session,
+		[]string{w.spec.ConfigureCmd, w.spec.Interface(port)},
+		[]string{w.spec.PoeAdmin(on)},
+		w.spec.ExitCmd,
+	); err != nil {
+		return err
+	}
+	timeouts := DefaultPoeCycleTimeouts()
+	limit := timeouts.On
+	if !on {
+		limit = timeouts.Off
+	}
+	deadline := w.clock().Add(limit)
+	for {
+		after, err := w.poeStatus(ctx, port)
+		if err != nil {
+			return err
+		}
+		if after != nil && after.AdminEnabled == on {
+			return nil
+		}
+		if !w.clock().Before(deadline) {
+			return &model.WriteVerificationError{
+				Msg:    fmt.Sprintf("PoE admin for port %d did not read back as %v", port, on),
+				Before: before,
+				After:  after,
+			}
+		}
+		if err := w.sleep(ctx, timeouts.Poll); err != nil {
+			return err
+		}
+	}
+}
+
+// poeReset issues the device's own atomic `poe reset` re-arm command on
+// port then polls until recovered is satisfied, mirroring Python
+// CliWriter._poe_reset (cli_write.py:489-522) -- the shared PoE-recovery-
+// polling primitive behind CyclePoE and ClearPoEFault below, parameterized
+// by a recovery predicate and a timeout-message format function exactly as
+// the pin's own `recovered`/`timeout_message` callback parameters are.
+// requirePoE() runs FIRST, before any command -- but AFTER the caller's own
+// guard (CyclePoE/ClearPoEFault call guard(port, force) before calling
+// this), mirroring the pin's exact ordering. Always uses timeouts.On as
+// the deadline, regardless of which caller invokes it (cli_write.py:522,
+// "same PoE-recovery-polling helper").
+func (w *Writer) poeReset(
+	ctx context.Context, port int, timeouts PoeCycleTimeouts,
+	recovered func(*model.PoEStatus) bool, timeoutMessage func(time.Duration) string,
+) error {
+	if err := w.requirePoE(); err != nil {
+		return err
+	}
+	before, err := w.poeStatus(ctx, port)
+	if err != nil {
+		return err
+	}
+	if err := inMode(
+		ctx, w.session,
+		[]string{w.spec.ConfigureCmd, w.spec.Interface(port)},
+		[]string{w.spec.PoeResetCmd},
+		w.spec.ExitCmd,
+	); err != nil {
+		return err
+	}
+	deadline := w.clock().Add(timeouts.On)
+	for {
+		after, err := w.poeStatus(ctx, port)
+		if err != nil {
+			return err
+		}
+		if recovered(after) {
+			return nil
+		}
+		if !w.clock().Before(deadline) {
+			return &model.WriteVerificationError{
+				Msg:    timeoutMessage(timeouts.On),
+				Before: before,
+				After:  after,
+			}
+		}
+		if err := w.sleep(ctx, timeouts.Poll); err != nil {
+			return err
+		}
+	}
+}
+
+// CyclePoE power-cycles port's PoE via the device's own `poe reset`
+// command, polling until it returns to DELIVERING. Ported from Python
+// CliWriter.cycle_poe (cli_write.py:524-544, dossier §4.6).
+//
+// guard(port, force) fires UNCONDITIONALLY and FIRST -- before requirePoE
+// (poeReset checks that second) -- exactly mirroring the pin's call order:
+// on m4300-24x, cycling a PROTECTED port without force returns
+// ErrProtectedPort, not ErrUnsupportedCapability, because guard never gets
+// a chance to pass through to the device-limit check. Recovery predicate:
+// status present AND status.Delivering(). If no powered device is
+// attached, this legitimately TIMES OUT and raises
+// *model.WriteVerificationError -- "honestly failing" is the documented
+// expected behavior in that case.
+func (w *Writer) CyclePoE(ctx context.Context, port int, timeouts PoeCycleTimeouts, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	return w.poeReset(ctx, port, timeouts,
+		func(status *model.PoEStatus) bool { return status != nil && status.Delivering() },
+		func(timeout time.Duration) string {
+			return fmt.Sprintf("PoE port %d did not return to delivering within %s", port, timeout)
+		},
+	)
+}
+
+// ClearPoEFault re-arms port's PoE the same way CyclePoE does, but with a
+// looser recovery predicate: detect merely needs to have LEFT the fault
+// state (delivering OR searching both count). Ported from Python
+// CliWriter.clear_poe_fault (cli_write.py:546-569, dossier §4.6) -- "exactly
+// the recovery predicate SnmpWriter.clear_poe_fault uses" (cross-backend
+// parity note in the pin).
+//
+// guard(port, force) fires UNCONDITIONALLY and FIRST, exactly like
+// CyclePoE's -- same m4300-24x protected-port-vs-device-limit ordering
+// note applies.
+func (w *Writer) ClearPoEFault(ctx context.Context, port int, timeouts PoeCycleTimeouts, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	return w.poeReset(ctx, port, timeouts,
+		func(status *model.PoEStatus) bool {
+			return status != nil && (status.Detect == model.PoEDetectDelivering || status.Detect == model.PoEDetectSearching)
+		},
+		func(timeout time.Duration) string {
+			return fmt.Sprintf("PoE port %d still in FAULT after clear within %s", port, timeout)
+		},
+	)
+}
+
+// ---------------------------------------------------------------------
+// SetPortEnabled (dossier §4.7)
+// ---------------------------------------------------------------------
+
+// SetPortEnabled sets port's admin state and verifies the change read back
+// correctly with a SINGLE immediate read (no polling, unlike PoE). Ported
+// from Python CliWriter.set_port_enabled (cli_write.py:573-597, dossier
+// §4.7).
+//
+// guard(port, force) fires ONLY when DISABLING (enabled == false) --
+// enabling a port is never refused, symmetric with SetPoE's direction-gated
+// guard. Command sequence: `configure` -> `interface <iface>` -> `no
+// shutdown` (enabled) or `shutdown` (disabled) -> `exit` `exit`.
+func (w *Writer) SetPortEnabled(ctx context.Context, port int, enabled bool, force bool) error {
+	if !enabled {
+		if err := w.guard(port, force); err != nil {
+			return err
+		}
+	}
+	before, err := w.portStatus(ctx, port)
+	if err != nil {
+		return err
+	}
+	if err := inMode(
+		ctx, w.session,
+		[]string{w.spec.ConfigureCmd, w.spec.Interface(port)},
+		[]string{w.spec.PortAdmin(enabled)},
+		w.spec.ExitCmd,
+	); err != nil {
+		return err
+	}
+	after, err := w.portStatus(ctx, port)
+	if err != nil {
+		return err
+	}
+	if after == nil || after.AdminEnabled != enabled {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("admin state for port %d did not read back as %v", port, enabled),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
+// SetMgmtIP (dossier §4.8)
+// ---------------------------------------------------------------------
+
+// SetMgmtIP sets the switch's own management IP (address/netmask/gateway)
+// and verifies all three fields read back correctly, raising on the FIRST
+// divergent field found. Ported from Python CliWriter.set_mgmt_ip
+// (cli_write.py:601-644, dossier §4.8).
+//
+// force=true IS UNCONDITIONALLY REQUIRED -- refused REGARDLESS of
+// protectedPorts membership (this op ignores protectedPorts entirely and
+// always demands force): "set_mgmt_ip can strand the switch (and drops the
+// CLI session it is issued over); pass force=True to proceed" -- unlike the
+// SNMP path's placeholder OIDs, these commands are the switch's real
+// documented ones, but the op can still strand the switch issuing it, and
+// is deliberately NOT live-tested for that reason.
+//
+// Command dispatch: EXACTLY ONE of execCmds/configCmds is non-empty per
+// model (CliModelSpec.MgmtIP, spec.go) -- EXEC commands (if any) run via
+// plain run (NOT wrapped in inMode, since they are privileged-EXEC, not
+// config-mode); config commands (if any) run inside a `configure` block via
+// inMode. Verification checks address/netmask/gateway in that order,
+// stopping at the FIRST field that doesn't match -- not a combined
+// multi-field report.
+func (w *Writer) SetMgmtIP(ctx context.Context, address, netmask, gateway string, force bool) error {
+	if !force {
+		return fmt.Errorf("set_mgmt_ip can strand the switch (and drops the CLI session it is issued over); pass force=True to proceed: %w", model.ErrProtectedPort)
+	}
+	execCmds, configCmds := w.spec.MgmtIP(address, netmask, gateway)
+	before, err := w.reader.GetMgmtIP(ctx)
+	if err != nil {
+		return err
+	}
+	for _, cmd := range execCmds {
+		if err := run(ctx, w.session, cmd); err != nil {
+			return err
+		}
+	}
+	if len(configCmds) > 0 {
+		if err := inMode(ctx, w.session, []string{w.spec.ConfigureCmd}, configCmds, w.spec.ExitCmd); err != nil {
+			return err
+		}
+	}
+	after, err := w.reader.GetMgmtIP(ctx)
+	if err != nil {
+		return err
+	}
+	fields := [3]struct {
+		name string
+		want string
+		got  *string
+	}{
+		{"address", address, after.Address},
+		{"netmask", netmask, after.Netmask},
+		{"gateway", gateway, after.Gateway},
+	}
+	for _, f := range fields {
+		if f.got == nil || *f.got != f.want {
+			return &model.WriteVerificationError{
+				Msg:    fmt.Sprintf("management %s did not read back as %q (got %s)", f.name, f.want, formatStrPtr(f.got)),
+				Before: before,
+				After:  after,
+			}
+		}
+	}
+	return nil
+}
+
+// formatStrPtr renders *p quoted, or "none" if p is nil -- used only for
+// SetMgmtIP's verification-error message text, mirroring formatIntPtr's
+// SetPVID sibling.
+func formatStrPtr(p *string) string {
+	if p == nil {
+		return "none"
+	}
+	return strconv.Quote(*p)
+}
+
+// ---------------------------------------------------------------------
+// Reboot (dossier §4.9)
+// ---------------------------------------------------------------------
+
+// Reboot reloads the switch. Ported from Python CliWriter.reboot
+// (cli_write.py:646-666, dossier §4.9).
+//
+// force=true IS UNCONDITIONALLY REQUIRED (same pattern as SetMgmtIP):
+// "reboot is disruptive; pass force=True". Command: ReloadCmd ("reload",
+// privileged EXEC), issued via session.RunWriteMemory (reused because
+// `reload` ALSO prompts a (y/n) confirm, the same interactive shape as
+// `write memory`) with prestuff ALWAYS true, regardless of this model's own
+// WritememStuff/ScpCertProfile flag (that flag is for the SCP cert
+// deploy's `write memory`, cert_scp.go, not this).
+//
+// ErrCliTransport is EXPLICITLY CAUGHT AND SWALLOWED -- the ONE place in
+// this package where a transport-layer error is treated as SUCCESS rather
+// than propagated: "a dropped session IS the success signal" (the switch
+// tore the session down while rebooting). No read-back verification is
+// attempted at all -- impossible by definition, "the switch stops
+// answering". Any OTHER error is propagated unchanged.
+func (w *Writer) Reboot(ctx context.Context, force bool) error {
+	if !force {
+		return fmt.Errorf("reboot is disruptive; pass force=True: %w", model.ErrProtectedPort)
+	}
+	_, err := w.session.RunWriteMemory(ctx, w.spec.ReloadCmd, true)
+	if err != nil && errors.Is(err, ErrCliTransport) {
+		return nil
+	}
+	return err
 }
