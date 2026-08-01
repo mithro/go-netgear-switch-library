@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/mithro/go-netgear-switch-library/fastpath"
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/webui"
 )
@@ -232,6 +233,26 @@ func (v *VirtualSwitch) Stop() error {
 		}
 	}
 	return firstErr
+}
+
+// CliSession returns an in-process fastpath.Session (CliFace) bound to
+// this switch's State, mirroring Python VirtualSwitch.cli_session():
+// "Unlike the SNMP/NSDP/HTTP faces (real sockets bound in start()), the
+// CLI face is an in-process CliSession needing no socket" (server.py:
+// 130-140) -- so, unlike SnmpPort/NsdpPort/HTTPPort, this needs no Start
+// call at all; it is available immediately after NewVirtualSwitch. Errors
+// exactly like fastpath.NewReader/NewWriter would for a model with no CLI
+// backend or no registered fastpath.CliModelSpec (fastpath.CLISpec's own
+// two-stage guard). The real SSH/Telnet listeners bound during Start
+// (SSHPort/TelnetPort, both still reserved/always-0 in this slice) are a
+// later task's concern; this accessor is the unit-test-path seam
+// cliface_test.go drives the real fastpath.Reader/Writer against.
+func (v *VirtualSwitch) CliSession() (fastpath.Session, error) {
+	spec, err := fastpath.CLISpec(v.modelInfo)
+	if err != nil {
+		return nil, err
+	}
+	return NewCliFace(v.State, spec), nil
 }
 
 // --- EndpointProvider: conformance-harness seam (D-VIRT §5, slice 10) -----
