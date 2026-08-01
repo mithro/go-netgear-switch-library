@@ -8,11 +8,10 @@ package virtual
 //
 // VirtualSwitch is a mock switch server: a seeded State plus whichever
 // protocol faces the model's registry entry supports, bound on Start. This
-// slice implements the SNMP face (snmpface.go), the NSDP face (nsdpface.go,
-// slice 05) and, as of slice 06, the HTTP face (httpface.go); SSH/Telnet
-// CLI (slice 07) faces land later -- see the reserved port fields below,
-// which exist now so this struct's shape never needs to change again once
-// those faces arrive.
+// package implements the SNMP face (snmpface.go), the NSDP face
+// (nsdpface.go, slice 05), the HTTP face (httpface.go, slice 06), and, as of
+// slice 07 Task 12, real loopback SSH/Telnet CLI faces (sshface.go,
+// telnetface.go) wrapping Task 11's in-process CliFace dispatcher.
 //
 // Matches the Python reference exactly (D-HTTP-F §6.1): VirtualSwitch.
 // start() independently binds each backend the model supports, so a
@@ -72,21 +71,30 @@ type VirtualSwitch struct { //nolint:revive // name is mandated by D-VIRT §5/Ta
 	// {NSDP, HTTP} model such as gs305ep/gs110emx/gs105pe binds BOTH its
 	// NSDP face (NsdpPort) and its HTTP face (HTTPPort) CONCURRENTLY).
 	HTTPPort int
-	// SSHPort is reserved for slice 07's SSH CLI face; always 0 in this slice.
+	// SSHPort is the bound SSH CLI face's TCP port once Start has bound it
+	// (0 otherwise; 0 before Start, or on a model with no BackendSSH). See
+	// SnmpPort's own doc comment for why this is a field distinct from
+	// every other backend's port.
 	SSHPort int
-	// TelnetPort is reserved for slice 07's Telnet CLI face; always 0 in
-	// this slice.
+	// TelnetPort is the bound Telnet CLI face's TCP port once Start has
+	// bound it (0 otherwise; 0 before Start, or on a model with no
+	// BackendTelnet). See SnmpPort's own doc comment for why this is a
+	// field distinct from every other backend's port.
 	TelnetPort int
 
 	modelKey     string
 	modelInfo    *model.SwitchModel
 	community    string
 	httpPassword string
+	cliUsername  string
+	cliPassword  string
 
-	mu       sync.Mutex
-	snmpFace *SnmpFace
-	nsdpFace *NsdpFace
-	httpFace *HTTPFace
+	mu         sync.Mutex
+	snmpFace   *SnmpFace
+	nsdpFace   *NsdpFace
+	httpFace   *HTTPFace
+	sshFace    *SSHFace
+	telnetFace *TelnetFace
 }
 
 // Option configures a VirtualSwitch at construction time.
@@ -111,6 +119,19 @@ func WithHTTPPassword(password string) Option {
 	return func(v *VirtualSwitch) { v.httpPassword = password }
 }
 
+// WithCLIUsername overrides the username the bound SSH/Telnet CLI faces
+// require (default "admin", mirroring the dossier's own note that "the
+// default CLI username is hardcoded 'admin'" -- transport dossier §7.6).
+func WithCLIUsername(username string) Option {
+	return func(v *VirtualSwitch) { v.cliUsername = username }
+}
+
+// WithCLIPassword overrides the password the bound SSH/Telnet CLI faces
+// require (default "password", matching WithHTTPPassword's own default).
+func WithCLIPassword(password string) Option {
+	return func(v *VirtualSwitch) { v.cliPassword = password }
+}
+
 // NewVirtualSwitch builds a VirtualSwitch for modelKey: resolves modelKey
 // against the model registry FIRST (an unknown key returns an error
 // wrapping model.ErrUnknownModel immediately, before any state is built or
@@ -127,6 +148,8 @@ func NewVirtualSwitch(modelKey string, opts ...Option) (*VirtualSwitch, error) {
 		Host:         "127.0.0.1",
 		community:    "public",
 		httpPassword: "password",
+		cliUsername:  "admin",
+		cliPassword:  "password",
 		modelKey:     modelKey,
 		modelInfo:    m,
 	}
@@ -136,22 +159,19 @@ func NewVirtualSwitch(modelKey string, opts ...Option) (*VirtualSwitch, error) {
 	return v, nil
 }
 
-// Start binds every protocol face this slice implements that the model
+// Start binds every protocol face this package implements that the model
 // supports: SNMP (bound iff the model's registry entry has
 // model.BackendSNMP), NSDP (bound iff it has model.BackendNSDP, slice 05),
-// and, as of slice 06, HTTP (bound iff it has model.BackendHTTP) -- SSH/
-// Telnet aren't independent `if` blocks yet, see the package doc comment
-// above. A Plus-class model such as gs110emx/gs305ep/gs105pe (registry
-// backends {NSDP, HTTP}) binds BOTH its NSDP face (NsdpPort) AND its HTTP
-// face (HTTPPort) CONCURRENTLY (D-HTTP-F §6.1), exactly like a managed
-// model (SNMP, HTTP) binds both SnmpPort and HTTPPort. A model with no face
-// this slice can bind for it at all (none of BackendSNMP/BackendNSDP/
-// BackendHTTP) returns an error wrapping model.ErrUnsupportedCapability.
-//
-// TODO(slice-07): once the SSH/Telnet CLI faces exist, this gains their own
-// independent `if` blocks too (mirroring the Python reference's start()),
-// and this method's "no face bindable" error becomes reachable only for a
-// hypothetical model with none of the five backends.
+// HTTP (bound iff it has model.BackendHTTP, slice 06), and, as of slice 07
+// Task 12, SSH (bound iff it has model.BackendSSH) and Telnet (bound iff it
+// has model.BackendTelnet) -- each an independent `if` block, exactly
+// mirroring the Python reference's start(). A Plus-class model such as
+// gs110emx/gs305ep/gs105pe (registry backends {NSDP, HTTP}) binds BOTH its
+// NSDP face (NsdpPort) AND its HTTP face (HTTPPort) CONCURRENTLY
+// (D-HTTP-F §6.1), exactly like a managed model (SNMP, HTTP, SSH, Telnet)
+// binds all four of its own ports at once. A model with no face at all
+// (none of BackendSNMP/BackendNSDP/BackendHTTP/BackendSSH/BackendTelnet)
+// returns an error wrapping model.ErrUnsupportedCapability.
 func (v *VirtualSwitch) Start() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -191,8 +211,36 @@ func (v *VirtualSwitch) Start() error {
 		v.httpFace = face
 	}
 
-	if v.snmpFace == nil && v.nsdpFace == nil && v.httpFace == nil {
-		return fmt.Errorf("model %q has no protocol face this slice can bind (no SNMP/NSDP/HTTP backend; see slice 07 for SSH/Telnet): %w",
+	if v.modelInfo.HasBackend(model.BackendSSH) {
+		spec, err := fastpath.CLISpec(v.modelInfo)
+		if err != nil {
+			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+		}
+		face := NewSSHFace(v.State, spec, v.cliUsername, v.cliPassword, v.Host)
+		port, err := face.Start()
+		if err != nil {
+			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+		}
+		v.SSHPort = port
+		v.sshFace = face
+	}
+
+	if v.modelInfo.HasBackend(model.BackendTelnet) {
+		spec, err := fastpath.CLISpec(v.modelInfo)
+		if err != nil {
+			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+		}
+		face := NewTelnetFace(v.State, spec, v.cliUsername, v.cliPassword, v.Host)
+		port, err := face.Start()
+		if err != nil {
+			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+		}
+		v.TelnetPort = port
+		v.telnetFace = face
+	}
+
+	if v.snmpFace == nil && v.nsdpFace == nil && v.httpFace == nil && v.sshFace == nil && v.telnetFace == nil {
+		return fmt.Errorf("model %q has no protocol face this package can bind (no SNMP/NSDP/HTTP/SSH/Telnet backend): %w",
 			v.modelKey, model.ErrUnsupportedCapability)
 	}
 	return nil
@@ -200,9 +248,9 @@ func (v *VirtualSwitch) Start() error {
 
 // Stop stops every bound face. Idempotent: safe to call if Start failed,
 // was never called, or Stop was already called. Stops the SNMP face first,
-// then NSDP, then HTTP, regardless of whether an earlier stop errored, so a
-// failure stopping one face never leaks the others; only the first error
-// (if any) is returned.
+// then NSDP, then HTTP, then SSH, then Telnet, regardless of whether an
+// earlier stop errored, so a failure stopping one face never leaks the
+// others; only the first error (if any) is returned.
 func (v *VirtualSwitch) Stop() error {
 	v.mu.Lock()
 	snmpFace := v.snmpFace
@@ -214,6 +262,12 @@ func (v *VirtualSwitch) Stop() error {
 	httpFace := v.httpFace
 	v.httpFace = nil
 	v.HTTPPort = 0
+	sshFace := v.sshFace
+	v.sshFace = nil
+	v.SSHPort = 0
+	telnetFace := v.telnetFace
+	v.telnetFace = nil
+	v.TelnetPort = 0
 	v.mu.Unlock()
 
 	var firstErr error
@@ -232,6 +286,16 @@ func (v *VirtualSwitch) Stop() error {
 			firstErr = fmt.Errorf("virtual: VirtualSwitch.Stop: %w", err)
 		}
 	}
+	if sshFace != nil {
+		if err := sshFace.Stop(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("virtual: VirtualSwitch.Stop: %w", err)
+		}
+	}
+	if telnetFace != nil {
+		if err := telnetFace.Stop(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("virtual: VirtualSwitch.Stop: %w", err)
+		}
+	}
 	return firstErr
 }
 
@@ -239,14 +303,16 @@ func (v *VirtualSwitch) Stop() error {
 // this switch's State, mirroring Python VirtualSwitch.cli_session():
 // "Unlike the SNMP/NSDP/HTTP faces (real sockets bound in start()), the
 // CLI face is an in-process CliSession needing no socket" (server.py:
-// 130-140) -- so, unlike SnmpPort/NsdpPort/HTTPPort, this needs no Start
-// call at all; it is available immediately after NewVirtualSwitch. Errors
-// exactly like fastpath.NewReader/NewWriter would for a model with no CLI
-// backend or no registered fastpath.CliModelSpec (fastpath.CLISpec's own
-// two-stage guard). The real SSH/Telnet listeners bound during Start
-// (SSHPort/TelnetPort, both still reserved/always-0 in this slice) are a
-// later task's concern; this accessor is the unit-test-path seam
-// cliface_test.go drives the real fastpath.Reader/Writer against.
+// 130-140) -- so, unlike SnmpPort/NsdpPort/HTTPPort/SSHPort/TelnetPort,
+// this needs no Start call at all; it is available immediately after
+// NewVirtualSwitch. Errors exactly like fastpath.NewReader/NewWriter would
+// for a model with no CLI backend or no registered fastpath.CliModelSpec
+// (fastpath.CLISpec's own two-stage guard). The real SSH/Telnet listeners
+// bound during Start (SSHPort/TelnetPort, sshface.go/telnetface.go, Task
+// 12) each construct their OWN fresh *CliFace per connection the same way
+// this accessor does -- this one remains the unit-test-path seam
+// cliface_test.go drives the real fastpath.Reader/Writer against, with no
+// socket in the way at all.
 func (v *VirtualSwitch) CliSession() (fastpath.Session, error) {
 	spec, err := fastpath.CLISpec(v.modelInfo)
 	if err != nil {

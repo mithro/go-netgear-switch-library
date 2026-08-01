@@ -632,3 +632,36 @@ func (f *CliFace) RunWriteMemory(ctx context.Context, command string, _ bool) (s
 func (f *CliFace) Close() error {
 	return nil
 }
+
+// --- prompt-rendering accessors (Task 12, dossier §7.7) -------------------
+//
+// Mode/InterfaceName are pure getters over state this file already
+// maintains for dispatch -- added so the real-socket listeners
+// (virtual/sshface.go, virtual/telnetface.go) can render a mode-appropriate
+// FASTPATH prompt after each command without duplicating any accept/reject
+// or mode-transition logic: those listeners drive commands purely through
+// Run (this file's own dispatch decides every mode change), then ask this
+// face what mode it ended up in. No behavior lives here beyond exposing the
+// existing modes/ifacePort fields.
+
+// Mode returns the current command-mode label: "exec" (the zero/top-level
+// mode) or one of cliModeVlanDB/cliModeConfig/cliModeInterface.
+func (f *CliFace) Mode() string {
+	return f.mode()
+}
+
+// InterfaceName returns the device interface name (e.g. "1/0/7") of the
+// port currently selected via `interface <iface>`, and true -- only while
+// Mode() == cliModeInterface; ("", false) otherwise, including the
+// (unreachable in practice) case of a selected port no longer present in
+// state.Ports.
+func (f *CliFace) InterfaceName() (string, bool) {
+	if f.ifacePort == nil {
+		return "", false
+	}
+	sim, ok := f.state.Ports[*f.ifacePort]
+	if !ok {
+		return "", false
+	}
+	return sim.Name, true
+}
