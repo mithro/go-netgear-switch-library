@@ -67,3 +67,37 @@ through) and delays a write-safety-critical fix (principle 1).
 
 **Option C: something else** (e.g. pin to a specific intermediate commit, or
 defer the dispatch rework but adopt the HTTP/NSDP behaviour).
+
+---
+
+## Re-pin 2026-08-01: `1841111` → `7ebfe5d` (before slice 07)
+
+Standing policy (user directive 2026-08-01): **re-pin to latest live Python
+`main` at every slice boundary automatically, no user gate.** Snapshot:
+`…/python-netgear-switch-library/.claude/worktrees/go-port-pin-7ebfe5d`.
+
+Drift (10 commits, `git log 1841111..7ebfe5d`), folded into owning slices:
+
+1. **NSDP v2 salted write auth** (`1bd268d`, `e9a8224`, `aa78925`) —
+   LIVE-VERIFIED on GS110EMX; the write path needs the **token TLV first**, v2
+   salted auth. Touches `nsdp/auth.py`, `client.py`, `protocol.py`, `write.py`,
+   `virtual/faces/nsdp.py`, both transports, `seed.py`, `state.py`. The Go
+   slice-05 NSDP backend implemented **v1 XOR auth only** → a real parity gap.
+   → **NSDP-v2-write-auth reconciliation slice** (schedule after slice 07;
+   before the completion audit regardless).
+2. **`capabilities.py`** (`425e957`) — new module: a model × backend ×
+   operation capability oracle, pinned against the fake (414 LOC + 338 test +
+   `__init__` exports). New parity surface. → **its own slice** (pairs with the
+   cross-language/conformance work, slices ~10–11).
+3. **Published Sphinx docs site on Read the Docs** (`d60865c`, `56d5d64`,
+   `8d3274c`, `5beea19`, `e56fc34`) — `docs/{guide,protocols,models,fake,mcp}`,
+   plus a CI doc-build gate. This is the concrete template for the /goal's
+   "full documentation written and published" gate. → **slice 12 (docs/pkg)**.
+4. **Minor:** `cli/parse.py` (+25) → **fold into slice 07 (FASTPATH CLI)**;
+   `http/types.py` (+13, `XuiListPage` Py3.11 import fix) → re-check HTTP
+   types/XuiListPage parity in a later HTTP touch-up (does not regress slice 06,
+   which ported the pre-fix shape faithfully).
+
+No already-merged Go slice is *wrong* under this re-pin except the NSDP
+write-auth gap (item 1), which was net-new capability added upstream after
+slice 05 — i.e. missing functionality, not a regression.
