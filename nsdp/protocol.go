@@ -235,8 +235,21 @@ type Packet struct {
 	ServerMAC []byte // exactly 6 bytes on the wire; see packMAC
 	Sequence  uint32 // full 4-byte header field (dossier §1.2: not 2 bytes + 2 reserved)
 	Result    uint16
+	// ErrorAttr is the TLV tag the switch blamed for Result (header bytes
+	// 4-5), 0 when there is no error; requests always send 0. Header bytes
+	// 4-5 are NOT reserved -- ngadmin's struct nsdp_header names this field,
+	// and it is what separates the two causes of error 13 (a v1 password
+	// offered to v2-only firmware, blamed on TagPassword, vs a genuinely bad
+	// v2 token blamed elsewhere). Consumed by CheckResult.
+	ErrorAttr uint16
 	TLVs      []TLVEntry
 }
+
+// ErrorCode is the high byte of Result (Result >> 8) -- the NSDP error code
+// alone (3=read-only, 4=write-only, 7=v1 denied, 13=v2 auth refused,
+// 14=lockout), mirroring Python NSDPPacket.error_code. The low byte (unk1) is
+// always 0.
+func (p Packet) ErrorCode() int { return int(p.Result >> 8) }
 
 // AddTLV appends a TLVEntry to p.TLVs, mirroring Python's
 // NSDPPacket.add_tlv.
@@ -283,7 +296,8 @@ func (p Packet) Encode() ([]byte, error) {
 	header[0x00] = 0x01 // version: hardcoded, not a settable field
 	header[0x01] = byte(p.Op)
 	binary.BigEndian.PutUint16(header[0x02:0x04], p.Result)
-	// header[0x04:0x08] reserved1: left zero
+	binary.BigEndian.PutUint16(header[0x04:0x06], p.ErrorAttr) // 0 on requests
+	// header[0x06:0x08] reserved: left zero
 	copy(header[0x08:0x0E], clientMAC)
 	copy(header[0x0E:0x14], serverMAC)
 	binary.BigEndian.PutUint32(header[0x14:0x18], p.Sequence)
@@ -320,6 +334,7 @@ func DecodePacket(data []byte) (Packet, error) {
 
 	opRaw := Op(header[0x01])
 	result := binary.BigEndian.Uint16(header[0x02:0x04])
+	errorAttr := binary.BigEndian.Uint16(header[0x04:0x06])
 	clientMAC := append([]byte(nil), header[0x08:0x0E]...)
 	serverMAC := append([]byte(nil), header[0x0E:0x14]...)
 	sequence := binary.BigEndian.Uint32(header[0x14:0x18])
@@ -348,6 +363,7 @@ func DecodePacket(data []byte) (Packet, error) {
 		ServerMAC: serverMAC,
 		Sequence:  sequence,
 		Result:    result,
+		ErrorAttr: errorAttr,
 		TLVs:      tlvs,
 	}, nil
 }

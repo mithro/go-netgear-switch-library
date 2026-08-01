@@ -43,3 +43,34 @@ func TestResultAndErrorConstants(t *testing.T) {
 		}
 	}
 }
+
+func TestPacketErrorAttrRoundTrip(t *testing.T) {
+	// A WRITE_RESPONSE blaming TagPassword (0x000A) with a v2-auth-rejected
+	// result: error_attr (header bytes 4-5) must survive encode->decode, and
+	// ErrorCode must extract the high byte.
+	p := Packet{Op: OpWriteResponse, Result: ResultBadPasswordV2, ErrorAttr: uint16(TagPassword), Sequence: 7}
+	wire, err := p.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, err := DecodePacket(wire)
+	if err != nil {
+		t.Fatalf("DecodePacket: %v", err)
+	}
+	if got.ErrorAttr != uint16(TagPassword) {
+		t.Fatalf("ErrorAttr = %#x, want TagPassword (%#x)", got.ErrorAttr, uint16(TagPassword))
+	}
+	if got.Result != ResultBadPasswordV2 {
+		t.Fatalf("Result = %#04x, want %#04x", got.Result, ResultBadPasswordV2)
+	}
+	if got.ErrorCode() != ErrorAuthRejected {
+		t.Fatalf("ErrorCode() = %#x, want ErrorAuthRejected (%#x)", got.ErrorCode(), ErrorAuthRejected)
+	}
+	// A request-style packet (ErrorAttr 0) still round-trips with 0.
+	req := Packet{Op: OpWriteRequest, Sequence: 1}
+	rw, _ := req.Encode()
+	rgot, _ := DecodePacket(rw)
+	if rgot.ErrorAttr != 0 {
+		t.Fatalf("request ErrorAttr = %#x, want 0", rgot.ErrorAttr)
+	}
+}
