@@ -11,6 +11,7 @@ require (
 require (
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/gosnmp/gosnmp v1.44.0
+	go.bug.st/serial v1.8.0
 	golang.org/x/crypto v0.54.0
 )
 
