@@ -35,17 +35,12 @@
 //     access mode would hide exactly the bug that finding exists to
 //     prevent -- see general() below.
 //
-// UNLIKE the Python `cli_fastpath` renderer (out of THIS dossier's scope,
-// referenced there only by name, but very much in THIS task's scope,
-// since no separate Go render package exists): the render*/parse-facing
-// text this file emits is NOT a byte-for-byte transcription of any real
-// firmware capture. It is instead an auto-sizing fixed-width table
-// renderer (renderCLITable below) that produces text the REAL, already-
-// ported fastpath parsers (fastpath/parse.go, Tasks 2-4, cross-checked
-// against real captures under fastpath/testdata/cli/) parse back
-// correctly -- proving the read round-trip against seeded State, not
-// proving byte-identity with a real device transcript (a claim this file
-// never makes).
+// The `show` output renderers this face dispatches to (cliface_render.go)
+// are a field-for-field PORT of Python's separate `virtual/cli_fastpath.py`
+// module (418 lines, "the CLI analogue of virtual/web_gsm7252ps.py") --
+// NOT a from-scratch design cross-checked only against the Go parsers.
+// Every column/header/title/spacing choice there mirrors that source
+// exactly; see that file's own doc comment for the mapping.
 package virtual
 
 import (
@@ -226,21 +221,35 @@ func (f *CliFace) poeCapable() bool {
 
 // applyPoeAdmin switches a PSE port's admin state, with the SAME coherence
 // State.ApplyWrite's pethPsePortAdminEnable branch applies for the SNMP SET
-// path: admin off -> detect=1 (unused) and the data link drops; admin on ->
-// detect=3 (delivering). Unknown port: deliberate no-op. Kept local to this
-// file (not a shared State method) since ApplyWrite's own PoE branch is
-// itself inlined there rather than factored out; duplicating the four-line
-// rule here is cheaper than a cross-file refactor this task doesn't need.
+// path (admin off -> detect=1 (unused) and the data link drops; admin on ->
+// detect=3 (delivering)) PLUS the CLI-only status-lag quirk, ported
+// verbatim from Python State.apply_poe_admin (state.py:920-943): "ONE rule
+// shared by every protocol face -- the SNMP SET path (apply_write) and the
+// CLI poe/no poe commands both come through here, so the mock cannot
+// behave differently depending on which backend a test drove." On an
+// off->on transition, PoeSim.CliStatusLagReads is set to 1: MEASURED ON
+// HARDWARE (M4300-16X, 10.1.5.20, FASTPATH 12.0.19.15, 2026-07-30) that a
+// re-enabled port's `show poe port info all` Status column still reads
+// "Disabled" for one more read before catching up -- see
+// PoeSim.CliStatusLagReads's own doc comment. Unknown port: deliberate
+// no-op. Kept local to this file (not a shared State method) since
+// ApplyWrite's own PoE branch is itself inlined there rather than factored
+// out; duplicating the rule here is cheaper than a cross-file refactor
+// this task doesn't need.
 func (f *CliFace) applyPoeAdmin(port int, on bool) {
 	psim, exists := f.state.Poe[port]
 	if !exists {
 		return
 	}
+	wasOn := psim.Admin
 	psim.Admin = on
 	if on {
 		psim.Detect = 3 // delivering
 	} else {
 		psim.Detect = 1 // unused/disabled
+	}
+	if on && !wasOn {
+		psim.CliStatusLagReads = 1
 	}
 	if !on {
 		if p, exists2 := f.state.Ports[port]; exists2 {

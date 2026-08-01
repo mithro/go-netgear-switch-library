@@ -129,6 +129,23 @@ type PoeSim struct {
 	Admin   bool
 	Detect  int
 	PowerMw int
+	// CliStatusLagReads is how many more CLI `show poe port info all` reads
+	// still report the pre-enable "Disabled" status after PoE was
+	// administratively re-enabled, ported from Python PoeSim's
+	// cli_status_lag_reads: int = 0 (state.py:253).
+	//
+	// MEASURED ON HARDWARE (M4300-16X, 10.1.5.20, FASTPATH 12.0.19.15,
+	// 2026-07-30): right after `poe` re-enabled port 1/0/1 the table still
+	// said "Disabled"; the same port read "Searching" moments later. That
+	// column is a DETECTION state, and it lags the admin write -- which
+	// made a single immediate read-back report a perfectly good SetPoE as
+	// a verification failure. The mock reproduces the lag (one stale read)
+	// so fastpath.Writer.SetPoE's polling is actually exercised instead of
+	// passing by accident; SNMP's pethPsePortAdminEnable has no such lag
+	// and is deliberately unaffected. Consumed (and decremented) by
+	// cliPoeStatusText in cliface_render.go; set by CliFace.applyPoeAdmin
+	// on an off->on transition.
+	CliStatusLagReads int
 }
 
 // SensorSim is one box sensor reading (fan RPM / PSU watts / temperature).

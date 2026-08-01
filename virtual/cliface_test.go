@@ -19,7 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mithro/go-netgear-switch-library/fastpath"
 	"github.com/mithro/go-netgear-switch-library/model"
@@ -717,6 +719,133 @@ func TestCliFaceReboot(t *testing.T) {
 	}
 	if st.Reboots != before+1 {
 		t.Errorf("State.Reboots = %d, want %d", st.Reboots, before+1)
+	}
+}
+
+// --- render fidelity: full column set vs cli_fastpath.py (fix round 1) ----
+
+// TestCliFaceRenderPortsFullColumnSet asserts render_ports emits the FULL
+// 9-column shape (cli_fastpath.py:133-163), not just the 6 the parser
+// itself consults -- Link Trap/LACP Mode/Flow Mode must be present as
+// literal "Enable"/"Enable"/"Disable" trailing columns.
+func TestCliFaceRenderPortsFullColumnSet(t *testing.T) {
+	st := SeedGSM7252PS()
+	face, _ := newTestCliFace(t, "gsm7252ps", st)
+	out := face.renderPorts()
+
+	for _, header := range []string{"LACP", "Flow"} {
+		if !strings.Contains(out, header) {
+			t.Errorf("renderPorts output missing header %q:\n%s", header, out)
+		}
+	}
+	// Port 1 (admin+link up) row must carry all 9 cells, ending in the
+	// fixed "Enable Enable Disable" (Link Trap/LACP Mode/Flow Mode) tail.
+	var portLine string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "1/0/1 ") {
+			portLine = line
+			break
+		}
+	}
+	if portLine == "" {
+		t.Fatalf("no row for 1/0/1 in renderPorts output:\n%s", out)
+	}
+	fields := strings.Fields(portLine)
+	if len(fields) < 3 || fields[len(fields)-3] != "Enable" || fields[len(fields)-2] != "Enable" || fields[len(fields)-1] != "Disable" {
+		t.Errorf("port 1 row = %q, want trailing \"Enable Enable Disable\" (Link Trap/LACP Mode/Flow Mode)", portLine)
+	}
+}
+
+// TestCliFaceRenderPoEModelGating asserts render_poe's M4300 vs gsm7252ps
+// Temperature-column gating (cli_fastpath.py:303-326, parse.go's own
+// documented 9-vs-10-column real-fixture divergence): m4300-16x (PoE
+// present) OMITS "Temperature"; gsm7252ps INCLUDES it.
+func TestCliFaceRenderPoEModelGating(t *testing.T) {
+	gsm := SeedGSM7252PS()
+	gsmFace, _ := newTestCliFace(t, "gsm7252ps", gsm)
+	gsmOut := gsmFace.renderPoE()
+	if !strings.Contains(gsmOut, "Temperature") {
+		t.Errorf("gsm7252ps renderPoE missing \"Temperature\" column:\n%s", gsmOut)
+	}
+
+	m16 := SeedM4300_16X()
+	m16Face, _ := newTestCliFace(t, "m4300-16x", m16)
+	m16Out := m16Face.renderPoE()
+	if strings.Contains(m16Out, "Temperature") {
+		t.Errorf("m4300-16x renderPoE includes \"Temperature\" column, want omitted (M4300 image has no PoE Temperature column)\n%s", m16Out)
+	}
+	// Both must still carry the three parser-required-by-name columns.
+	for _, hdr := range []string{"Intf", "Power (mW)", "Status"} {
+		if !strings.Contains(m16Out, hdr) {
+			t.Errorf("m4300-16x renderPoE missing required header %q:\n%s", hdr, m16Out)
+		}
+	}
+}
+
+// TestCliFaceRenderVlanDetailVLANType asserts render_vlan_detail's
+// "VLAN Type:" line is "Default" for VLAN 1 and "Static" for every other
+// VLAN (cli_fastpath.py:185) -- the earlier renderer hardcoded "Static"
+// unconditionally, a real bug this test pins against regressing.
+func TestCliFaceRenderVlanDetailVLANType(t *testing.T) {
+	st := SeedGSM7252PS()
+	face, _ := newTestCliFace(t, "gsm7252ps", st)
+
+	out1 := face.renderVlanDetail(1)
+	if !strings.Contains(out1, "VLAN Type: Default") {
+		t.Errorf("renderVlanDetail(1) missing \"VLAN Type: Default\":\n%s", out1)
+	}
+	if strings.Contains(out1, "VLAN Type: Static") {
+		t.Errorf("renderVlanDetail(1) says \"VLAN Type: Static\", want \"Default\":\n%s", out1)
+	}
+
+	out90 := face.renderVlanDetail(90)
+	if !strings.Contains(out90, "VLAN Type: Static") {
+		t.Errorf("renderVlanDetail(90) missing \"VLAN Type: Static\":\n%s", out90)
+	}
+}
+
+// TestCliFacePoeCliStatusLagRequiresPolling ports the hardware-measured
+// PoeSim.CliStatusLagReads quirk (state.go, MEASURED on M4300-16X
+// 10.1.5.20, FASTPATH 12.0.19.15, 2026-07-30): a just-re-enabled PoE port
+// reports "Disabled" for ONE extra `show poe port info all` read before
+// catching up, so fastpath.Writer.SetPoE's verification poll loop is
+// genuinely exercised (not satisfied by the very first read) -- driven
+// with a fake clock/sleep (WithClock) so this test takes no real wall
+// time.
+func TestCliFacePoeCliStatusLagRequiresPolling(t *testing.T) {
+	st := SeedGSM7252PS()
+	face, m := newTestCliFace(t, "gsm7252ps", st)
+	ctx := context.Background()
+
+	const port = 6 // starts Detect=6/PowerMw 0 (seed.go:183); force a clean off->on transition
+	st.Poe[port].Admin = false
+	st.Poe[port].CliStatusLagReads = 0
+
+	now := time.Now()
+	var sleeps int
+	writer, err := fastpath.NewWriter(face, m, fastpath.WithClock(
+		func() time.Time { return now },
+		func(_ context.Context, d time.Duration) error {
+			sleeps++
+			now = now.Add(d)
+			return nil
+		},
+	))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	if err := writer.SetPoE(ctx, port, true, false); err != nil {
+		t.Fatalf("SetPoE: %v", err)
+	}
+	if sleeps == 0 {
+		t.Error("SetPoE never polled/slept -- the CLI status lag (CliStatusLagReads) was not exercised; a bug here would let SetPoE silently pass without ever driving the poll loop")
+	}
+	if !st.Poe[port].Admin {
+		t.Error("PoeSim.Admin = false after SetPoE(on=true)")
+	}
+	if st.Poe[port].CliStatusLagReads != 0 {
+		t.Errorf("CliStatusLagReads = %d after SetPoE succeeded, want 0 (fully consumed)", st.Poe[port].CliStatusLagReads)
 	}
 }
 
