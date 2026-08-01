@@ -31,8 +31,12 @@ package fastpath
 
 import (
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mithro/go-netgear-switch-library/model"
+	"github.com/mithro/go-netgear-switch-library/snmp"
 )
 
 // Primitive regexes, quoted verbatim from parse.py:57-69 (Python inline
@@ -299,4 +303,297 @@ func physPort(iface string) (int, bool) {
 		return port, err == nil
 	}
 	return 0, false
+}
+
+// ---------------------------------------------------------------------
+// Entity parsers, part 1: show version / show port all / show vlan brief
+// (or its per-model rename) / show vlan <id> / show vlan port all.
+// Ported field-for-field from the pinned python-netgear-switch-library @
+// 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362,
+// src/netgear_switch/protocols/cli/parse.py (parse.py:212-386), dossier
+// §2.9-§2.13.
+// ---------------------------------------------------------------------
+
+var (
+	// vlanHeaderRE / vlanNameRE: the "VLAN ID: 90" / "VLAN Name: iot"
+	// scalar header lines atop a "show vlan <id>" detail page. Mirrors
+	// Python _VLAN_HEADER_RE / _VLAN_NAME_RE (parse.py:333-334) exactly.
+	vlanHeaderRE = regexp.MustCompile(`VLAN ID:\s*(\d+)`)
+	vlanNameRE   = regexp.MustCompile(`VLAN Name:\s*(.*)`)
+	// speedRE parses a "show port all" Physical Status cell like "1000
+	// Full"/"10G Full" into (value, unit). Mirrors Python _SPEED_RE
+	// (parse.py:243), applied via re.match() (Python only anchors at
+	// position 0, not end-of-string) -- the leading ^ here reproduces
+	// that anchoring, since Go's FindStringSubmatch searches anywhere in
+	// the string by default.
+	speedRE = regexp.MustCompile(`^(\d+)\s*([GgMm]?)`)
+)
+
+// Column indices for parsePortStatus, mirroring Python's
+// _PORT_INTF.._PORT_LINK (parse.py:237-241): header is "Intf | Type |
+// Admin Mode | Physical Mode | Physical Status | Link Status | Link Trap |
+// LACP Mode | Flow Mode" -- only the first 6 columns are ever consulted.
+const (
+	portIntf = iota
+	portType
+	portAdmin
+	portPhysMode
+	portPhysStatus
+	portLink
+)
+
+// speedMbps converts a "show port all" Physical Status cell to megabits
+// per second, or ok=false if it doesn't start with a number (a down
+// port's blank cell), mirroring Python _speed_mbps (parse.py:246-256):
+// "1000 Full" -> 1000, "10G Full" -> 10000, "" -> not ok (never a
+// fabricated 0). Only an exact "G"/"g" unit multiplies by 1000; "M"/"m"
+// and no suffix both leave the value as-is (Mbps assumed) -- the Python
+// unit check is `.upper() == "G"`, so "m" is captured by the regex but is
+// a semantic no-op multiplier, reproduced here the same way.
+func speedMbps(physStatus string) (int, bool) {
+	m := speedRE.FindStringSubmatch(strings.TrimSpace(physStatus))
+	if m == nil {
+		return 0, false
+	}
+	value, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	if strings.ToUpper(m[2]) == "G" {
+		return value * 1000, true
+	}
+	return value, true
+}
+
+// parseVersion identifies a switch's model from "show version" output,
+// mirroring Python parse_version (parse.py:212-230) EXACTLY. Label map:
+// "System Description" (primary), falling back to "Machine Model" if
+// absent/blank. SysObjectID is ALWAYS nil -- "the CLI exposes no
+// sysObjectID". Model matching REUSES the SNMP backend's
+// snmp.DetectModelFromSysDescr so CLI and SNMP identify a switch
+// identically; the Python reference imports this lazily inside the
+// function to avoid a module-level cross-protocol import (parse.py:213)
+// -- the Go port expresses the same "reuse, don't duplicate" constraint
+// as an ordinary package import instead, since there is no import-cycle
+// risk here (fastpath does not import anything that imports fastpath).
+func parseVersion(text string, models []*model.SwitchModel) model.DetectedModel {
+	fields := labelledValues(text)
+	descr := fields["System Description"]
+	if descr == "" {
+		descr = fields["Machine Model"]
+	}
+	var key *string
+	if descr != "" {
+		key = snmp.DetectModelFromSysDescr(&descr, models)
+	}
+	var sysDescr *string
+	if descr != "" {
+		sysDescr = &descr
+	}
+	return model.DetectedModel{Key: key, SysDescr: sysDescr, SysObjectID: nil}
+}
+
+// parsePortStatus parses "show port all" into one model.PortStatus per
+// physical port, mirroring Python parse_port_status (parse.py:259-288)
+// EXACTLY. "lag N" rows are skipped (physPort returns ok=false for them,
+// not filtered by name). speedMbps is only consulted when Link Status is
+// exactly "up" -- EVEN IF Physical Status happens to carry stale text on a
+// down port, defensive: link down implies no negotiated rate is
+// meaningful. Description is ALWAYS nil: "this command carries no ifAlias
+// column" (honest omission, not a bug).
+func parsePortStatus(text string) []model.PortStatus {
+	var out []model.PortStatus
+	for _, cells := range iterTableRows(text, "") {
+		if len(cells) <= portLink {
+			continue
+		}
+		port, ok := physPort(cells[portIntf])
+		if !ok {
+			continue
+		}
+		linkUp := strings.ToLower(cells[portLink]) == "up"
+		var speed *int
+		if linkUp {
+			if v, ok := speedMbps(cells[portPhysStatus]); ok {
+				speed = &v
+			}
+		}
+		name := cells[portIntf]
+		out = append(out, model.PortStatus{
+			Port:         port,
+			Name:         &name,
+			AdminEnabled: strings.ToLower(cells[portAdmin]) == "enable",
+			LinkUp:       linkUp,
+			SpeedMbps:    speed,
+			Description:  nil,
+		})
+	}
+	return out
+}
+
+// Column indices for parseVLANBrief, mirroring Python's
+// _VLAN_BRIEF_ID/_VLAN_BRIEF_NAME (parse.py:301): header is "VLAN ID |
+// VLAN Name | VLAN Type" -- only the first two columns are consulted.
+const (
+	vlanBriefID = iota
+	vlanBriefName
+)
+
+// vlanBriefRow is one row of "show vlan brief" (gsm7252ps) or its
+// model-renamed equivalent "show vlan" (M4300/gsm7228ps, dossier
+// §1.5-§1.6) -- VLAN id + name only, NO membership data (that requires a
+// follow-up "show vlan <id>" per VLAN via parseVLANDetail, dossier §3.3).
+// Mirrors Python parse_vlan_brief's list[tuple[int, str]] return shape.
+type vlanBriefRow struct {
+	vlan int
+	name string
+}
+
+// parseVLANBrief parses a VLAN summary table into one vlanBriefRow per
+// VLAN, mirroring Python parse_vlan_brief (parse.py:299-312) EXACTLY. A
+// row whose VLAN ID cell doesn't parse as an integer is skipped; name
+// defaults to "" if the row is short rather than panicking. When the
+// device output isn't a table at all (e.g. gsm7228ps's Smart firmware
+// rejecting the literal "show vlan brief" with a plain-text error --
+// testdata/cli/gsm7228ps_vlan_brief.txt), iterTableRows finds no ruler and
+// yields nothing, so this returns nil cleanly -- not an error.
+func parseVLANBrief(text string) []vlanBriefRow {
+	var out []vlanBriefRow
+	for _, cells := range iterTableRows(text, "") {
+		if len(cells) == 0 {
+			continue
+		}
+		vid, ok := parseInt(cells[vlanBriefID])
+		if !ok {
+			continue
+		}
+		name := ""
+		if len(cells) > vlanBriefName {
+			name = cells[vlanBriefName]
+		}
+		out = append(out, vlanBriefRow{vlan: vid, name: name})
+	}
+	return out
+}
+
+// Column indices for parseVLANDetail, mirroring Python's
+// _VLAN_D_IFACE/_VLAN_D_CURRENT/_VLAN_D_TAGGING (parse.py:323): header is
+// "Interface | Current | Configured | Tagging" -- Configured (index 2) is
+// DELIBERATELY skipped, only Current and Tagging are consulted.
+const (
+	vlanDIface = iota
+	vlanDCurrent
+	vlanDConfigured
+	vlanDTagging
+)
+
+// sortedIntKeys returns the keys of set in ascending order, non-nil even
+// when set is empty -- the canonical shape model.VLANInfo's port-set
+// fields require ("sorted ascending, never nil", model/types.go).
+func sortedIntKeys(set map[int]bool) []int {
+	out := make([]int, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// parseVLANDetail parses a single "show vlan <id>" detail page into a
+// model.VLANInfo, mirroring Python parse_vlan_detail (parse.py:321-358)
+// EXACTLY. VlanID defaults to 0 if the "VLAN ID:" header line is absent
+// (never panics). name, when non-nil, OVERRIDES the page's own "VLAN
+// Name:" line -- this is how CliReader.GetVLANs (a later task) merges the
+// "show vlan brief" pass's name with each per-VLAN detail page (dossier
+// §2.12/§3.3); when nil, the page's own name is used (nil if that line is
+// itself absent). A row's port is an egress member only when Current
+// (case-insensitively) equals exactly "include" -- "exclude" (or anything
+// else) drops the row entirely, not merely from one of the two sets.
+// "lag N" rows drop out via physPort returning ok=false.
+func parseVLANDetail(text string, name *string) model.VLANInfo {
+	var vlanID int
+	if m := vlanHeaderRE.FindStringSubmatch(text); m != nil {
+		vlanID, _ = strconv.Atoi(m[1])
+	}
+	var pageName *string
+	if m := vlanNameRE.FindStringSubmatch(text); m != nil {
+		pn := strings.TrimSpace(m[1])
+		pageName = &pn
+	}
+	resolvedName := pageName
+	if name != nil {
+		resolvedName = name
+	}
+
+	tagged := make(map[int]bool)
+	untagged := make(map[int]bool)
+	for _, cells := range iterTableRows(text, "") {
+		if len(cells) <= vlanDTagging {
+			continue
+		}
+		port, ok := physPort(cells[vlanDIface])
+		if !ok {
+			continue
+		}
+		if strings.ToLower(cells[vlanDCurrent]) != "include" {
+			continue
+		}
+		if strings.ToLower(cells[vlanDTagging]) == "tagged" {
+			tagged[port] = true
+		} else {
+			untagged[port] = true
+		}
+	}
+	member := make(map[int]bool, len(tagged)+len(untagged))
+	for p := range tagged {
+		member[p] = true
+	}
+	for p := range untagged {
+		member[p] = true
+	}
+
+	return model.VLANInfo{
+		VlanID:        vlanID,
+		Name:          resolvedName,
+		MemberPorts:   sortedIntKeys(member),
+		TaggedPorts:   sortedIntKeys(tagged),
+		UntaggedPorts: sortedIntKeys(untagged),
+	}
+}
+
+// Column indices for parsePVIDs, mirroring Python's
+// _PVID_IFACE/_PVID_CONFIGURED (parse.py:373): header is "Interface | Port
+// VLAN ID Configured | Current | Acceptable Frame Types | Ingress
+// Filtering Configured | Ingress Filtering Current | GVRP | Default
+// Priority" -- deliberately the CONFIGURED column (index 1), not Current
+// (index 2): "matching what dot1qPvid reports over SNMP" (the persistent
+// value, not any transient current value).
+const (
+	pvidIface = iota
+	pvidConfigured
+)
+
+// parsePVIDs parses "show vlan port all" into one model.Pvid per physical
+// port, mirroring Python parse_pvids (parse.py:371-386) EXACTLY -- the
+// SAME model.Pvid type the merged SNMP/NSDP/HTTP backends already use
+// (model/types.go), so a caller never has to distinguish which backend
+// produced a PVID list. "lag N" rows drop out via physPort returning
+// ok=false.
+func parsePVIDs(text string) []model.Pvid {
+	var out []model.Pvid
+	for _, cells := range iterTableRows(text, "") {
+		if len(cells) <= pvidConfigured {
+			continue
+		}
+		port, ok := physPort(cells[pvidIface])
+		if !ok {
+			continue
+		}
+		pvid, ok := parseInt(cells[pvidConfigured])
+		if !ok {
+			continue
+		}
+		out = append(out, model.Pvid{Port: port, Vlan: pvid})
+	}
+	return out
 }
