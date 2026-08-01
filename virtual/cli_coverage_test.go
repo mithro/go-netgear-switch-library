@@ -94,6 +94,35 @@ func TestVirtualSwitchCliSessionInProcessRun(t *testing.T) {
 	}
 }
 
+// TestCliFaceDrivesAllWriteCommands exercises the CLI face's config-command
+// dispatch for the write ops the other cliface tests don't cover
+// (SetPortEnabled/SetMgmtIP/Reboot), each a real round-trip through
+// fastpath.Writer against the seeded fake, so configCommand's per-command
+// branches are exercised.
+func TestCliFaceDrivesAllWriteCommands(t *testing.T) {
+	st := SeedGSM7252PS()
+	face, m := newTestCliFace(t, "gsm7252ps", st)
+	now, sleep := instantClock()
+	writer, err := fastpath.NewWriter(face, m, fastpath.WithClock(now, sleep))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	if err := writer.SetPortEnabled(ctx, 1, false, true); err != nil {
+		t.Fatalf("SetPortEnabled(off): %v", err)
+	}
+	if err := writer.SetPortEnabled(ctx, 1, true, true); err != nil {
+		t.Fatalf("SetPortEnabled(on): %v", err)
+	}
+	if err := writer.SetMgmtIP(ctx, "192.168.9.9", "255.255.255.0", "192.168.9.1", true); err != nil {
+		t.Fatalf("SetMgmtIP: %v", err)
+	}
+	if err := writer.Reboot(ctx, true); err != nil {
+		t.Fatalf("Reboot: %v", err)
+	}
+}
+
 // TestTelnetFaceStripsClientIACNegotiation drives the TelnetFace with a RAW
 // client that SENDS IAC option-negotiation (WILL/DO) and a subnegotiation
 // block interleaved with its login + command, exercising the face's

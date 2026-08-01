@@ -353,7 +353,13 @@ func (f *CliFace) interfaceCommand(c string, port int) (string, bool) {
 		return cliAccepted, true
 	}
 	if m := cliShutdownRE.FindStringSubmatch(c); m != nil {
-		enabled := m[1] == "" // "no shutdown" enables
+		// "no shutdown" enables, "shutdown" disables. Go's FindStringSubmatch
+		// yields "" for the absent optional "(no )?" group (no nil/None
+		// distinction like Python's re.group(1)), so the faithful port of the
+		// pin's `enabled = m.group(1) is not None` (cli.py:251) is `m[1] != ""`
+		// -- "no shutdown" captures "no " (enable), bare "shutdown" captures ""
+		// (disable). Using `== ""` inverts admin state.
+		enabled := m[1] != ""
 		sim, exists := f.state.Ports[port]
 		if !exists {
 			return cliInvalid, true

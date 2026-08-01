@@ -6,6 +6,7 @@ package fastpath
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -66,6 +67,23 @@ func TestFormatPointerHelpers(t *testing.T) {
 	}
 	if got := formatIntList(nil); got != "[]" {
 		t.Fatalf("formatIntList(nil) = %q, want \"[]\"", got)
+	}
+}
+
+func TestNewSerialTransport_OpenErrorWrapsErrCliTransport(t *testing.T) {
+	// A nonexistent device path makes serial.Open fail, exercising
+	// NewSerialTransport's config/mode/open + error-wrapping path (the
+	// real-device success path needs actual hardware, deferred to slice 11).
+	_, err := NewSerialTransport(SerialConfig{
+		Device:   "/dev/nonexistent-fastpath-cli-test-tty",
+		Username: "admin",
+		Password: "x",
+	})
+	if err == nil {
+		t.Fatalf("NewSerialTransport on a bogus device: want error, got nil")
+	}
+	if !errors.Is(err, ErrCliTransport) {
+		t.Fatalf("NewSerialTransport error = %v, want wrapping ErrCliTransport", err)
 	}
 }
 
