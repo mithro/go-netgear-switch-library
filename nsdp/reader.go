@@ -43,11 +43,15 @@ const (
 	noPoEReadMsg = "NSDP has no PoE status tag (" + nsdpSweepEvidence + "); use the HTTP backend for PoE"
 )
 
-// fullDeviceTags is every tag ParseDevice knows how to decode, requested
-// together so GetDevice returns the COMPLETE NsdpDevice in one round trip --
-// identity, mgmt IP, per-port status/stats, VLANs/PVIDs, and the QoS/
-// mirroring/IGMP/broadcast-filtering/loop-detection tags. Mirrors Python's
-// _FULL_DEVICE_TAGS exactly, including order.
+// fullDeviceTags is the tag set GetDevice requests to build an NsdpDevice in
+// one round trip -- identity, mgmt IP, per-port status/stats, VLANs/PVIDs, and
+// the QoS/mirroring/IGMP/broadcast-filtering/loop-detection tags. Ported from
+// Python's _FULL_DEVICE_TAGS. One tag the pin's list also carries is NOT here:
+// PORT_NAME (0xB000, per-port operator descriptions) -- the pin reads it into
+// NsdpDevice.port_names and surfaces it as PortStatus.name, whereas this
+// package has the write-side builder (write_tlv.go) but not yet the read
+// projection, parser, or NsdpDevice field. That NSDP read-side reconciliation
+// is tracked in the project ledger, not marked inline.
 var fullDeviceTags = []Tag{
 	TagModel,
 	TagMAC,
@@ -227,8 +231,10 @@ func mapMgmtIP(dev model.NsdpDevice) model.MgmtIPConfig {
 // model.PortStatus type (see mapPorts for the exact field-mapping quirks).
 //
 // Requests, via device: TagPortCount, TagPortStatus (plus TagModel,
-// prepended by withModel), mirroring Python's
-// get_ports/[Tag.PORT_COUNT, Tag.PORT_STATUS].
+// prepended by withModel). The pin's get_ports also requests PORT_NAME to
+// fill PortStatus.name; that read-side reconciliation is pending (see
+// fullDeviceTags' note), so this list is PORT_COUNT+PORT_STATUS for now and
+// every PortStatus.Name is left nil.
 func (r *Reader) GetPorts(ctx context.Context) ([]model.PortStatus, error) {
 	dev, err := r.device(ctx, []Tag{TagPortCount, TagPortStatus})
 	if err != nil {
