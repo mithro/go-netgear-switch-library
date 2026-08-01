@@ -123,6 +123,56 @@ func TestCliFaceDrivesAllWriteCommands(t *testing.T) {
 	}
 }
 
+// TestCliFaceDrivesBroadCommandSet runs a wide spread of show/config/error
+// commands through the in-process dispatcher to exercise run()/configCommand/
+// vlanDBCommand/interfaceCommand and the show-output renderers' routing that
+// the targeted write tests don't reach. Assertions are on the accept/reject
+// contract and no-panic, not exact bytes (the renderers' bytes are pinned in
+// the cliface_render round-trip tests).
+func TestCliFaceDrivesBroadCommandSet(t *testing.T) {
+	ctx := context.Background()
+
+	// gsm7252ps: XE image, full feature set.
+	st := SeedGSM7252PS()
+	face, _ := newTestCliFace(t, "gsm7252ps", st)
+	shows := []string{
+		"show version", "show port all", "show vlan brief", "show vlan 1",
+		"show interface ethernet 1/0/1", "show network",
+		"show mac-addr-table", "show lldp remote-device all", "show environment",
+	}
+	for _, c := range shows {
+		if out, err := face.Run(ctx, c); err != nil {
+			t.Fatalf("Run(%q): %v", c, err)
+		} else if out == "" {
+			t.Errorf("Run(%q) returned empty output (expected a rendered page)", c)
+		}
+	}
+	// Config-mode + vlan-database + interface-mode traversal.
+	seq := []string{
+		"configure", "vlan database", "vlan 4001", "name 4001 capture", "exit",
+		"interface 1/0/1", "switchport mode general", "switchport mode access",
+		"switchport mode trunk", "exit", "exit",
+	}
+	for _, c := range seq {
+		if _, err := face.Run(ctx, c); err != nil {
+			t.Fatalf("Run(%q): %v", c, err)
+		}
+	}
+	// An unrecognized command is rejected (non-empty output), never accepted
+	// silently.
+	if out, _ := face.Run(ctx, "this is not a command"); out == "" {
+		t.Errorf("an unrecognized command was accepted silently (empty output)")
+	}
+
+	// gsm7228ps (S3300 Smart image): `show vlan brief` is rejected (Invalid);
+	// `show vlan` is the supported form -- exercises that per-model branch.
+	st2 := SeedGSM7228PS()
+	face2, _ := newTestCliFace(t, "gsm7228ps", st2)
+	if out, _ := face2.Run(ctx, "show vlan"); out == "" {
+		t.Errorf("gsm7228ps Run(\"show vlan\") returned empty")
+	}
+}
+
 // TestTelnetFaceStripsClientIACNegotiation drives the TelnetFace with a RAW
 // client that SENDS IAC option-negotiation (WILL/DO) and a subnegotiation
 // block interleaved with its login + command, exercising the face's

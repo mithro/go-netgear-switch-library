@@ -102,6 +102,34 @@ func TestShellDriver_RunNoPromptBeforeEOFErrors(t *testing.T) {
 	}
 }
 
+func TestNewSSHTransport_DialErrorWrapsErrCliTransport(t *testing.T) {
+	// Port 1 on loopback is (essentially always) closed: the dial fails,
+	// exercising NewSSHTransport's connect + error-wrapping path.
+	_, err := NewSSHTransport(SSHConfig{
+		Host: "127.0.0.1", Port: 1, Username: "admin", Password: "x",
+		Timeout: 500 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatalf("NewSSHTransport to a closed port: want error, got nil")
+	}
+	if !errors.Is(err, ErrCliTransport) {
+		t.Fatalf("NewSSHTransport error = %v, want wrapping ErrCliTransport", err)
+	}
+}
+
+func TestNewTelnetTransport_DialErrorWrapsErrCliTransport(t *testing.T) {
+	_, err := NewTelnetTransport(TelnetConfig{
+		Host: "127.0.0.1", Port: 1, Username: "admin", Password: "x",
+		Timeout: 500 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatalf("NewTelnetTransport to a closed port: want error, got nil")
+	}
+	if !errors.Is(err, ErrCliTransport) {
+		t.Fatalf("NewTelnetTransport error = %v, want wrapping ErrCliTransport", err)
+	}
+}
+
 func TestNewSerialTransport_OpenErrorWrapsErrCliTransport(t *testing.T) {
 	// A nonexistent device path makes serial.Open fail, exercising
 	// NewSerialTransport's config/mode/open + error-wrapping path (the
