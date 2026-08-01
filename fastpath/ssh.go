@@ -36,10 +36,13 @@
 //   - Auth is password-only (ssh.py:101, `transport.auth_password`): no
 //     pubkey, no keyboard-interactive, no agent.
 //   - Default port 22, default timeout 20s (ssh.py:44,57-58) bound the TCP
-//     dial + handshake via ssh.ClientConfig.Timeout. x/crypto/ssh has no
-//     per-Read timeout knob equivalent to paramiko's channel.settimeout
-//     (ssh.py:105); ShellDriver's maxReads loop bound (session.go) is what
-//     still bounds a hung read in this port.
+//     dial via net.DialTimeout AND every subsequent blocking Read, mirroring
+//     paramiko's channel.settimeout(self._timeout) (ssh.py:105). x/crypto/ssh's
+//     Channel has no per-Read deadline of its own (it is an in-memory buffer
+//     fed by the Client's background packet-dispatch loop, not a direct
+//     socket proxy), so Read arms a deadline on the underlying net.Conn
+//     instead -- see sshTransport.Read's doc comment for the resulting
+//     failure mode and why it is still the desired recovery behavior.
 //   - PTY requested with paramiko's own get_pty() defaults (ssh.py:103,
 //     called with zero arguments: term "vt100", width 80, height 24) --
 //     mirrored by RequestPty("vt100", 24, 80, ssh.TerminalModes{}).
@@ -91,7 +94,10 @@ type SSHConfig struct {
 	Port     int
 	Username string
 	Password string
-	// Timeout bounds the TCP dial + handshake, defaulting to 20s
+	// Timeout bounds BOTH the TCP dial and every subsequent blocking
+	// Transport.Read call (one field for both, exactly like ssh.py's
+	// single self._timeout: ssh.py:100's `start_client(timeout=...)` and
+	// ssh.py:105's `channel.settimeout(...)`), defaulting to 20s
 	// (ssh.py:44,58) when zero or negative.
 	Timeout time.Duration
 }
@@ -102,10 +108,12 @@ type SSHConfig struct {
 // channel.recv/channel.sendall), and Close tears down the channel then the
 // client connection (ssh.py:138-147's close() order).
 type sshTransport struct {
-	client  *ssh.Client
-	session *ssh.Session
-	stdin   io.WriteCloser
-	stdout  io.Reader
+	conn        net.Conn
+	client      *ssh.Client
+	session     *ssh.Session
+	stdin       io.WriteCloser
+	stdout      io.Reader
+	readTimeout time.Duration
 }
 
 // NewSSHTransport dials cfg.Host:cfg.Port, authenticates with
@@ -134,32 +142,64 @@ func NewSSHTransport(cfg SSHConfig) (Transport, error) {
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		// Belt-and-suspenders legacy host-key algorithm, moved to the
 		// front (ssh.py:70-88's _prefer_legacy_algorithms).
-		HostKeyAlgorithms: append([]string{legacySSHHostKeyAlgo}, ssh.SupportedAlgorithms().HostKeys...),
+		HostKeyAlgorithms: preferAlgorithm(legacySSHHostKeyAlgo, ssh.SupportedAlgorithms().HostKeys),
 		Timeout:           timeout,
 		Config: ssh.Config{
 			// Same belt-and-suspenders treatment for the legacy KEX.
-			KeyExchanges: append([]string{legacySSHKeyExchange}, ssh.SupportedAlgorithms().KeyExchanges...),
+			KeyExchanges: preferAlgorithm(legacySSHKeyExchange, ssh.SupportedAlgorithms().KeyExchanges),
 		},
 	}
 
+	// Dial and handshake by hand (rather than ssh.Dial, which does the
+	// same two steps internally) so the raw net.Conn can be retained on
+	// sshTransport -- Read needs it to arm a per-call deadline (see
+	// sshTransport.Read's doc comment); ssh.Client/ssh.Session never
+	// expose the conn themselves.
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(port))
-	client, err := ssh.Dial("tcp", addr, clientCfg)
+	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("%w: SSH connect/auth failed: %w", ErrCliTransport, err)
 	}
-
-	t, err := newSSHShellTransport(client)
+	sconn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
 	if err != nil {
-		client.Close()
+		conn.Close()
+		return nil, fmt.Errorf("%w: SSH connect/auth failed: %w", ErrCliTransport, err)
+	}
+	client := ssh.NewClient(sconn, chans, reqs)
+
+	t, err := newSSHShellTransport(client, conn, timeout)
+	if err != nil {
+		client.Close() // also closes conn (Client.Close tears down the whole chain down to it).
 		return nil, fmt.Errorf("%w: SSH connect/auth failed: %w", ErrCliTransport, err)
 	}
 	return t, nil
 }
 
+// preferAlgorithm returns algos with prefer moved to the front, removing
+// any pre-existing occurrence elsewhere in the list first so the result
+// never lists an identifier twice -- mirrors ssh.py:70-88's
+// _prefer_legacy_algorithms ("moves the legacy KEX/host-key algorithm to
+// the FRONT of the preferred list, doesn't remove others"; its Python form
+// is naturally dedup-safe via a set membership check, `if _LEGACY_KEX in
+// available_kex`).
+func preferAlgorithm(prefer string, algos []string) []string {
+	out := make([]string, 0, len(algos)+1)
+	out = append(out, prefer)
+	for _, a := range algos {
+		if a != prefer {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // newSSHShellTransport opens one session channel on client, requests a PTY,
 // and starts an interactive shell on it -- ssh.py:102-104's
 // `channel = transport.open_session(...); channel.get_pty(); channel.invoke_shell()`.
-func newSSHShellTransport(client *ssh.Client) (*sshTransport, error) {
+// conn is the raw net.Conn client was built on (retained for Read's
+// deadline) and readTimeout is the per-Read deadline duration (see
+// sshTransport.Read).
+func newSSHShellTransport(client *ssh.Client, conn net.Conn, readTimeout time.Duration) (*sshTransport, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return nil, err
@@ -193,14 +233,48 @@ func newSSHShellTransport(client *ssh.Client) (*sshTransport, error) {
 		session.Close()
 		return nil, err
 	}
-	return &sshTransport{client: client, session: session, stdin: stdin, stdout: stdout}, nil
+	return &sshTransport{
+		conn:        conn,
+		client:      client,
+		session:     session,
+		stdin:       stdin,
+		stdout:      stdout,
+		readTimeout: readTimeout,
+	}, nil
 }
 
-// Read implements Transport by reading from the shell channel's stdout.
-// The underlying channel returns bare io.EOF (not a wrapped error) once
-// closed and drained -- see newSSHShellTransport's doc comment --
-// ShellDriver's read loops (session.go) depend on that exact sentinel.
+// Read implements Transport by reading from the shell channel's stdout,
+// first arming a deadline on the underlying net.Conn -- ssh.py:105's
+// `channel.settimeout(self._timeout)` -- so a switch that stops responding
+// mid-session cannot block a Read forever (session.go's ctx.Err() check in
+// ShellDriver only runs once up front, never during an in-flight Read, so
+// this is the only thing that can still unblock it).
+//
+// Mechanism and consequence, since x/crypto/ssh's Channel is an in-memory
+// buffer fed by the Client's background packet-dispatch loop rather than a
+// direct socket proxy: arming the deadline does NOT cancel this specific
+// Read in isolation. If it fires while that dispatch loop is itself
+// blocked reading the next SSH packet off conn, the loop errors out and
+// tears down every channel on this connection at once (x/crypto/ssh's
+// mux.loop() calls dropAll() on any read error, deadline-caused or not) --
+// so a fired deadline surfaces here as this channel's ordinary clean-close
+// signal, bare io.EOF, not a distinguishable timeout error, and the whole
+// ssh.Client becomes unusable afterward. That is still the desired
+// recovery: ShellDriver's readUntil (session.go) breaks out of its retry
+// loop on ANY io.EOF with no prompt yet seen and returns a hard
+// ErrCliTransport-wrapped failure instead of hanging forever, and the
+// caller closes the session on any Run/Setup failure regardless, so the
+// now-unusable connection is torn down anyway.
+//
+// A Read that completes before the deadline is completely unaffected --
+// SetReadDeadline is re-armed fresh (relative to "now") at the start of
+// every call, so steady traffic never trips it, and this Read's own return
+// value (data, bare io.EOF on a clean close, or otherwise) is passed
+// through unchanged, never wrapped or reinterpreted here.
 func (t *sshTransport) Read(p []byte) (int, error) {
+	if t.readTimeout > 0 {
+		_ = t.conn.SetReadDeadline(time.Now().Add(t.readTimeout))
+	}
 	return t.stdout.Read(p)
 }
 
