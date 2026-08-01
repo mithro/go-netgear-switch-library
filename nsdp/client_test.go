@@ -174,13 +174,31 @@ func TestUDPClient_WriteSendsWriteRequestWithPasswordAndChecksResult(t *testing.
 }
 
 func TestUDPClient_WriteBadPasswordRaisesNsdpError(t *testing.T) {
+	// A v1 denial (error 7, no blamed attribute) is a genuine bad password.
 	fx := &fakeExchange{response: responsePacket(t, OpWriteResponse, ResultBadPassword)}
 	c := newTestClient(t, fx)
 
 	pvid, _ := PvidTLV(1, 90)
 	_, err := c.Write(context.Background(), []TLVEntry{pvid}, "wrong")
 	wantSubstr(t, err, "bad password")
-	wantSubstr(t, err, AuthV2Unsupported)
+	wantSubstr(t, err, "error 0x07")
+}
+
+func TestUDPClient_WriteV2RequiredRaisesWiringHint(t *testing.T) {
+	// Error 13 blamed on TagPassword = a v1 XOR password sent to v2-only
+	// firmware: CheckResult must surface the v2-required WIRING hint
+	// (AuthV2Unsupported), not a plain bad-password message.
+	resp := Packet{Op: OpWriteResponse, Result: ResultBadPasswordV2, ErrorAttr: uint16(TagPassword)}
+	wire, err := resp.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx := &fakeExchange{response: wire}
+	c := newTestClient(t, fx)
+	pvid, _ := PvidTLV(1, 90)
+	_, werr := c.Write(context.Background(), []TLVEntry{pvid}, "somepw")
+	wantSubstr(t, werr, AuthV2Unsupported)
+	wantSubstr(t, werr, "0x000a") // blamed attribute named
 }
 
 func TestUDPClient_WriteWrongOpResponseRaisesNsdpError(t *testing.T) {

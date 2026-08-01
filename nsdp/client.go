@@ -63,21 +63,66 @@ func errNSDPCause(cause error, format string, a ...any) error {
 	return fmt.Errorf("%s: %w: %w", fmt.Sprintf(format, a...), model.ErrNSDP, cause)
 }
 
+// errorNames maps an NSDP error code (Result>>8) to its human name, mirroring
+// Python protocol.py's ERROR_NAMES verbatim.
+var errorNames = map[int]string{
+	0:                 "none",
+	ErrorReadOnly:     "attribute not readable",
+	ErrorWriteOnly:    "attribute not writable",
+	0x05:              "invalid value",
+	ErrorDenied:       "denied",
+	ErrorAuthRejected: "write authentication rejected",
+	ErrorLocked:       "write locked out after repeated auth failures",
+}
+
+// errorName names an NSDP error code, falling back to "unknown error code N".
+func errorName(code int) string {
+	if n, ok := errorNames[code]; ok {
+		return n
+	}
+	return fmt.Sprintf("unknown error code %d", code)
+}
+
+// attrName names the TLV tag the switch blamed for a rejection, mirroring
+// Python client.py's _attr_name ("<NAME> (0x%04x)"), or "no attribute" when
+// the switch named none. Go has no enum-name reflection like Python's
+// Tag(tag).name, so the tag is rendered as its 4-digit hex value (the
+// slice-10 cross-language error-text comparison already folds Python's richer
+// wording; the numeric tag is what actually identifies the blamed attribute).
+func attrName(attr uint16) string {
+	if attr == 0 {
+		return "no attribute"
+	}
+	return fmt.Sprintf("0x%04x", attr)
+}
+
 // CheckResult returns an error (wrapping model.ErrNSDP, via errNSDP) unless
 // packet reports success (Result == ResultSuccess). Mirrors Python
-// protocols.nsdp.client.check_result exactly: only ResultSuccess is silent;
-// ResultBadPassword gets the bad-password message with AuthV2Unsupported
-// appended verbatim; any other non-zero result gets a generic "failed with
-// result 0x%04x" message (4 lowercase hex digits, zero-padded).
+// protocols.nsdp.client.check_result: it NAMES the blamed attribute (ErrorAttr)
+// so a caller can debug the rejection (principle 1). The load-bearing case is
+// error 13 (ErrorAuthRejected) blamed on TagPassword -- a v1 XOR password
+// offered to firmware that only accepts the v2 salted challenge-response,
+// which is a WIRING problem (AuthV2Unsupported), not a wrong credential. Error
+// 13 on any other attribute, or error 7, really is a bad password. Error 14 is
+// the write lockout.
 func CheckResult(packet Packet) error {
-	switch packet.Result {
-	case ResultSuccess:
+	if packet.Result == ResultSuccess {
 		return nil
-	case ResultBadPassword:
-		return errNSDP("NSDP write rejected: bad password (result 0x0700). %s", AuthV2Unsupported)
-	default:
-		return errNSDP("NSDP request failed with result 0x%04x", packet.Result)
 	}
+	code := packet.ErrorCode()
+	blamed := attrName(packet.ErrorAttr)
+	detail := errorName(code)
+	if code == ErrorAuthRejected && packet.ErrorAttr == uint16(TagPassword) {
+		return errNSDP("NSDP write rejected at %s: error %d (%s) -- %s", blamed, code, detail, AuthV2Unsupported)
+	}
+	if code == ErrorDenied || code == ErrorAuthRejected {
+		return errNSDP("NSDP write rejected: bad password (error 0x%02x) at %s", code, blamed)
+	}
+	if code == ErrorLocked {
+		return errNSDP("NSDP write locked out after repeated auth failures (error 0x%02x) at %s; "+
+			"the switch goes silent for a cooldown -- pace writes and retry", code, blamed)
+	}
+	return errNSDP("NSDP request failed with result 0x%04x (error %d: %s) on %s", packet.Result, code, detail, blamed)
 }
 
 // ReadInterfaceMAC reads iface's 6-byte MAC address from Linux sysfs
