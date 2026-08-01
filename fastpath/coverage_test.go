@@ -70,6 +70,38 @@ func TestFormatPointerHelpers(t *testing.T) {
 	}
 }
 
+func TestShellDriver_CancelledContextErrorPaths(t *testing.T) {
+	tr := &fakeTransport{}
+	d := NewShellDriver(tr, ShellDriverConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := d.Setup(ctx); err == nil {
+		t.Fatalf("Setup(cancelled): want ctx error, got nil")
+	}
+	if _, err := d.Run(ctx, "show version"); err == nil {
+		t.Fatalf("Run(cancelled): want ctx error, got nil")
+	}
+	if _, err := d.RunSCPCopy(ctx, "copy scp://x y", "pw"); err == nil {
+		t.Fatalf("RunSCPCopy(cancelled): want ctx error, got nil")
+	}
+	if _, err := d.RunWriteMemory(ctx, "write memory", false); err == nil {
+		t.Fatalf("RunWriteMemory(cancelled): want ctx error, got nil")
+	}
+}
+
+func TestShellDriver_RunNoPromptBeforeEOFErrors(t *testing.T) {
+	// The transport returns text that never contains a prompt, then EOF: Run's
+	// readUntil must surface an ErrCliTransport-wrapped error, not hang or
+	// return the garbage as success.
+	tr := &fakeTransport{responder: func(string) string { return "garbage without any prompt\n" }}
+	d := NewShellDriver(tr, ShellDriverConfig{})
+	if _, err := d.Run(context.Background(), "show version"); err == nil {
+		t.Fatalf("Run with no prompt before EOF: want error, got nil")
+	} else if !errors.Is(err, ErrCliTransport) {
+		t.Fatalf("Run error = %v, want wrapping ErrCliTransport", err)
+	}
+}
+
 func TestNewSerialTransport_OpenErrorWrapsErrCliTransport(t *testing.T) {
 	// A nonexistent device path makes serial.Open fail, exercising
 	// NewSerialTransport's config/mode/open + error-wrapping path (the
