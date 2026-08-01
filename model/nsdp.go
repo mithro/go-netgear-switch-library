@@ -143,6 +143,15 @@ type NsdpIgmpSnooping struct {
 	VlanID *int `json:"vlan_id"`
 }
 
+// NsdpPortName is one port's operator description (NSDP TLV tag 0xB000),
+// mirroring Python protocols.nsdp.types.NsdpPortName. Name is nil when the TLV
+// carries only the port byte, which is how a real GS110EMX reports a port with
+// no description set (deliberately distinct from an empty-string description).
+type NsdpPortName struct {
+	PortID int     `json:"port_id"`
+	Name   *string `json:"name"`
+}
+
 // NsdpDevice is the NSDP-native aggregate device snapshot produced by
 // parse_device, mirroring Python protocols.nsdp.types.NsdpDevice. Model and
 // Mac are the only required fields (every parsed reply carries them); every
@@ -164,7 +173,11 @@ type NsdpDevice struct {
 
 	VlanEngine *VLANEngine `json:"vlan_engine"`
 
-	PortStatus     []NsdpPortStatus     `json:"port_status"`
+	PortStatus []NsdpPortStatus `json:"port_status"`
+	// PortNames are per-port operator descriptions (tag 0xB000), when that tag
+	// was requested. Ordered between PortStatus and PortStatistics to match
+	// Python's NsdpDevice field order.
+	PortNames      []NsdpPortName       `json:"port_names"`
 	PortStatistics []NsdpPortStatistics `json:"port_statistics"`
 	VlanMembers    []NsdpVlanMembership `json:"vlan_members"`
 	PortPvids      []NsdpPortPvid       `json:"port_pvids"`

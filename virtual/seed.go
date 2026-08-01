@@ -1089,6 +1089,10 @@ func SeedGS110EMX() *State {
 	s.Hostname = "sw-netgear-gs110emx1"
 
 	s.NsdpMac = [6]byte{0xbc, 0xa5, 0x11, 0xb8, 0xec, 0xf1}
+	// GS110EMX fw 1.0.2.8 requires NSDP v2 salted write auth (LIVE-MEASURED,
+	// auth.py:11/36): AUTH_V2_ENCPASS reads 0x10, writes need the token-first
+	// AUTH_V2_PASSWORD. The older Plus SKUs (gs305ep/gs105pe) stay v1.
+	s.NsdpAuthV2 = true
 
 	s.NsdpQosEngine = model.Ptr(1) // port-based
 

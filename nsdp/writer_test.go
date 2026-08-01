@@ -104,6 +104,9 @@ func (c *fakeNsdpWriteClient) applyTLV(t nsdp.TLVEntry) {
 			return
 		}
 		c.vlans[m.VlanID] = &vlanSets{members: toSet(m.MemberPorts), tagged: toSet(m.TaggedPorts)}
+	case nsdp.TagVLANDestroy:
+		vlan := int(t.Value[0])<<8 | int(t.Value[1])
+		delete(c.vlans, vlan)
 	case nsdp.TagIPAddress:
 		c.mgmt.ip = formatDottedQuad(t.Value)
 	case nsdp.TagNetmask:
@@ -306,14 +309,106 @@ func TestWriter_UnsupportedWritesRaise(t *testing.T) {
 		w := newTestWriter(t, newFakeNsdpWriteClient(true))
 		requireUnsupported(t, w.SetPortEnabled(ctx, 1, false, false))
 	})
-	t.Run("CreateVlan", func(t *testing.T) {
-		w := newTestWriter(t, newFakeNsdpWriteClient(true))
-		requireUnsupported(t, w.CreateVlan(ctx, 200, "guests"))
-	})
-	t.Run("DeleteVlan", func(t *testing.T) {
-		w := newTestWriter(t, newFakeNsdpWriteClient(true))
-		requireUnsupported(t, w.DeleteVlan(ctx, 200, false))
-	})
+}
+
+// --- VLAN create/delete over NSDP (ported from test_nsdp_write.py's
+// test_create_vlan_* / test_delete_vlan_*) ---
+
+// wroteTags reports whether the fake recorded a single-TLV write whose one
+// tag equals want -- the Go analogue of Python's `[Tag.X] in client.writes`.
+func wroteTags(writes [][]nsdp.Tag, want nsdp.Tag) bool {
+	for _, w := range writes {
+		if len(w) == 1 && w[0] == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestWriter_CreateVlanWritesEmptyMembership: create = write VLAN_MEMBERS for
+// an id the switch does not list yet (there is no separate "add VLAN" action).
+func TestWriter_CreateVlanWritesEmptyMembership(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	w := newTestWriter(t, client)
+	if err := w.CreateVlan(context.Background(), 4013, "throwaway"); err != nil {
+		t.Fatalf("CreateVlan: %v", err)
+	}
+	sets, ok := client.vlans[4013]
+	if !ok {
+		t.Fatalf("VLAN 4013 not created; vlans = %v", client.vlans)
+	}
+	if len(sets.members) != 0 || len(sets.tagged) != 0 {
+		t.Errorf("VLAN 4013 created with members=%v tagged=%v, want both empty", sets.members, sets.tagged)
+	}
+	if !wroteTags(client.writes, nsdp.TagVLANMembers) {
+		t.Errorf("writes = %v, want one [TagVLANMembers] write", client.writes)
+	}
+}
+
+// TestWriter_CreateVlanIdempotent: an id already listed is a no-op return --
+// no write at all, and the existing VLAN's members are untouched.
+func TestWriter_CreateVlanIdempotent(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	w := newTestWriter(t, client)
+	if err := w.CreateVlan(context.Background(), 90, "already-there"); err != nil {
+		t.Fatalf("CreateVlan(existing): %v", err)
+	}
+	if len(client.writes) != 0 {
+		t.Errorf("writes = %v, want none (VLAN 90 already listed)", client.writes)
+	}
+	sets := client.vlans[90]
+	if !sets.members[1] || !sets.members[2] || len(sets.members) != 2 {
+		t.Errorf("VLAN 90 members = %v, want {1,2} untouched", sets.members)
+	}
+}
+
+// TestWriter_CreateVlanVerificationFailure: a device that ignores the write
+// (apply=false) fails the read-back verify with *model.WriteVerificationError.
+func TestWriter_CreateVlanVerificationFailure(t *testing.T) {
+	w := newTestWriter(t, newFakeNsdpWriteClient(false))
+	err := w.CreateVlan(context.Background(), 4013, "throwaway")
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("CreateVlan error = %v, want *model.WriteVerificationError", err)
+	}
+}
+
+// TestWriter_DeleteVlanUsesDestroyTagAndNeedsForce: force-gated (wraps
+// model.ErrProtectedPort, no write) then, with force, writes VLAN_DESTROY and
+// the VLAN is gone.
+func TestWriter_DeleteVlanUsesDestroyTagAndNeedsForce(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	w := newTestWriter(t, client)
+	ctx := context.Background()
+
+	err := w.DeleteVlan(ctx, 90, false)
+	if !errors.Is(err, model.ErrProtectedPort) {
+		t.Fatalf("DeleteVlan without force error = %v, want to wrap model.ErrProtectedPort", err)
+	}
+	if len(client.writes) != 0 {
+		t.Errorf("writes = %v, want none before force", client.writes)
+	}
+
+	if err := w.DeleteVlan(ctx, 90, true); err != nil {
+		t.Fatalf("DeleteVlan(force): %v", err)
+	}
+	if _, ok := client.vlans[90]; ok {
+		t.Errorf("VLAN 90 still present after delete; vlans = %v", client.vlans)
+	}
+	if !wroteTags(client.writes, nsdp.TagVLANDestroy) {
+		t.Errorf("writes = %v, want a [TagVLANDestroy] write", client.writes)
+	}
+}
+
+// TestWriter_DeleteVlanVerificationFailure: a device that ignores the destroy
+// (apply=false) fails the read-back verify with *model.WriteVerificationError.
+func TestWriter_DeleteVlanVerificationFailure(t *testing.T) {
+	w := newTestWriter(t, newFakeNsdpWriteClient(false))
+	err := w.DeleteVlan(context.Background(), 90, true)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("DeleteVlan error = %v, want *model.WriteVerificationError", err)
+	}
 }
 
 // --- test_reader_rejects_non_nsdp_model (writer side) ---

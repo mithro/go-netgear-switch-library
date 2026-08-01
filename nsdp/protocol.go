@@ -117,8 +117,9 @@ const (
 
 	// Authentication
 	TagPassword       Tag = 0x000A
-	TagAuthV2Salt     Tag = 0x0017 // recognised, NOT implemented; see auth.go
-	TagAuthV2Password Tag = 0x001A // recognised, NOT implemented; see auth.go
+	TagAuthV2Encpass  Tag = 0x0014 // read: scheme selector (0x10=v2, else v1); see auth.go EncpassIsV2
+	TagAuthV2Salt     Tag = 0x0017 // read: fresh 4-byte salt (rotates every read); feeds AuthV2Password
+	TagAuthV2Password Tag = 0x001A // write-only: 8-byte v2 auth token (see auth.go AuthV2Password), token-first
 
 	// Port information
 	TagPortStatus     Tag = 0x0C00
@@ -153,6 +154,34 @@ const (
 	// Actions (write-only)
 	TagReboot       Tag = 0x0013
 	TagFactoryReset Tag = 0x0400
+	// TagVLANDestroy (write-only, 2-byte VLAN id) destroys a VLAN. GROUNDED in
+	// ngadmin's C source (lib/src/vlan.c::ngadmin_VLANDestroy builds
+	// newShortAttr(ATTR_VLAN_DESTROY, vlan)) -- the evidence that replaced this
+	// library's earlier unproven "NSDP has no VLAN create/destroy tag" claim.
+	// Un-exercised on hardware; verify-after-write is the runtime guard.
+	TagVLANDestroy Tag = 0x2C00
+	// TagPortName (per-port description write, port byte + UTF-8 name) mirrors
+	// the read shape; un-exercised on hardware like TagVLANDestroy.
+	TagPortName Tag = 0xB000
+)
+
+// NSDP response error codes (the high byte of the 2-byte Result field, i.e.
+// Result >> 8) and their whole-value Result forms, mirroring Python
+// protocols/nsdp/write.py's RESULT_* and protocol.py's ERROR_* constants.
+// v1 (0x0700) has been handled since slice 05; the v2 codes below are
+// consumed once CheckResult is enriched to name the blamed attribute (see the
+// progress ledger's NSDP-v2 reconciliation scope).
+const (
+	ErrorDenied       = 0x07 // v1 XOR auth denied (ngadmin ERROR_DENIED)
+	ErrorReadOnly     = 0x03 // a READ named a write-only tag
+	ErrorWriteOnly    = 0x04 // a WRITE led with a write-only tag out of order
+	ErrorAuthRejected = 0x0D // v2 salted-auth token refused (error 13)
+	ErrorLocked       = 0x0E // v2 write lockout after repeated failures (error 14)
+
+	ResultBadPasswordV2 = 0x0D00
+	ResultLockedV2      = 0x0E00
+	ResultReadOnly      = 0x0300
+	ResultWriteOnly     = 0x0400
 )
 
 // errNSDP wraps model.ErrNSDP with a formatted message, mirroring the
@@ -206,8 +235,21 @@ type Packet struct {
 	ServerMAC []byte // exactly 6 bytes on the wire; see packMAC
 	Sequence  uint32 // full 4-byte header field (dossier §1.2: not 2 bytes + 2 reserved)
 	Result    uint16
+	// ErrorAttr is the TLV tag the switch blamed for Result (header bytes
+	// 4-5), 0 when there is no error; requests always send 0. Header bytes
+	// 4-5 are NOT reserved -- ngadmin's struct nsdp_header names this field,
+	// and it is what separates the two causes of error 13 (a v1 password
+	// offered to v2-only firmware, blamed on TagPassword, vs a genuinely bad
+	// v2 token blamed elsewhere). Consumed by CheckResult.
+	ErrorAttr uint16
 	TLVs      []TLVEntry
 }
+
+// ErrorCode is the high byte of Result (Result >> 8) -- the NSDP error code
+// alone (3=read-only, 4=write-only, 7=v1 denied, 13=v2 auth refused,
+// 14=lockout), mirroring Python NSDPPacket.error_code. The low byte (unk1) is
+// always 0.
+func (p Packet) ErrorCode() int { return int(p.Result >> 8) }
 
 // AddTLV appends a TLVEntry to p.TLVs, mirroring Python's
 // NSDPPacket.add_tlv.
@@ -254,7 +296,8 @@ func (p Packet) Encode() ([]byte, error) {
 	header[0x00] = 0x01 // version: hardcoded, not a settable field
 	header[0x01] = byte(p.Op)
 	binary.BigEndian.PutUint16(header[0x02:0x04], p.Result)
-	// header[0x04:0x08] reserved1: left zero
+	binary.BigEndian.PutUint16(header[0x04:0x06], p.ErrorAttr) // 0 on requests
+	// header[0x06:0x08] reserved: left zero
 	copy(header[0x08:0x0E], clientMAC)
 	copy(header[0x0E:0x14], serverMAC)
 	binary.BigEndian.PutUint32(header[0x14:0x18], p.Sequence)
@@ -291,6 +334,7 @@ func DecodePacket(data []byte) (Packet, error) {
 
 	opRaw := Op(header[0x01])
 	result := binary.BigEndian.Uint16(header[0x02:0x04])
+	errorAttr := binary.BigEndian.Uint16(header[0x04:0x06])
 	clientMAC := append([]byte(nil), header[0x08:0x0E]...)
 	serverMAC := append([]byte(nil), header[0x0E:0x14]...)
 	sequence := binary.BigEndian.Uint32(header[0x14:0x18])
@@ -319,6 +363,7 @@ func DecodePacket(data []byte) (Packet, error) {
 		ServerMAC: serverMAC,
 		Sequence:  sequence,
 		Result:    result,
+		ErrorAttr: errorAttr,
 		TLVs:      tlvs,
 	}, nil
 }

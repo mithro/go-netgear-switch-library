@@ -509,3 +509,44 @@ func TestReader_GetMgmtIPDhcp(t *testing.T) {
 		t.Errorf("Mode = %v, want IPModeDHCP", mgmt.Mode)
 	}
 }
+
+// portNameNsdpClient returns a fixed packet with two ports -- one described,
+// one bare -- for exercising GetPorts' PORT_NAME (0xB000) -> PortStatus.Name
+// mapping. It always includes MODEL and MAC (ParseDevice requires both).
+type portNameNsdpClient struct{}
+
+func (portNameNsdpClient) Read(_ context.Context, _ []nsdp.Tag) (*nsdp.Packet, error) {
+	pkt := &nsdp.Packet{Op: nsdp.OpReadResponse, ClientMAC: make([]byte, 6), ServerMAC: make([]byte, 6)}
+	pkt.AddTLV(nsdp.TagModel, []byte("GS110EMX"))
+	pkt.AddTLV(nsdp.TagMAC, []byte{0xbc, 0xa5, 0x11, 0xb8, 0xec, 0xf1})
+	pkt.AddTLV(nsdp.TagPortCount, []byte{0x02})
+	pkt.AddTLV(nsdp.TagPortStatus, []byte{0x01, 0x05, 0x01})                    // port 1, gigabit
+	pkt.AddTLV(nsdp.TagPortStatus, []byte{0x02, 0x00, 0x01})                    // port 2, down
+	pkt.AddTLV(nsdp.TagPortName, append([]byte{0x01}, []byte("lab-uplink")...)) // port 1 named
+	pkt.AddTLV(nsdp.TagPortName, []byte{0x02})                                  // port 2 bare (undescribed)
+	return pkt, nil
+}
+
+// TestReader_GetPortsMapsPortName proves GetPorts folds PORT_NAME into
+// PortStatus.Name -- a described port gets its name, a bare PORT_NAME TLV
+// leaves Name nil (mirroring Python _ports' names.get()).
+func TestReader_GetPortsMapsPortName(t *testing.T) {
+	reader, err := nsdp.NewReader(portNameNsdpClient{}, gs110emx(t))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	ports, err := reader.GetPorts(context.Background())
+	if err != nil {
+		t.Fatalf("GetPorts: %v", err)
+	}
+	byPort := map[int]model.PortStatus{}
+	for _, p := range ports {
+		byPort[p.Port] = p
+	}
+	if p1 := byPort[1]; p1.Name == nil || *p1.Name != "lab-uplink" {
+		t.Errorf("port 1 Name = %v, want \"lab-uplink\"", p1.Name)
+	}
+	if p2 := byPort[2]; p2.Name != nil {
+		t.Errorf("port 2 Name = %v, want nil (bare PORT_NAME TLV = undescribed)", p2.Name)
+	}
+}
