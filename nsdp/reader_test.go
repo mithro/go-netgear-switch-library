@@ -520,8 +520,8 @@ func (portNameNsdpClient) Read(_ context.Context, _ []nsdp.Tag) (*nsdp.Packet, e
 	pkt.AddTLV(nsdp.TagModel, []byte("GS110EMX"))
 	pkt.AddTLV(nsdp.TagMAC, []byte{0xbc, 0xa5, 0x11, 0xb8, 0xec, 0xf1})
 	pkt.AddTLV(nsdp.TagPortCount, []byte{0x02})
-	pkt.AddTLV(nsdp.TagPortStatus, []byte{0x01, 0x05, 0x01}) // port 1, gigabit
-	pkt.AddTLV(nsdp.TagPortStatus, []byte{0x02, 0x00, 0x01}) // port 2, down
+	pkt.AddTLV(nsdp.TagPortStatus, []byte{0x01, 0x05, 0x01})                    // port 1, gigabit
+	pkt.AddTLV(nsdp.TagPortStatus, []byte{0x02, 0x00, 0x01})                    // port 2, down
 	pkt.AddTLV(nsdp.TagPortName, append([]byte{0x01}, []byte("lab-uplink")...)) // port 1 named
 	pkt.AddTLV(nsdp.TagPortName, []byte{0x02})                                  // port 2 bare (undescribed)
 	return pkt, nil
