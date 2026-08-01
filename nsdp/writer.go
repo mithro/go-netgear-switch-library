@@ -49,17 +49,24 @@ import (
 // stubs in backend_nsdp.go, which this package's own doc comment on Writer
 // explicitly defers to the facade layer) -- can reference this constant
 // instead of duplicating the string.
-const NoPoEWriteMsg = "NSDP has no PoE control tag; use the HTTP backend (Slice 6) for PoE"
+const NoPoEWriteMsg = "NSDP has no PoE control tag (" + nsdpSweepEvidence + "); use the HTTP backend for PoE"
 
-// noPortAdminMsg is the exact unsupported-write message for the one
-// remaining unsupported per-port write, mirroring Python nsdp_write.py's
-// _NO_PORT_ADMIN module constant verbatim. Unexported: nothing outside this
-// package needs to reproduce it independently (unlike NoPoEWriteMsg above).
-// (The pin's former _NO_VLAN_LIFECYCLE constant is gone -- VLAN create/delete
-// are now implemented over NSDP; see CreateVlan/DeleteVlan below.)
-const noPortAdminMsg = "no per-port admin-enable is available on these Plus models: NSDP has no " +
-	"admin-enable tag, and the web UI has no grounded port-enable endpoint " +
-	"(UNVERIFIED-pending-capture)"
+// noPortAdminMsg is the unsupported-write message for the one remaining
+// unsupported per-port write (SetPortEnabled), mirroring Python
+// nsdp_write.py's _NO_PORT_ADMIN. The pin corrected the earlier "NSDP has no
+// admin-enable tag" claim: the sweep actually found two CANDIDATE per-port
+// config tags (0x0800, 0x9400) whose semantics were never settled, so the
+// honest characterization is UNPROVEN, not absent -- and it points at the HTTP
+// backend, whose port-settings page IS grounded (webui.Writer.SetPortEnabled
+// implements it live-verified). Unexported: nothing outside this package needs
+// to reproduce it independently (unlike NoPoEWriteMsg above). (The pin's former
+// _NO_VLAN_LIFECYCLE constant is gone -- VLAN create/delete are now implemented
+// over NSDP; see CreateVlan/DeleteVlan below.)
+const noPortAdminMsg = "per-port admin-enable over NSDP is UNPROVEN on these Plus models: the " +
+	"measured tag inventory (GS110EMX fw 1.0.2.8) has two candidate per-port config tags " +
+	"(0x0800, 0x9400) whose semantics were never settled -- no write has been attempted " +
+	"against either, and a wrong guess can drop the port's link. Use the HTTP backend, " +
+	"whose port-settings page IS grounded"
 
 // unsupportedWrite wraps model.ErrUnsupportedCapability with msg verbatim,
 // mirroring Python's raise UnsupportedCapabilityError(msg).
