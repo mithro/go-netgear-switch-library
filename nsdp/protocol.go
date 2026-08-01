@@ -117,8 +117,9 @@ const (
 
 	// Authentication
 	TagPassword       Tag = 0x000A
-	TagAuthV2Salt     Tag = 0x0017 // recognised, NOT implemented; see auth.go
-	TagAuthV2Password Tag = 0x001A // recognised, NOT implemented; see auth.go
+	TagAuthV2Encpass  Tag = 0x0014 // read: scheme selector (0x10=v2, else v1); see auth.go EncpassIsV2
+	TagAuthV2Salt     Tag = 0x0017 // read: fresh 4-byte salt (rotates every read); feeds AuthV2Password
+	TagAuthV2Password Tag = 0x001A // write-only: 8-byte v2 auth token (see auth.go AuthV2Password), token-first
 
 	// Port information
 	TagPortStatus     Tag = 0x0C00
