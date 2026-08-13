@@ -168,12 +168,21 @@ var models = []SwitchModel{
 		// "s3300" is an alias (see modelAliases). Note 4526.100.10.19 is
 		// the product-ID OID, distinct from the 4526.11 vendor DATA
 		// subtree.
+		//
+		// TELNET, NOT SSH: the S3300-52X's FASTPATH CLI is reachable over
+		// telnet on the NON-STANDARD port 60000 (not 23) -- live-verified
+		// 2026-07-30 on 10.1.5.11 (login admin+password, prompt
+		// "(manage-sw-netgear-s3300-1) >"). SSH is genuinely ABSENT: the
+		// switch runs no ssh listener on any port (its own SNMP
+		// tcpConnTable shows only 80/443/60000). Mirrors Python
+		// registry.py's gsm7228ps _model(...) call exactly -- do not
+		// re-add BackendSSH here without a NEW live capture proving it.
 		Key:            "gsm7228ps",
 		DisplayName:    "GSM7228PS (S3300)",
 		Class:          ClassSmartManagedPro,
 		PortCount:      52,
 		PoEPortCount:   48,
-		Backends:       []Backend{BackendSNMP, BackendHTTP, BackendSSH, BackendTelnet},
+		Backends:       []Backend{BackendSNMP, BackendHTTP, BackendTelnet},
 		SNMPVendorBase: vendorBaseSmartManagedPro,
 		Verified:       true,
 	},

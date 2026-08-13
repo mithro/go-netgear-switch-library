@@ -625,7 +625,7 @@ func TestFacadeHTTPIntegration_GS728TPPReadsAndUnsupportedStatsAndCertUpload(t *
 	}
 }
 
-// --- gsm7228ps (S3300 dialect, backends {SNMP, HTTP, SSH, Telnet}) ---------
+// --- gsm7228ps (S3300 dialect, backends {SNMP, HTTP, Telnet} -- no SSH) ----
 //
 // gsm7228ps's HTTPModelSpec.ReadsVerified is TRUE at this pin (live
 // HTTP<->SNMP cross-verified 2026-07-30, webui/endpoints.go's own doc
