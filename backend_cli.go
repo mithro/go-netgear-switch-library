@@ -16,6 +16,19 @@
 // backend_http.go's lazyHTTPSession and Python's memoized _built_cli_client):
 // an op that refuses honestly without ever touching the wire must never dial
 // a socket -- only an op the CLI actually ends up serving pays that cost.
+//
+// The reads/writes_verified gate (cliReadsSupported/cliWritesSupported below)
+// is checked as the LITERAL FIRST statement in both buildCLIReader and
+// buildCLIWriter -- BEFORE sw's CLI session is even looked up -- mirroring
+// backend_http.go's httpReadsSupported gate ordering and Python's
+// cli_reads_supported/cli_writes_supported checks in
+// SyncSwitch._reader_for/_writer_for (sync_api.py:382, 442): a model whose
+// CliModelSpec is not (yet) cross-verified against hardware must refuse with
+// a plain UnsupportedCapabilityError, never dial an SSH/telnet session at
+// all. All 4 registered CLI models (gsm7252ps, m4300-24x, m4300-16x,
+// gsm7228ps) are ReadsVerified/WritesVerified=true at this pin, so this gate
+// changes no real-model behavior -- it only closes a latent gap where an
+// unverified CLI model would otherwise have been dialled.
 
 package netgearswitch
 
@@ -69,14 +82,55 @@ func buildCLIWriterTelnet(sw *Switch) (BackendWriter, error) {
 	return buildCLIWriter(sw, cliTransportTelnet)
 }
 
-// buildCLIReader is the BackendBuilder body for both CLI transports: it takes
-// sw's shared (lazily-built) CLI session for kind, then wraps it in a
-// *fastpath.Reader via fastpath.NewReader -- which itself returns an error
-// wrapping model.ErrUnsupportedCapability if sw.model has no CLI command spec
-// (fastpath.CLISpec), needing no further gate here. *fastpath.Reader already
-// satisfies BackendReader verbatim (its Get* method set/signatures match the
-// merged SNMP/HTTP readers), so no adapter shim is needed on the read side.
+// cliReadsSupported mirrors Python's cli_reads_supported (_dispatch.py:202-
+// 217) and this package's HTTP sibling httpReadsSupported (backend_http.go):
+// false if m has no CLI backend at all, or its CliModelSpec is missing/its
+// ReadsVerified flag is false. Deliberately duplicated rather than shared
+// with capabilities/support_cli.go's identically-behaved unexported helper
+// of the same name -- that package's oracle and this package's live dispatch
+// gate are independently maintained on purpose (see httpSupport's own doc
+// comment in capabilities/support_http.go for the same duplication on the
+// HTTP side); fastpath.CLISpec is the single source of truth both call.
+func cliReadsSupported(m *model.SwitchModel) bool {
+	spec, err := fastpath.CLISpec(m)
+	if err != nil {
+		return false
+	}
+	return spec.ReadsVerified
+}
+
+// cliWritesSupported additionally requires ReadsVerified AND WritesVerified
+// -- a CLI write cannot be honestly verified by reading back through an
+// unverified reader (every fastpath.Writer write verifies itself via its own
+// internal Reader on the SAME session -- fastpath/writer.go's NewWriter).
+// Mirrors Python's cli_writes_supported (_dispatch.py:220-234).
+func cliWritesSupported(m *model.SwitchModel) bool {
+	spec, err := fastpath.CLISpec(m)
+	if err != nil {
+		return false
+	}
+	return spec.ReadsVerified && spec.WritesVerified
+}
+
+// buildCLIReader is the BackendBuilder body for both CLI transports: the
+// cliReadsSupported gate runs FIRST -- before sw's CLI session is even
+// looked up -- mirroring buildHTTPReader's httpReadsSupported gate
+// (backend_http.go) and Python's cli_reads_supported check in
+// SyncSwitch._reader_for (sync_api.py:382). Unlike webui.NewReader,
+// fastpath.NewReader does NOT re-check ReadsVerified itself (see that
+// function's own doc comment, fastpath/reader.go) -- this gate is the ONLY
+// place the Go read side enforces it. Past the gate: takes sw's shared
+// (lazily-built) CLI session for kind, then wraps it in a *fastpath.Reader
+// via fastpath.NewReader -- which still separately returns an error wrapping
+// model.ErrUnsupportedCapability if sw.model has no CLI command spec at all
+// (fastpath.CLISpec), a DIFFERENT failure mode than the verified gate above
+// (no spec vs. an unverified spec). *fastpath.Reader already satisfies
+// BackendReader verbatim (its Get* method set/signatures match the merged
+// SNMP/HTTP readers), so no adapter shim is needed on the read side.
 func buildCLIReader(sw *Switch, kind cliTransportKind) (BackendReader, error) {
+	if !cliReadsSupported(sw.model) {
+		return nil, fmt.Errorf("model %q CLI reads are UNVERIFIED-pending cross-verify: %w", sw.model.Key, model.ErrUnsupportedCapability)
+	}
 	session, err := sw.cliSession(kind)
 	if err != nil {
 		return nil, err
@@ -85,15 +139,24 @@ func buildCLIReader(sw *Switch, kind cliTransportKind) (BackendReader, error) {
 }
 
 // buildCLIWriter is the WriteBackendBuilder body for both CLI transports:
-// wraps sw's shared CLI session in a *fastpath.Writer (passing
-// sw.protectedPorts through), then wraps THAT in cliWriterAdapter to bridge
-// the VLAN/Vlan method-name casing difference between package fastpath's
-// Writer (CreateVLAN/DeleteVLAN/SetVLANMembership, matching its own
+// the cliWritesSupported gate runs FIRST -- before sw's CLI session is even
+// looked up -- mirroring buildHTTPWriter's httpReadsSupported gate
+// (backend_http.go) and Python's cli_writes_supported check in
+// SyncSwitch._writer_for (sync_api.py:442). Unlike webui.NewWriter,
+// fastpath.NewWriter does NOT re-check WritesVerified itself -- this gate is
+// the ONLY place the Go write side enforces it. Past the gate: wraps sw's
+// shared CLI session in a *fastpath.Writer (passing sw.protectedPorts
+// through), then wraps THAT in cliWriterAdapter to bridge the VLAN/Vlan
+// method-name casing difference between package fastpath's Writer
+// (CreateVLAN/DeleteVLAN/SetVLANMembership, matching its own
 // Reader.GetVLANs) and the shared BackendWriter interface (CreateVlan/
 // DeleteVlan/SetVlanMembership). Every other write method (SetPVID/SetPoE/
 // SetPortEnabled/SetMgmtIP/CyclePoE/ClearPoEFault) already matches
 // BackendWriter's name+signature and is promoted from the embedded Writer.
 func buildCLIWriter(sw *Switch, kind cliTransportKind) (BackendWriter, error) {
+	if !cliWritesSupported(sw.model) {
+		return nil, fmt.Errorf("model %q CLI writes are UNVERIFIED-pending a live write run: %w", sw.model.Key, model.ErrUnsupportedCapability)
+	}
 	session, err := sw.cliSession(kind)
 	if err != nil {
 		return nil, err
