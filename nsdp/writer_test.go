@@ -615,3 +615,9 @@ func TestWriter_SetVlanMembershipRMWUntagged(t *testing.T) {
 		t.Errorf("port 10 in tagged, want untagged: %v", sets.tagged)
 	}
 }
+
+func TestExportedNoPortAdminMsg(t *testing.T) {
+	if nsdp.NoPortAdminMsg == "" {
+		t.Error("NoPortAdminMsg is empty")
+	}
+}
