@@ -123,6 +123,15 @@ func TestForKeyMatchesForByObject(t *testing.T) {
 	}
 }
 
+func TestForKeyUnknownKeyOrOpNameErrors(t *testing.T) {
+	if _, err := ForKey("not-a-real-model", model.BackendSNMP, "get_ports"); err == nil {
+		t.Errorf("ForKey(unknown model key, ...) = nil error, want non-nil")
+	}
+	if _, err := ForKey("gsm7252ps", model.BackendSNMP, "not_a_real_op"); err == nil {
+		t.Errorf("ForKey(..., unknown op name) = nil error, want non-nil")
+	}
+}
+
 func TestMatrixCoversEveryModelAndCarriesNoAbsentBackends(t *testing.T) {
 	caps, err := Matrix(nil, nil)
 	if err != nil {

@@ -8,7 +8,6 @@ package capabilities
 import (
 	"testing"
 
-	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/nsdp"
 )
 
@@ -75,5 +74,3 @@ func TestNSDPSupportOtherReadsAndWritesSupported(t *testing.T) {
 		}
 	}
 }
-
-var _ = model.BackendNSDP // silence unused-import if the above cases change
