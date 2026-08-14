@@ -8,8 +8,10 @@ package nsdp
 // write_internal_test.go's precedent for whitebox-only members.
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -59,9 +61,10 @@ func (f *fakeExchange) transceive(_ context.Context, payload []byte, host string
 	return f.response, nil
 }
 
-func newTestClient(t *testing.T, fx *fakeExchange) *UDPClient {
+func newTestClient(t *testing.T, fx *fakeExchange, opts ...Option) *UDPClient {
 	t.Helper()
-	c, err := NewUDPClient("127.0.0.1", WithClientMAC(clientTestMAC), withTransceiver(fx.transceive))
+	all := append([]Option{WithClientMAC(clientTestMAC), withTransceiver(fx.transceive)}, opts...)
+	c, err := NewUDPClient("127.0.0.1", all...)
 	if err != nil {
 		t.Fatalf("NewUDPClient: %v", err)
 	}
@@ -147,7 +150,7 @@ func TestUDPClient_ReadPropagatesTransportErrorsUnwrapped(t *testing.T) {
 
 func TestUDPClient_WriteSendsWriteRequestWithPasswordAndChecksResult(t *testing.T) {
 	fx := &fakeExchange{response: responsePacket(t, OpWriteResponse, ResultSuccess)}
-	c := newTestClient(t, fx)
+	c := newTestClient(t, fx, WithAuthScheme("v1"))
 
 	pvid, err := PvidTLV(1, 90)
 	if err != nil {
@@ -174,13 +177,31 @@ func TestUDPClient_WriteSendsWriteRequestWithPasswordAndChecksResult(t *testing.
 }
 
 func TestUDPClient_WriteBadPasswordRaisesNsdpError(t *testing.T) {
+	// A v1 denial (error 7, no blamed attribute) is a genuine bad password.
 	fx := &fakeExchange{response: responsePacket(t, OpWriteResponse, ResultBadPassword)}
-	c := newTestClient(t, fx)
+	c := newTestClient(t, fx, WithAuthScheme("v1"))
 
 	pvid, _ := PvidTLV(1, 90)
 	_, err := c.Write(context.Background(), []TLVEntry{pvid}, "wrong")
 	wantSubstr(t, err, "bad password")
-	wantSubstr(t, err, AuthV2Unsupported)
+	wantSubstr(t, err, "error 0x07")
+}
+
+func TestUDPClient_WriteV2RequiredRaisesWiringHint(t *testing.T) {
+	// Error 13 blamed on TagPassword = a v1 XOR password sent to v2-only
+	// firmware: CheckResult must surface the v2-required WIRING hint
+	// (AuthV2Unsupported), not a plain bad-password message.
+	resp := Packet{Op: OpWriteResponse, Result: ResultBadPasswordV2, ErrorAttr: uint16(TagPassword)}
+	wire, err := resp.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx := &fakeExchange{response: wire}
+	c := newTestClient(t, fx, WithAuthScheme("v1"))
+	pvid, _ := PvidTLV(1, 90)
+	_, werr := c.Write(context.Background(), []TLVEntry{pvid}, "somepw")
+	wantSubstr(t, werr, AuthV2Unsupported)
+	wantSubstr(t, werr, "0x000a") // blamed attribute named
 }
 
 func TestUDPClient_WriteWrongOpResponseRaisesNsdpError(t *testing.T) {
@@ -526,3 +547,86 @@ func TestUDPClient_RealLoopbackRoundTrip(t *testing.T) {
 type errUnexpectedOp Op
 
 func (e errUnexpectedOp) Error() string { return "unexpected op: " + Op(e).String() }
+
+func TestUDPClient_V2NegotiationDrivesTokenFirstWrite(t *testing.T) {
+	serverMAC := []byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc}
+	salt := []byte{0x12, 0x34, 0x56, 0x78}
+	mustEnc := func(p Packet) []byte {
+		b, err := p.Encode()
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		return b
+	}
+	var sawWrite *Packet
+	tr := func(_ context.Context, payload []byte, _ string, _, _ int, _ string) ([]byte, error) {
+		req, err := DecodePacket(payload)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case req.Op == OpReadRequest && len(req.TLVs) > 0 && req.TLVs[0].Tag == TagAuthV2Encpass:
+			r := Packet{Op: OpReadResponse, ServerMAC: serverMAC}
+			r.AddTLV(TagAuthV2Encpass, []byte{0x00, 0x00, 0x00, 0x10}) // v2
+			return mustEnc(r), nil
+		case req.Op == OpReadRequest && len(req.TLVs) > 0 && req.TLVs[0].Tag == TagAuthV2Salt:
+			r := Packet{Op: OpReadResponse, ServerMAC: serverMAC}
+			r.AddTLV(TagAuthV2Salt, salt)
+			return mustEnc(r), nil
+		case req.Op == OpWriteRequest:
+			w := req
+			sawWrite = &w
+			return mustEnc(Packet{Op: OpWriteResponse, Result: ResultSuccess}), nil
+		}
+		return nil, fmt.Errorf("unexpected request op=%v tlvs=%+v", req.Op, req.TLVs)
+	}
+	c, err := NewUDPClient("127.0.0.1", WithClientMAC(clientTestMAC), withTransceiver(tr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pvid, _ := PvidTLV(1, 90)
+	if _, err := c.Write(context.Background(), []TLVEntry{pvid}, "password"); err != nil {
+		t.Fatalf("v2 Write: %v", err)
+	}
+	if sawWrite == nil {
+		t.Fatal("no WRITE_REQUEST was sent")
+	}
+	// The write MUST lead with the AUTH_V2_PASSWORD token (load-bearing order),
+	// and the token MUST fold this switch's MAC + the fresh salt.
+	if sawWrite.TLVs[0].Tag != TagAuthV2Password {
+		t.Fatalf("v2 write not token-first: TLVs=%+v", sawWrite.TLVs)
+	}
+	wantToken, _ := AuthV2Password("password", serverMAC, salt)
+	if !bytes.Equal(sawWrite.TLVs[0].Value, wantToken) {
+		t.Fatalf("token = % x, want % x", sawWrite.TLVs[0].Value, wantToken)
+	}
+	if len(sawWrite.TLVs) < 2 || sawWrite.TLVs[1].Tag != TagPortPVID {
+		t.Fatalf("config TLV (PVID) must follow the token: %+v", sawWrite.TLVs)
+	}
+}
+
+func TestCheckResult_AllBranches(t *testing.T) {
+	if err := CheckResult(Packet{Result: ResultSuccess}); err != nil {
+		t.Errorf("success: want nil, got %v", err)
+	}
+	wantSubstr(t, CheckResult(Packet{Result: ResultLockedV2, ErrorAttr: uint16(TagPortPVID)}), "locked out")
+	wantSubstr(t, CheckResult(Packet{Result: ResultReadOnly, ErrorAttr: uint16(TagAuthV2Password)}), "not readable")
+	wantSubstr(t, CheckResult(Packet{Result: ResultWriteOnly}), "not writable")
+	// error 13 on a non-PASSWORD attribute is a genuine bad password (not the
+	// v1-to-v2 wiring hint).
+	wantSubstr(t, CheckResult(Packet{Result: ResultBadPasswordV2, ErrorAttr: uint16(TagAuthV2Password)}), "bad password")
+}
+
+func TestWithAuthScheme_NormalizesInvalid(t *testing.T) {
+	c, err := NewUDPClient("127.0.0.1", WithAuthScheme("bogus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.authScheme != "auto" {
+		t.Errorf("WithAuthScheme(\"bogus\") -> %q, want \"auto\"", c.authScheme)
+	}
+	c2, _ := NewUDPClient("127.0.0.1", WithAuthScheme("v2"))
+	if c2.authScheme != "v2" {
+		t.Errorf("WithAuthScheme(\"v2\") -> %q, want \"v2\"", c2.authScheme)
+	}
+}

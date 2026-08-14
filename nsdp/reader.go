@@ -23,24 +23,37 @@ import (
 	"github.com/mithro/go-netgear-switch-library/model"
 )
 
-// Exact unsupported-read messages, mirroring Python nsdp_read.py's
-// _NO_MACS/_NO_LLDP/_NO_SENSORS/_NO_POE module constants verbatim.
+// nsdpSweepEvidence is the live-device proof every NSDP unsupported-capability
+// message cites, mirroring Python nsdp_read.py's _SWEEP module constant. These
+// are MEASURED device limits, not assumed ones (design principle: a capability
+// a backend lacks must be backed by captured device output, never presumed):
+// an exhaustive NSDP tag sweep of a real GS110EMX covering the entire 16-bit
+// tag space found no tag for MAC/FDB, LLDP, sensors or PoE.
+const nsdpSweepEvidence = "measured by an exhaustive NSDP tag sweep of a real GS110EMX " +
+	"(10.1.5.25, firmware 1.0.2.8, 2026-07-30) covering every tag in the 16-bit space; " +
+	"see the nsdp package for the full tag inventory"
+
+// Unsupported-read messages, mirroring Python nsdp_read.py's
+// _NO_MACS/_NO_LLDP/_NO_SENSORS/_NO_POE module constants (each embeds _SWEEP /
+// nsdpSweepEvidence so the device limit carries its proof).
 const (
-	noMACsMsg    = "NSDP exposes no MAC/FDB table (Plus switches have no remote FDB)"
-	noLLDPMsg    = "NSDP exposes no LLDP neighbours on these Plus switches"
-	noSensorsMsg = "NSDP exposes no environmental sensors on these Plus switches"
-	noPoEReadMsg = "NSDP exposes no PoE status; use the HTTP backend (Slice 6) for PoE"
+	noMACsMsg    = "NSDP has no MAC/FDB table tag (" + nsdpSweepEvidence + ")"
+	noLLDPMsg    = "NSDP has no LLDP neighbour tag (" + nsdpSweepEvidence + ")"
+	noSensorsMsg = "NSDP has no environmental-sensor tag (" + nsdpSweepEvidence + ")"
+	noPoEReadMsg = "NSDP has no PoE status tag (" + nsdpSweepEvidence + "); use the HTTP backend for PoE"
 )
 
 // fullDeviceTags is every tag ParseDevice knows how to decode, requested
 // together so GetDevice returns the COMPLETE NsdpDevice in one round trip --
-// identity, mgmt IP, per-port status/stats, VLANs/PVIDs, and the QoS/
+// identity, mgmt IP, per-port status/names/stats, VLANs/PVIDs, and the QoS/
 // mirroring/IGMP/broadcast-filtering/loop-detection tags. Mirrors Python's
-// _FULL_DEVICE_TAGS exactly, including order.
+// _FULL_DEVICE_TAGS exactly, including order (PORT_NAME sits at position 4,
+// between HOSTNAME and IP_ADDRESS).
 var fullDeviceTags = []Tag{
 	TagModel,
 	TagMAC,
 	TagHostname,
+	TagPortName,
 	TagIPAddress,
 	TagNetmask,
 	TagGateway,
@@ -131,6 +144,15 @@ func (r *Reader) device(ctx context.Context, tags []Tag) (model.NsdpDevice, erro
 // port name), LinkUp is s.Speed != LinkSpeedDown, and SpeedMbps is
 // s.Speed.SpeedMbps() or nil when that's 0 (Python's `speed_mbps or None`).
 func mapPorts(dev model.NsdpDevice) []model.PortStatus {
+	// PORT_STATUS carries no name, but PORT_NAME (0xB000) does; GetPorts
+	// requests both, so Name reports the same operator descriptions the HTTP
+	// backend does instead of a blanket nil. names[port] is nil for a port with
+	// no PORT_NAME TLV (map zero value) OR one that answered a bare port-only
+	// TLV (undescribed) -- both mirror Python's names.get(port) returning None.
+	names := make(map[int]*string, len(dev.PortNames))
+	for _, n := range dev.PortNames {
+		names[n.PortID] = n.Name
+	}
 	out := make([]model.PortStatus, 0, len(dev.PortStatus))
 	for _, s := range dev.PortStatus {
 		var speedMbps *int
@@ -139,7 +161,7 @@ func mapPorts(dev model.NsdpDevice) []model.PortStatus {
 		}
 		out = append(out, model.PortStatus{
 			Port:         s.PortID,
-			Name:         nil,
+			Name:         names[s.PortID],
 			AdminEnabled: true,
 			LinkUp:       s.Speed != model.LinkSpeedDown,
 			SpeedMbps:    speedMbps,
@@ -215,11 +237,13 @@ func mapMgmtIP(dev model.NsdpDevice) model.MgmtIPConfig {
 // GetPorts reads per-port link/speed status, mapped onto the shared
 // model.PortStatus type (see mapPorts for the exact field-mapping quirks).
 //
-// Requests, via device: TagPortCount, TagPortStatus (plus TagModel,
-// prepended by withModel), mirroring Python's
-// get_ports/[Tag.PORT_COUNT, Tag.PORT_STATUS].
+// Requests, via device: TagPortCount, TagPortStatus, TagPortName (plus
+// TagModel, prepended by withModel), mirroring Python's
+// get_ports/[Tag.PORT_COUNT, Tag.PORT_STATUS, Tag.PORT_NAME] -- PORT_NAME
+// carries the per-port operator descriptions mapPorts folds into
+// PortStatus.Name.
 func (r *Reader) GetPorts(ctx context.Context) ([]model.PortStatus, error) {
-	dev, err := r.device(ctx, []Tag{TagPortCount, TagPortStatus})
+	dev, err := r.device(ctx, []Tag{TagPortCount, TagPortStatus, TagPortName})
 	if err != nil {
 		return nil, err
 	}
