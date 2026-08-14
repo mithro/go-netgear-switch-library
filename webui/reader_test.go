@@ -1179,3 +1179,16 @@ func TestNewReaderConstructionFailsBeforeAnySessionUse(t *testing.T) {
 
 // equalInts is defined in parse_m4300_test.go and shared across the
 // webui_test package.
+
+func TestExportedSupportsSensorsAndMgmtIPPath(t *testing.T) {
+	spec, err := webui.HTTPSpec(mustGetModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("HTTPSpec: %v", err)
+	}
+	if !webui.SupportsSensors(spec) {
+		t.Error("SupportsSensors(gsm7252ps spec) = false, want true (FASTPATH dialect with a sysInfo page)")
+	}
+	if webui.MgmtIPPath(spec) == "" {
+		t.Error("MgmtIPPath(gsm7252ps spec) is empty, want a page path")
+	}
+}

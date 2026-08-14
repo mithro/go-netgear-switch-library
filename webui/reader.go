@@ -152,11 +152,11 @@ func parseLLDP(spec *HTTPModelSpec, html string) ([]model.LLDPNeighbor, error) {
 	return ParseXELLDP(html)
 }
 
-// supportsSensors mirrors Python's _supports_sensors (http_read.py:178-190):
-// only the FASTPATH/GoAhead dialects have a sysInfo page carrying box
-// sensors. S3300 (gsm7228ps) is deliberately NOT listed even though it has
-// a SysinfoPath: its sysInfo carries no live fan/temp sensor table.
-func supportsSensors(spec *HTTPModelSpec) bool {
+// SupportsSensors reports whether spec's dialect has a sysInfo page carrying
+// box sensors, mirroring Python's _supports_sensors (http_read.py:178-190).
+// Exported so the capabilities oracle's HTTP derivation can reuse this exact
+// logic instead of re-deriving "does this model's web UI expose sensors".
+func SupportsSensors(spec *HTTPModelSpec) bool {
 	return (isM4300Dialect(spec) || isXEFastpathDialect(spec) || isGoAheadDialect(spec)) &&
 		spec.SysinfoPath != ""
 }
@@ -364,10 +364,11 @@ func withFastpathEgress(vlans []model.VLANInfo, pages map[int]FastpathMembership
 
 // --- mgmt-IP dispatch, mirroring http_read.py lines 383-484 ---
 
-// mgmtIPPath is the page GetMgmtIP reads for this model, mirroring Python's
-// _mgmt_ip_path: MgmtIPPath if named, else SysinfoPath, else "" (this model
-// exposes no mgmt-IP page at all -- gs305ep).
-func mgmtIPPath(spec *HTTPModelSpec) string {
+// MgmtIPPath is the page GetMgmtIP reads for this model, mirroring Python's
+// _mgmt_ip_path: spec.MgmtIPPath if named, else spec.SysinfoPath, else "" (no
+// mgmt-IP page at all -- gs305ep). Exported for the same reason as
+// SupportsSensors.
+func MgmtIPPath(spec *HTTPModelSpec) string {
 	if spec.MgmtIPPath != "" {
 		return spec.MgmtIPPath
 	}
@@ -778,10 +779,10 @@ func (r *Reader) GetLLDP(ctx context.Context) ([]model.LLDPNeighbor, error) {
 
 // GetSensors reads box environmental sensors (temperature/fan/power),
 // mirroring Python HttpReader.get_sensors (http_read.py:624-630). Raises
-// (rather than returning an empty slice) when supportsSensors is false --
+// (rather than returning an empty slice) when SupportsSensors is false --
 // see its doc comment for the S3300 (gsm7228ps) exclusion.
 func (r *Reader) GetSensors(ctx context.Context) ([]model.Sensor, error) {
-	if !supportsSensors(r.spec) {
+	if !SupportsSensors(r.spec) {
 		return nil, unsupportedOp(r.model.Key, "box sensors")
 	}
 	html, err := r.session.GetPage(ctx, r.spec.SysinfoPath)
@@ -797,7 +798,7 @@ func (r *Reader) GetSensors(ctx context.Context) ([]model.Sensor, error) {
 // which their dedicated mgmt-IP page does not carry -- see mgmtIPFor's doc
 // comment.
 func (r *Reader) GetMgmtIP(ctx context.Context) (model.MgmtIPConfig, error) {
-	path := mgmtIPPath(r.spec)
+	path := MgmtIPPath(r.spec)
 	if path == "" {
 		return model.MgmtIPConfig{}, unsupportedOp(r.model.Key, "management-IP config")
 	}

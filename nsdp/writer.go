@@ -51,18 +51,12 @@ import (
 // instead of duplicating the string.
 const NoPoEWriteMsg = "NSDP has no PoE control tag (" + nsdpSweepEvidence + "); use the HTTP backend for PoE"
 
-// noPortAdminMsg is the unsupported-write message for the one remaining
+// NoPortAdminMsg is the unsupported-write message for the one remaining
 // unsupported per-port write (SetPortEnabled), mirroring Python
-// nsdp_write.py's _NO_PORT_ADMIN. The pin corrected the earlier "NSDP has no
-// admin-enable tag" claim: the sweep actually found two CANDIDATE per-port
-// config tags (0x0800, 0x9400) whose semantics were never settled, so the
-// honest characterization is UNPROVEN, not absent -- and it points at the HTTP
-// backend, whose port-settings page IS grounded (webui.Writer.SetPortEnabled
-// implements it live-verified). Unexported: nothing outside this package needs
-// to reproduce it independently (unlike NoPoEWriteMsg above). (The pin's former
-// _NO_VLAN_LIFECYCLE constant is gone -- VLAN create/delete are now implemented
-// over NSDP; see CreateVlan/DeleteVlan below.)
-const noPortAdminMsg = "per-port admin-enable over NSDP is UNPROVEN on these Plus models: the " +
+// nsdp_write.py's _NO_PORT_ADMIN verbatim. Exported for the same reason as
+// NoPoEWriteMsg: the capabilities oracle's NSDP derivation reuses this text
+// directly rather than duplicating it.
+const NoPortAdminMsg = "per-port admin-enable over NSDP is UNPROVEN on these Plus models: the " +
 	"measured tag inventory (GS110EMX fw 1.0.2.8) has two candidate per-port config tags " +
 	"(0x0800, 0x9400) whose semantics were never settled -- no write has been attempted " +
 	"against either, and a wrong guess can drop the port's link. Use the HTTP backend, " +
@@ -400,7 +394,7 @@ func (w *Writer) SetPoE(_ context.Context, _ int, _ bool, _ bool) error {
 // these Plus models. Mirrors Python's NsdpWriter.set_port_enabled. Every
 // parameter is accepted-but-unused; see SetPoE's doc comment.
 func (w *Writer) SetPortEnabled(_ context.Context, _ int, _ bool, _ bool) error {
-	return unsupportedWrite(noPortAdminMsg)
+	return unsupportedWrite(NoPortAdminMsg)
 }
 
 // vlanIDs projects a VLAN list to just its ids, mirroring the

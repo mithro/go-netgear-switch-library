@@ -20,9 +20,12 @@ import (
 	"github.com/mithro/go-netgear-switch-library/virtual"
 )
 
-// The four models with a FASTPATH CLI backend (s3300 is the marketing name
-// for gsm7228ps, an alias -- not a fifth model).
-var cliCapstoneModels = []string{"gsm7252ps", "m4300-24x", "m4300-16x", "gsm7228ps"}
+// The three models with a FASTPATH CLI backend reachable over SSH. gsm7228ps
+// (S3300) is deliberately excluded here -- it is telnet-only on real hardware
+// (see model/registry.go's gsm7228ps comment) -- and is exercised by
+// TestCLICapstone_ReadsOverRealTelnet instead, which already uses it
+// exclusively for the telnet path.
+var cliCapstoneModels = []string{"gsm7252ps", "m4300-24x", "m4300-16x"}
 
 const (
 	cliCapstoneUser = "admin"
@@ -39,8 +42,12 @@ func startCLICapstoneVSW(t *testing.T, modelKey string) *virtual.VirtualSwitch {
 		t.Fatalf("VirtualSwitch.Start(%q): %v", modelKey, err)
 	}
 	t.Cleanup(func() { _ = vsw.Stop() })
-	if vsw.SSHPort == 0 || vsw.TelnetPort == 0 {
-		t.Fatalf("model %q did not bind SSH+telnet faces (ssh=%d telnet=%d)", modelKey, vsw.SSHPort, vsw.TelnetPort)
+	m := mustCapstoneModel(t, modelKey)
+	if m.HasBackend(model.BackendSSH) && vsw.SSHPort == 0 {
+		t.Fatalf("model %q did not bind its SSH face", modelKey)
+	}
+	if vsw.TelnetPort == 0 {
+		t.Fatalf("model %q did not bind its telnet face", modelKey)
 	}
 	return vsw
 }
@@ -54,14 +61,14 @@ func mustCapstoneModel(t *testing.T, key string) *model.SwitchModel {
 	return m
 }
 
-func cliFacadeInProcess(t *testing.T, vsw *virtual.VirtualSwitch, m *model.SwitchModel) *netgearswitch.Switch {
+func cliFacadeInProcess(t *testing.T, vsw *virtual.VirtualSwitch, m *model.SwitchModel, backend model.Backend) *netgearswitch.Switch {
 	t.Helper()
 	face, err := vsw.CliSession()
 	if err != nil {
 		t.Fatalf("CliSession: %v", err)
 	}
 	sw, err := netgearswitch.New(m, vsw.Host,
-		netgearswitch.WithBackend(model.BackendSSH),
+		netgearswitch.WithBackend(backend),
 		netgearswitch.WithCLIClient(face))
 	if err != nil {
 		t.Fatalf("New (in-process): %v", err)
@@ -110,7 +117,7 @@ func TestCLICapstone_ReadsMatchInProcessOverRealSSH(t *testing.T) {
 		t.Run(mk, func(t *testing.T) {
 			vsw := startCLICapstoneVSW(t, mk)
 			m := mustCapstoneModel(t, mk)
-			ref := cliFacadeInProcess(t, vsw, m)
+			ref := cliFacadeInProcess(t, vsw, m, model.BackendSSH)
 			ssh := cliFacadeOverSSH(t, vsw, m)
 
 			refPorts, err := ref.GetPorts(ctx)
@@ -150,7 +157,7 @@ func TestCLICapstone_ReadsOverRealTelnet(t *testing.T) {
 	ctx := context.Background()
 	vsw := startCLICapstoneVSW(t, "gsm7228ps") // the real S3300 is telnet-only hw
 	m := mustCapstoneModel(t, "gsm7228ps")
-	ref := cliFacadeInProcess(t, vsw, m)
+	ref := cliFacadeInProcess(t, vsw, m, model.BackendTelnet)
 	tel := cliFacadeOverTelnet(t, vsw, m)
 
 	refPorts, err := ref.GetPorts(ctx)

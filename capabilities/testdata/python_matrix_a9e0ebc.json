@@ -1,0 +1,3677 @@
+[
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_lldp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_macs",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_sensors",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "set_mgmt_ip",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "set_port_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_lldp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_macs",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_sensors",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "nsdp_device",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "set_port_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_lldp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_macs",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_sensors",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "set_mgmt_ip",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_lldp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_macs",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_sensors",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "nsdp_device",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "set_port_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_lldp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_macs",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_mgmt_ip",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_sensors",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "set_mgmt_ip",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "set_port_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_lldp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_macs",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_sensors",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "nsdp_device",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "set_port_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_stats",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "set_mgmt_ip",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "set_port_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "set_vlan_membership",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "upload_certificate",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "set_mgmt_ip",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_sensors",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "upload_certificate",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "upload_certificate_scp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "upload_certificate_scp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "upload_certificate_scp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "cycle_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "set_poe",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "upload_certificate_scp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "upload_certificate_scp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "upload_certificate_scp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "get_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "clear_poe_fault",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "create_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "cycle_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "get_lldp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "get_macs",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "get_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "get_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "get_ports",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "get_pvids",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "get_sensors",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "get_vlans",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "set_mgmt_ip",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "set_poe",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "upload_certificate",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  }
+]

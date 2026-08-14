@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -290,5 +291,173 @@ func TestBuildCLIReader_ModelWithoutCLIRefusesUnsupported(t *testing.T) {
 	}
 	if errors.Is(err, model.ErrCredential) {
 		t.Fatalf("non-CLI model refused with a credential error, not a capability error")
+	}
+}
+
+// --- cliReadsSupported / cliWritesSupported gate -------------------------
+//
+// The gap these tests close: before this change, buildCLIReader/
+// buildCLIWriter never checked CliModelSpec.ReadsVerified/WritesVerified at
+// all, so a hypothetical unverified CLI model would have gotten a working
+// reader/writer that dials the real SSH/telnet session on its first actual
+// command -- disagreeing with the capabilities oracle (capabilities/
+// support_cli.go's cliSupport, which already reports Support.UNVERIFIED for
+// exactly this case) and with Python's cli_reads_supported/
+// cli_writes_supported gate in SyncSwitch._reader_for/_writer_for. All 4
+// real registered CLI models are verified at this pin, so there is no
+// registered model that can exercise the refusal directly -- these tests
+// use fastpath.CLISpecs' exported map (the same seam backend_http_test.go
+// uses via webui.HTTPSpecs) to temporarily flip a REAL model's spec
+// unverified, restoring it via defer, mirroring
+// TestHTTPReadsSupported_FalseWhenSpecUnverified/
+// TestBuildHTTPReader_UnverifiedModelRefusesBeforePasswordResolution.
+
+func TestCLIReadsSupported_TrueForVerifiedModel(t *testing.T) {
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("GetModel: %v", err)
+	}
+	if !cliReadsSupported(m) {
+		t.Error("cliReadsSupported(gsm7252ps) = false, want true (ReadsVerified=true at this pin)")
+	}
+}
+
+func TestCLIReadsSupported_FalseWithoutCLIBackend(t *testing.T) {
+	m, err := model.GetModel("gs305ep")
+	if err != nil {
+		t.Fatalf("GetModel: %v", err)
+	}
+	if cliReadsSupported(m) {
+		t.Error("cliReadsSupported(gs305ep) = true, want false (no CLI backend at all)")
+	}
+}
+
+func TestCLIReadsSupported_FalseWhenSpecUnverified(t *testing.T) {
+	// Every shipped CliModelSpec is ReadsVerified=true at this pin; flip
+	// gsm7252ps's temporarily via the exported fastpath.CLISpecs map (the
+	// package's own documented mutation seam), then restore it.
+	spec := fastpath.CLISpecs["gsm7252ps"]
+	original := spec.ReadsVerified
+	spec.ReadsVerified = false
+	defer func() { spec.ReadsVerified = original }()
+
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("GetModel: %v", err)
+	}
+	if cliReadsSupported(m) {
+		t.Error("cliReadsSupported(unverified gsm7252ps) = true, want false")
+	}
+}
+
+func TestCLIWritesSupported_RequiresBothReadsAndWritesVerified(t *testing.T) {
+	spec := fastpath.CLISpecs["gsm7252ps"]
+	origReads, origWrites := spec.ReadsVerified, spec.WritesVerified
+	defer func() {
+		spec.ReadsVerified = origReads
+		spec.WritesVerified = origWrites
+	}()
+
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("GetModel: %v", err)
+	}
+	if !cliWritesSupported(m) {
+		t.Fatal("cliWritesSupported(gsm7252ps) = false at baseline, want true (both verified at this pin)")
+	}
+
+	spec.WritesVerified = false
+	if cliWritesSupported(m) {
+		t.Error("cliWritesSupported() = true with WritesVerified=false, want false")
+	}
+	spec.WritesVerified = origWrites
+
+	// ReadsVerified=false alone (WritesVerified still true) must ALSO gate
+	// writes off: a write cannot be honestly verified by reading back
+	// through an unverified reader (mirrors Python's cli_writes_supported
+	// layering, _dispatch.py:220-234).
+	spec.ReadsVerified = false
+	if cliWritesSupported(m) {
+		t.Error("cliWritesSupported() = true with ReadsVerified=false, want false (writes require reads too)")
+	}
+}
+
+// --- buildCLIReader/buildCLIWriter: the dispatch refusal itself ----------
+
+func TestBuildCLIReader_UnverifiedModelRefusesBeforeSessionLookup(t *testing.T) {
+	spec := fastpath.CLISpecs["gsm7252ps"]
+	original := spec.ReadsVerified
+	spec.ReadsVerified = false
+	defer func() { spec.ReadsVerified = original }()
+
+	// A real (non-injected) password so that, absent the gate, cliSession()
+	// would happily hand back a lazy session ready to dial 10.0.0.1 on its
+	// first command.
+	sw := newCLISwitch(t, "gsm7252ps", WithCLIPassword("x"))
+
+	reader, err := buildCLIReader(sw, cliTransportSSH)
+	if reader != nil {
+		t.Fatalf("buildCLIReader() returned a non-nil reader for an unverified model")
+	}
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("buildCLIReader() error = %v, want wrapping ErrUnsupportedCapability", err)
+	}
+	if want := `model "gsm7252ps" CLI reads are UNVERIFIED-pending cross-verify`; !strings.Contains(err.Error(), want) {
+		t.Errorf("buildCLIReader() error = %q, want containing %q (Python cli_reads_supported message parity)", err.Error(), want)
+	}
+	// The decisive proof this refuses BEFORE ever reaching for a session:
+	// sw.cliSession(kind) is the ONLY thing that populates cliSessionCache
+	// (switch.go's New leaves it empty), so an untouched, still-empty cache
+	// means the gate short-circuited before any session/dial plumbing ran.
+	sw.cliSessionMu.Lock()
+	cacheLen := len(sw.cliSessionCache)
+	sw.cliSessionMu.Unlock()
+	if cacheLen != 0 {
+		t.Errorf("buildCLIReader() on an unverified model populated cliSessionCache (len=%d) -- the gate must run before sw.cliSession()", cacheLen)
+	}
+}
+
+func TestBuildCLIWriter_UnverifiedModelRefusesBeforeSessionLookup(t *testing.T) {
+	spec := fastpath.CLISpecs["gsm7252ps"]
+	original := spec.WritesVerified
+	spec.WritesVerified = false
+	defer func() { spec.WritesVerified = original }()
+
+	sw := newCLISwitch(t, "gsm7252ps", WithCLIPassword("x"))
+
+	writer, err := buildCLIWriter(sw, cliTransportSSH)
+	if writer != nil {
+		t.Fatalf("buildCLIWriter() returned a non-nil writer for an unverified model")
+	}
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("buildCLIWriter() error = %v, want wrapping ErrUnsupportedCapability", err)
+	}
+	if want := `model "gsm7252ps" CLI writes are UNVERIFIED-pending a live write run`; !strings.Contains(err.Error(), want) {
+		t.Errorf("buildCLIWriter() error = %q, want containing %q (Python cli_writes_supported message parity)", err.Error(), want)
+	}
+	sw.cliSessionMu.Lock()
+	cacheLen := len(sw.cliSessionCache)
+	sw.cliSessionMu.Unlock()
+	if cacheLen != 0 {
+		t.Errorf("buildCLIWriter() on an unverified model populated cliSessionCache (len=%d) -- the gate must run before sw.cliSession()", cacheLen)
+	}
+}
+
+// TestBuildCLIReader_VerifiedModelStillConstructsNormally guards against a
+// too-eager gate: gsm7252ps IS ReadsVerified at this pin (no spec mutation
+// here), so construction must still succeed and route to the injected
+// session exactly as TestBuildCLIReader_RoutesGetPortsToSessionAndParses
+// already proves end-to-end -- this one just pins the gate functions
+// themselves returning true so a future accidental sign-flip (e.g. `!` typo)
+// in cliReadsSupported/cliWritesSupported would fail loudly here even before
+// the heavier fixture-based test noticed.
+func TestBuildCLIReader_VerifiedModelStillConstructsNormally(t *testing.T) {
+	fake := &recordingCLISession{output: ""}
+	sw := newCLISwitch(t, "gsm7252ps", WithCLIClient(fake))
+	if _, err := buildCLIReader(sw, cliTransportSSH); err != nil {
+		t.Fatalf("buildCLIReader() on a verified model: error = %v, want nil", err)
+	}
+	if _, err := buildCLIWriter(sw, cliTransportSSH); err != nil {
+		t.Fatalf("buildCLIWriter() on a verified model: error = %v, want nil", err)
 	}
 }

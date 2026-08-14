@@ -33,15 +33,24 @@ const nsdpSweepEvidence = "measured by an exhaustive NSDP tag sweep of a real GS
 	"(10.1.5.25, firmware 1.0.2.8, 2026-07-30) covering every tag in the 16-bit space; " +
 	"see the nsdp package for the full tag inventory"
 
-// Unsupported-read messages, mirroring Python nsdp_read.py's
-// _NO_MACS/_NO_LLDP/_NO_SENSORS/_NO_POE module constants (each embeds _SWEEP /
-// nsdpSweepEvidence so the device limit carries its proof).
-const (
-	noMACsMsg    = "NSDP has no MAC/FDB table tag (" + nsdpSweepEvidence + ")"
-	noLLDPMsg    = "NSDP has no LLDP neighbour tag (" + nsdpSweepEvidence + ")"
-	noSensorsMsg = "NSDP has no environmental-sensor tag (" + nsdpSweepEvidence + ")"
-	noPoEReadMsg = "NSDP has no PoE status tag (" + nsdpSweepEvidence + "); use the HTTP backend for PoE"
-)
+// NoMACsMsg is the exact message GetMACs wraps in the error it returns,
+// mirroring Python nsdp_read.py's _NO_MACS module constant verbatim.
+// Exported so callers outside this package -- notably the capabilities
+// oracle's NSDP derivation -- can reuse the identical text instead of
+// duplicating it (see nsdp.NoPoEWriteMsg's doc comment for the same
+// rationale, already established by that constant).
+const NoMACsMsg = "NSDP has no MAC/FDB table tag (" + nsdpSweepEvidence + ")"
+
+// NoLLDPMsg is the exact message GetLLDP wraps, mirroring Python's _NO_LLDP.
+const NoLLDPMsg = "NSDP has no LLDP neighbour tag (" + nsdpSweepEvidence + ")"
+
+// NoSensorsMsg is the exact message GetSensors wraps, mirroring Python's
+// _NO_SENSORS.
+const NoSensorsMsg = "NSDP has no environmental-sensor tag (" + nsdpSweepEvidence + ")"
+
+// NoPoEReadMsg is the exact message GetPoE wraps, mirroring Python's _NO_POE
+// (the READ-side constant; nsdp.NoPoEWriteMsg is the separate write-side one).
+const NoPoEReadMsg = "NSDP has no PoE status tag (" + nsdpSweepEvidence + "); use the HTTP backend for PoE"
 
 // fullDeviceTags is every tag ParseDevice knows how to decode, requested
 // together so GetDevice returns the COMPLETE NsdpDevice in one round trip --
@@ -323,7 +332,7 @@ func (r *Reader) GetDevice(ctx context.Context) (model.NsdpDevice, error) {
 // method's signature matches the shared BackendReader surface (see
 // dispatch.go).
 func (r *Reader) GetLLDP(_ context.Context) ([]model.LLDPNeighbor, error) {
-	return nil, unsupportedRead(noLLDPMsg)
+	return nil, unsupportedRead(NoLLDPMsg)
 }
 
 // GetMACs always returns an error wrapping model.ErrUnsupportedCapability:
@@ -331,7 +340,7 @@ func (r *Reader) GetLLDP(_ context.Context) ([]model.LLDPNeighbor, error) {
 // NsdpReader.get_macs. ctx is accepted-but-unused; see GetLLDP's doc
 // comment.
 func (r *Reader) GetMACs(_ context.Context) ([]model.MacEntry, error) {
-	return nil, unsupportedRead(noMACsMsg)
+	return nil, unsupportedRead(NoMACsMsg)
 }
 
 // GetPoE always returns an error wrapping model.ErrUnsupportedCapability:
@@ -339,7 +348,7 @@ func (r *Reader) GetMACs(_ context.Context) ([]model.MacEntry, error) {
 // Mirrors Python's NsdpReader.get_poe. ctx is accepted-but-unused; see
 // GetLLDP's doc comment.
 func (r *Reader) GetPoE(_ context.Context) ([]model.PoEStatus, error) {
-	return nil, unsupportedRead(noPoEReadMsg)
+	return nil, unsupportedRead(NoPoEReadMsg)
 }
 
 // GetSensors always returns an error wrapping
@@ -347,5 +356,5 @@ func (r *Reader) GetPoE(_ context.Context) ([]model.PoEStatus, error) {
 // these Plus switches. Mirrors Python's NsdpReader.get_sensors. ctx is
 // accepted-but-unused; see GetLLDP's doc comment.
 func (r *Reader) GetSensors(_ context.Context) ([]model.Sensor, error) {
-	return nil, unsupportedRead(noSensorsMsg)
+	return nil, unsupportedRead(NoSensorsMsg)
 }

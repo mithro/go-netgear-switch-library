@@ -550,3 +550,16 @@ func TestReader_GetPortsMapsPortName(t *testing.T) {
 		t.Errorf("port 2 Name = %v, want nil (bare PORT_NAME TLV = undescribed)", p2.Name)
 	}
 }
+
+func TestExportedRefusalMessagesNonEmpty(t *testing.T) {
+	for name, msg := range map[string]string{
+		"NoMACsMsg":    nsdp.NoMACsMsg,
+		"NoLLDPMsg":    nsdp.NoLLDPMsg,
+		"NoSensorsMsg": nsdp.NoSensorsMsg,
+		"NoPoEReadMsg": nsdp.NoPoEReadMsg,
+	} {
+		if msg == "" {
+			t.Errorf("%s is empty", name)
+		}
+	}
+}

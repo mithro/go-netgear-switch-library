@@ -64,7 +64,7 @@ var wantModelsInOrder = []wantModel{
 		class:        model.ClassSmartManagedPro,
 		portCount:    52,
 		poePortCount: 48,
-		backends:     []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendSSH, model.BackendTelnet},
+		backends:     []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendTelnet},
 		vendorBase:   "1.3.6.1.4.1.4526.11",
 		verified:     true,
 		hasMACTable:  true,
@@ -352,5 +352,28 @@ func TestGetModelGSM7228PSVerified(t *testing.T) {
 	}
 	if !m.Verified {
 		t.Error("gsm7228ps: Verified = false, want true (hardware-verified 2026-07-30)")
+	}
+}
+
+// TestGSM7228PSHasNoSSH pins a real registry-data bug found while building
+// the capabilities oracle: the pinned Python registry.py (commit a9e0ebc)
+// registers gsm7228ps with {SNMP, HTTP, TELNET} -- explicitly NOT SSH -- with
+// a live-verified comment that the real S3300-52X hardware runs no SSH
+// listener at all (its own SNMP tcpConnTable shows only ports 80/443/60000;
+// CLI is telnet-only on the non-standard port 60000). A Go registry that
+// claims SSH here fabricates a capability the device does not have.
+func TestGSM7228PSHasNoSSH(t *testing.T) {
+	m, err := model.GetModel("gsm7228ps")
+	if err != nil {
+		t.Fatalf("GetModel(gsm7228ps): %v", err)
+	}
+	if m.HasBackend(model.BackendSSH) {
+		t.Error("gsm7228ps: HasBackend(BackendSSH) = true, want false (real S3300-52X has no SSH listener)")
+	}
+	if !m.HasBackend(model.BackendTelnet) {
+		t.Error("gsm7228ps: HasBackend(BackendTelnet) = false, want true")
+	}
+	if !m.HasBackend(model.BackendSNMP) || !m.HasBackend(model.BackendHTTP) {
+		t.Error("gsm7228ps: expected SNMP and HTTP backends unchanged")
 	}
 }

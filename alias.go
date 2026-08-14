@@ -1,6 +1,7 @@
 package netgearswitch
 
 import (
+	"github.com/mithro/go-netgear-switch-library/capabilities"
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/snmp"
 )
@@ -61,6 +62,14 @@ type (
 	NsdpIgmpSnooping = model.NsdpIgmpSnooping
 	// NsdpDevice is aliased from model.NsdpDevice.
 	NsdpDevice = model.NsdpDevice
+	// Capability is aliased from capabilities.Capability.
+	Capability = capabilities.Capability
+	// Operation is aliased from capabilities.Operation.
+	Operation = capabilities.Operation
+	// OperationKind is aliased from capabilities.OperationKind.
+	OperationKind = capabilities.OperationKind
+	// Support is aliased from capabilities.Support.
+	Support = capabilities.Support
 )
 
 // WriteVerificationError is aliased from model; see model.WriteVerificationError.
@@ -117,6 +126,20 @@ const (
 	ClassPlus            = model.ClassPlus
 )
 
+// Support values, re-exported from capabilities.
+const (
+	SupportSupported   = capabilities.SupportSupported
+	SupportNoBackend   = capabilities.SupportNoBackend
+	SupportUnsupported = capabilities.SupportUnsupported
+	SupportUnverified  = capabilities.SupportUnverified
+)
+
+// OperationKind values, re-exported from capabilities.
+const (
+	OperationKindRead  = capabilities.OperationKindRead
+	OperationKindWrite = capabilities.OperationKindWrite
+)
+
 // LinkSpeed values, re-exported from model.
 const (
 	LinkSpeedDown       = model.LinkSpeedDown
@@ -169,4 +192,35 @@ func GetModel(key string) (*SwitchModel, error) {
 // model.Models.
 func Models() []*SwitchModel {
 	return model.Models()
+}
+
+// Operations is the full 21-entry read+write operation table, re-exported
+// from capabilities.Operations. ReadOperations/WriteOperations/
+// OperationByName are DELIBERATELY not re-exported here -- reach them via
+// the capabilities package directly, mirroring Python's netgear_switch
+// top-level package re-exporting only a subset of netgear_switch.capabilities
+// (dossier §2).
+var Operations = capabilities.Operations
+
+// For is the capability oracle's top-level verdict function; see
+// capabilities.For.
+func For(m *model.SwitchModel, backend model.Backend, op capabilities.Operation) capabilities.Capability {
+	return capabilities.For(m, backend, op)
+}
+
+// ForKey is For's string-keyed convenience entry point; see capabilities.ForKey.
+func ForKey(modelKey string, backend model.Backend, opName string) (capabilities.Capability, error) {
+	return capabilities.ForKey(modelKey, backend, opName)
+}
+
+// BackendsFor returns a model's backends in the facade's default-preference
+// order; see capabilities.BackendsFor.
+func BackendsFor(m *model.SwitchModel) []model.Backend {
+	return capabilities.BackendsFor(m)
+}
+
+// Matrix returns every capability verdict for modelKeys x their backends x
+// operations; see capabilities.Matrix.
+func Matrix(modelKeys []string, operations []capabilities.Operation) ([]capabilities.Capability, error) {
+	return capabilities.Matrix(modelKeys, operations)
 }
