@@ -496,6 +496,7 @@ func cloneVlansMap(in map[int]*VlanSim) map[int]*VlanSim {
 			Member:         cloneIntBoolMap(v.Member),
 			Untagged:       cloneIntBoolMap(v.Untagged),
 			ConfiguredOnly: cloneIntBoolMap(v.ConfiguredOnly),
+			NoStaticRow:    v.NoStaticRow,
 		}
 	}
 	return out

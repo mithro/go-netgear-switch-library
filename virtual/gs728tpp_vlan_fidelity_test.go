@@ -2,11 +2,17 @@ package virtual
 
 // gs728tpp_vlan_fidelity_test.go: end-to-end regression coverage for the
 // GAP-2 SNMP GetVLANs fix (parity with Python commit 3f25b0b), driven over
-// REAL UDP against the virtual gs728tpp fake -- not just the hand-built
+// REAL UDP/TCP against the virtual gs728tpp fake -- not just the hand-built
 // parser fixtures in package snmp's own parse_vlans_test.go. Ported from
 // Python's tests/virtual/test_gs728tpp_vlan_fidelity.py at pin b26eb1f
-// (test_vlan_1_has_no_static_row_but_is_still_reported and two supporting
-// tests that prove the fix is doing real work, not passing vacuously).
+// (test_vlan_1_has_no_static_row_but_is_still_reported, two supporting
+// tests that prove the fix is doing real work rather than passing
+// vacuously, test_pvids_and_ports_exclude_the_lags, and
+// test_snmp_and_http_report_the_same_vlans -- test_membership_write_
+// preserves_the_lag_bits is NOT ported here: the SetVlanMembership
+// physical-port-filtering ripple it guards is already covered at the
+// snmp-package unit level by TestSetVlanMembershipVerifiesAgainstPhysical
+// PortsOnlyWhenLAGPresent, added alongside the GetVLANs fix itself).
 //
 // Everything asserted here was MEASURED on the real switch
 // sw-netgear-gs728tpp.monarto.mithis.com (10.2.5.10, firmware 6.0.1.30),
@@ -17,6 +23,7 @@ package virtual
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,6 +31,7 @@ import (
 
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/snmp"
+	"github.com/mithro/go-netgear-switch-library/webui"
 )
 
 // gs728tppSnmpReader starts an SnmpFace over a freshly-seeded gs728tpp
@@ -240,5 +248,134 @@ func TestGS728TPPLAGBitIsReallyOnTheWireAndReallyFilteredOut(t *testing.T) {
 	}
 	if len(vlan5.MemberPorts) == 0 {
 		t.Error("GetVLANs MemberPorts for VLAN 5 is empty -- the filter must keep the real physical members, not just drop the LAG")
+	}
+}
+
+// TestGS728TPPPortsAndPVIDsExcludeTheLags pins the GAP-2 fix (parity with
+// Python commit 3f25b0b / test_pvids_and_ports_exclude_the_lags): the eight
+// LAG pseudo-interfaces (ifIndex 1000-1007) now carry real ifType=161/PVID
+// data in the seed (SeedGS728TPP), so GetPorts'/GetPVIDs' own ifType
+// filtering must be exercised against them driven over the wire, not just
+// via the hand-built snmp-package unit fixtures that already cover the
+// same filtering logic in isolation.
+func TestGS728TPPPortsAndPVIDsExcludeTheLags(t *testing.T) {
+	reader, client := gs728tppSnmpReader(t)
+	ctx := context.Background()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel(gs728tpp): %v", err)
+	}
+
+	rawPvids, err := client.Walk(ctx, snmp.Dot1qPvid)
+	if err != nil {
+		t.Fatalf("Walk(Dot1qPvid): %v", err)
+	}
+	wantRaw := m.PortCount + 8 // the eight LAGs, MEASURED 2026-08-02 on the live switch
+	if len(rawPvids) != wantRaw {
+		t.Errorf("raw dot1qPvid walk returned %d rows, want %d -- the fake must present the LAG PVID rows the real walk returns", len(rawPvids), wantRaw)
+	}
+
+	pvids, err := reader.GetPVIDs(ctx)
+	if err != nil {
+		t.Fatalf("GetPVIDs: %v", err)
+	}
+	if len(pvids) != m.PortCount {
+		t.Errorf("GetPVIDs returned %d rows, want %d (physical only)", len(pvids), m.PortCount)
+	}
+	for _, pv := range pvids {
+		if pv.Port > m.PortCount {
+			t.Errorf("GetPVIDs reported LAG pseudo-port %d, want physical ports only (1-%d)", pv.Port, m.PortCount)
+		}
+	}
+
+	ports, err := reader.GetPorts(ctx)
+	if err != nil {
+		t.Fatalf("GetPorts: %v", err)
+	}
+	if len(ports) != m.PortCount {
+		t.Errorf("GetPorts returned %d ports, want %d (physical only)", len(ports), m.PortCount)
+	}
+	for _, p := range ports {
+		if p.Port > m.PortCount {
+			t.Errorf("GetPorts reported LAG pseudo-port %d, want physical ports only (1-%d)", p.Port, m.PortCount)
+		}
+	}
+}
+
+// TestGS728TPPSNMPAndHTTPReportTheSameVlans pins the GAP-2 fix (parity
+// with Python commit 3f25b0b / test_snmp_and_http_report_the_same_vlans):
+// both backends driven directly against the SAME seeded State, so neither
+// can be the other one answering. This is the strongest cross-check that
+// the two independent LAG/physical-port filters this fix and its follow-up
+// added -- snmp.ParseVlans' ifType filter, and web_gs728tpp.go's new
+// physicalGS728TPPPorts -- agree with each other, not just each with its
+// own seed data.
+func TestGS728TPPSNMPAndHTTPReportTheSameVlans(t *testing.T) {
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel(gs728tpp): %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+
+	snmpAddr, _, _ := startFace(t, st)
+	snmpClient := snmp.NewGoSNMPClient(snmpAddr, "public", snmp.WithTimeout(2*time.Second))
+	snmpReader, err := snmp.NewReader(snmpClient, m)
+	if err != nil {
+		t.Fatalf("snmp.NewReader: %v", err)
+	}
+
+	httpAddr, _ := startHTTPFace(t, st, spec, "password")
+	httpClient := webui.NewHTTPClient(httpAddr, "password", spec)
+	ctx := context.Background()
+	if err := httpClient.Login(ctx); err != nil {
+		t.Fatalf("HTTP Login(): %v", err)
+	}
+	httpReader, err := webui.NewReader(httpClient, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+
+	snmpVlans, err := snmpReader.GetVLANs(ctx)
+	if err != nil {
+		t.Fatalf("SNMP GetVLANs(): %v", err)
+	}
+	httpVlans, err := httpReader.GetVLANs(ctx)
+	if err != nil {
+		t.Fatalf("HTTP GetVLANs(): %v", err)
+	}
+
+	snmpByID := make(map[int]model.VLANInfo, len(snmpVlans))
+	for _, v := range snmpVlans {
+		snmpByID[v.VlanID] = v
+	}
+	httpByID := make(map[int]model.VLANInfo, len(httpVlans))
+	for _, v := range httpVlans {
+		httpByID[v.VlanID] = v
+	}
+	if len(snmpByID) != len(httpByID) {
+		t.Fatalf("SNMP reported %d VLANs %v, HTTP reported %d %v -- want the same set", len(snmpByID), sortedIntKeys(snmpByID), len(httpByID), sortedIntKeys(httpByID))
+	}
+	for vid, want := range httpByID {
+		got, ok := snmpByID[vid]
+		if !ok {
+			t.Errorf("VLAN %d present over HTTP, missing over SNMP", vid)
+			continue
+		}
+		// Both GetVLANs implementations return sorted-ascending port slices,
+		// so an order-sensitive compare is the meaningful one -- a silent
+		// reordering would itself be a fidelity bug worth catching.
+		if !slices.Equal(got.MemberPorts, want.MemberPorts) {
+			t.Errorf("VLAN %d member ports disagree: SNMP=%v HTTP=%v", vid, got.MemberPorts, want.MemberPorts)
+		}
+		if !slices.Equal(got.UntaggedPorts, want.UntaggedPorts) {
+			t.Errorf("VLAN %d untagged ports disagree: SNMP=%v HTTP=%v", vid, got.UntaggedPorts, want.UntaggedPorts)
+		}
+		if derefStr(got.Name) != derefStr(want.Name) {
+			t.Errorf("VLAN %d name disagrees: SNMP=%q HTTP=%q", vid, derefStr(got.Name), derefStr(want.Name))
+		}
 	}
 }

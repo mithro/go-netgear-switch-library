@@ -526,7 +526,13 @@ func buildRichState() *State {
 	rx := uint64(100)
 	desc := "uplink"
 	st.Ports[1] = &PortSim{Name: "1/0/1", Admin: true, Link: true, Speed: 1000, IfType: 6, RxOctets: &rx, Description: &desc}
-	st.Vlans[90] = &VlanSim{Name: "iot", Member: map[int]bool{1: true, 2: true}, Untagged: map[int]bool{1: true}}
+	// NoStaticRow: true here (not the zero-value default) so this fixture's
+	// exhaustive cmp.Diff comparisons below catch a clone helper silently
+	// dropping the field -- exactly the bug a prior cloneVlansMap did
+	// (GAP-2 fix follow-up): it built a VlanSim{...} literal that never
+	// listed NoStaticRow, so a snapshot/restore round trip fabricated a
+	// static row for VLAN 1 on the gs728tpp fake after any failed SET.
+	st.Vlans[90] = &VlanSim{Name: "iot", Member: map[int]bool{1: true, 2: true}, Untagged: map[int]bool{1: true}, NoStaticRow: true}
 	st.Pvids[1] = 90
 	st.Poe[1] = &PoeSim{Admin: true, Detect: 3, PowerMw: 3500}
 	st.Sensors = []SensorSim{{Kind: "fan", Instance: "0", Raw: "2850"}}
@@ -641,5 +647,37 @@ func TestSnapshotNilFieldsStayNil(t *testing.T) {
 	rich.Restore(snap)
 	if rich.HTTPSensors != nil || rich.UploadedCert != nil || rich.ScpCertDeploy != nil {
 		t.Error("Restore from a blank snapshot must clear previously-set pointer/slice fields")
+	}
+}
+
+// TestSnapshotAndRestorePreserveNoStaticRow is a regression test for a
+// GAP-2 fix follow-up: cloneVlansMap's VlanSim{...} literal never listed
+// NoStaticRow, so a Snapshot/Restore round trip -- run by every atomic
+// multi-varbind SNMP SET, taken before applying varbinds and restored
+// wholesale (*s = *snap) on ANY varbind failure -- silently fabricated a
+// static dot1qVlanStaticTable row for the gs728tpp fake's VLAN 1 after a
+// failed SET. That contradicts the exact MEASURED fact SeedGS728TPP exists
+// to model: the real switch reports dot1qVlanStatus=1 (other) for VLAN 1
+// with NO static row at all (see SeedGS728TPP's own doc comment). Confirmed
+// failing before the fix: SeedGS728TPP().Snapshot().Vlans[1].NoStaticRow
+// was false, want true.
+func TestSnapshotAndRestorePreserveNoStaticRow(t *testing.T) {
+	st := SeedGS728TPP()
+	if !st.Vlans[1].NoStaticRow {
+		t.Fatal("test setup: SeedGS728TPP's VLAN 1 must have NoStaticRow=true")
+	}
+
+	snap := st.Snapshot()
+	if !snap.Vlans[1].NoStaticRow {
+		t.Error("Snapshot dropped VLAN 1's NoStaticRow: got false, want true")
+	}
+
+	// Flip it on the LIVE state (standing in for whatever a since-failed
+	// SNMP SET might have mutated) and Restore from the snapshot taken
+	// while it was still true.
+	st.Vlans[1].NoStaticRow = false
+	st.Restore(snap)
+	if !st.Vlans[1].NoStaticRow {
+		t.Error("Restore dropped VLAN 1's NoStaticRow: got false, want true")
 	}
 }
