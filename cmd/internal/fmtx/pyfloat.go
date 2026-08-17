@@ -1,10 +1,14 @@
 package fmtx
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // pyFloatRepr reproduces Python's json.dumps encoding of a float --
@@ -110,40 +114,79 @@ func expSuffix(exp int) string {
 	return sign + digits
 }
 
-// pyFloat is a float64 wrapper whose MarshalJSON emits pyFloatRepr's
-// text instead of Go's default float encoding. It is never used
-// directly by model types (which stay plain float64, per this
-// codebase's existing struct definitions) -- ToJSON substitutes it in,
-// generically, via mirrorFloats below, immediately before marshaling.
-type pyFloat float64
+// pyFloat is a float64 wrapper whose MarshalJSON emits pyFloatRepr's text
+// instead of Go's default float encoding. It carries a pointer to the
+// jsonSentinels its ENCLOSING ToJSON call generated (see jsonSentinels'
+// doc comment for why this must be per-call, not a package-level
+// constant) so a non-finite value's MarshalJSON can emit that call's
+// sentinel string. It is never used directly by model types (which stay
+// plain float64, per this codebase's existing struct definitions) --
+// ToJSON substitutes it in, generically, via mirrorFloats, immediately
+// before marshaling.
+type pyFloat struct {
+	v float64
+	s *jsonSentinels
+}
 
-// nan/posInf/negInfSentinel are unique marker strings pyFloat.MarshalJSON
-// emits (as ordinary, VALID JSON strings) in place of the literal
-// NaN/Infinity/-Infinity tokens Python's json.dumps would write: Go's
-// encoding/json validates whatever bytes a MarshalJSON implementation
-// returns (via its internal compact/scan step) and REJECTS bare
-// identifiers like `NaN`, so emitting them directly would make Encode
-// fail outright. Emitting a quoted sentinel string keeps every
-// intermediate step valid JSON; ToJSON does one final, exact string
-// substitution (quotes and all) after the full document is encoded, to
-// swap each sentinel for the bare non-standard-JSON token Python itself
-// writes. The markers are arbitrary but distinctive enough that no real
-// model field could ever legitimately contain one.
-const (
-	nanSentinel    = "\x00ngsw:pyfloat:nan\x00"
-	posInfSentinel = "\x00ngsw:pyfloat:posinf\x00"
-	negInfSentinel = "\x00ngsw:pyfloat:neginf\x00"
-)
+// jsonSentinels holds ONE ToJSON call's fresh, unpredictable marker
+// strings for NaN/+Inf/-Inf: Go's encoding/json validates whatever bytes
+// a MarshalJSON implementation returns (via its internal compact/scan
+// step) and REJECTS bare identifiers like `NaN`, so pyFloat.MarshalJSON
+// cannot emit Python's literal NaN/Infinity/-Infinity tokens directly --
+// it emits a quoted sentinel STRING instead (ordinary, valid JSON), and
+// ToJSON does one final, exact substitution (quotes and all) after the
+// whole document is encoded, swapping each sentinel for the bare
+// non-standard-JSON token Python itself writes.
+//
+// The sentinels are generated FRESH, cryptographically at random, on
+// EVERY ToJSON call (see newJSONSentinels/randomSentinelToken) --
+// NOT a fixed package-level constant. A fixed sentinel was this
+// package's original design, and a real, live bug: encoding/json
+// preserves raw bytes end-to-end (including NUL, which snmp/parse.go's
+// SNMP-string decoding can pass through verbatim from a device's
+// EntPhysicalName reply into model.Sensor.Name/PortStatus.Name/
+// VLANInfo.Name and others), so a field whose value happened to equal
+// the fixed sentinel text byte-for-byte would be silently corrupted by
+// the blind whole-document string-replace: a quoted string field turning
+// into a bare `NaN` token. A per-call random sentinel makes that
+// collision cryptographically negligible instead of merely "unlikely
+// arbitrary text" -- there is no fixed value across calls for a field to
+// ever coincide with. The FINAL --json output stays fully deterministic
+// regardless (the sentinel never survives past ToJSON's own return), so
+// every existing byte-parity test is unaffected.
+type jsonSentinels struct {
+	nan, posInf, negInf             string // raw sentinel text
+	nanJSON, posInfJSON, negInfJSON string // ALREADY JSON-string-encoded (quoted)
+}
 
-// nanSentinelJSON etc. are the sentinels ALREADY JSON-string-encoded
-// (quotes and any necessary escaping included), computed once so
-// ToJSON's post-encode substitution matches byte-for-byte regardless of
-// exactly how encoding/json escapes the sentinel's control characters.
-var (
-	nanSentinelJSON    = mustMarshalString(nanSentinel)
-	posInfSentinelJSON = mustMarshalString(posInfSentinel)
-	negInfSentinelJSON = mustMarshalString(negInfSentinel)
-)
+// newJSONSentinels builds a fresh jsonSentinels for one ToJSON call.
+func newJSONSentinels() *jsonSentinels {
+	s := &jsonSentinels{
+		nan:    randomSentinelToken(),
+		posInf: randomSentinelToken(),
+		negInf: randomSentinelToken(),
+	}
+	s.nanJSON = mustMarshalString(s.nan)
+	s.posInfJSON = mustMarshalString(s.posInf)
+	s.negInfJSON = mustMarshalString(s.negInf)
+	return s
+}
+
+// randomSentinelToken returns a fresh, cryptographically unpredictable
+// per-call token: 16 bytes from crypto/rand, hex-encoded, wrapped in a
+// human-recognisable (but not guessable) fixed prefix/suffix purely for
+// debuggability if one were ever somehow observed mid-encode. On the
+// (essentially unreachable, per crypto/rand.Read's own contract on every
+// platform Go supports) chance the OS entropy source is unavailable,
+// falls back to a still-effectively-unique, process/time-derived token
+// rather than panicking a CLI/MCP command over a JSON-formatting detail.
+func randomSentinelToken() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return "\x00ngsw:pyfloat:" + hex.EncodeToString(b[:]) + "\x00"
+	}
+	return fmt.Sprintf("\x00ngsw:pyfloat:fallback:%d:%p\x00", time.Now().UnixNano(), &b)
+}
 
 func mustMarshalString(s string) string {
 	b, err := json.Marshal(s)
@@ -155,16 +198,15 @@ func mustMarshalString(s string) string {
 }
 
 // MarshalJSON implements json.Marshaler for pyFloat; see pyFloat's and
-// the sentinel constants' doc comments above.
+// jsonSentinels' doc comments above.
 func (f pyFloat) MarshalJSON() ([]byte, error) {
-	v := float64(f)
 	switch {
-	case math.IsNaN(v):
-		return json.Marshal(nanSentinel)
-	case math.IsInf(v, 1):
-		return json.Marshal(posInfSentinel)
-	case math.IsInf(v, -1):
-		return json.Marshal(negInfSentinel)
+	case math.IsNaN(f.v):
+		return json.Marshal(f.s.nan)
+	case math.IsInf(f.v, 1):
+		return json.Marshal(f.s.posInf)
+	case math.IsInf(f.v, -1):
+		return json.Marshal(f.s.negInf)
 	}
-	return []byte(pyFloatRepr(v)), nil
+	return []byte(pyFloatRepr(f.v)), nil
 }

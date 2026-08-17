@@ -38,22 +38,33 @@ import (
 //     is DISTINCT from pyG (pyg.go), which is sensors_table's TEXT
 //     rendering (Python's f"{v:g}"), a different algorithm entirely.
 func ToJSON(v any) (string, error) {
+	// A FRESH, cryptographically random sentinel set for THIS call only
+	// -- see jsonSentinels' doc comment (pyfloat.go) for why a fixed,
+	// package-level sentinel is a real corruption bug (a field value
+	// that happened to equal it byte-for-byte would be silently mangled
+	// by the blind substitution below) and per-call randomness is the
+	// fix: there is no fixed text left for any real field to collide
+	// with.
+	sentinels := newJSONSentinels()
+
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	if err := enc.Encode(mirrorFloats(v)); err != nil {
+	if err := enc.Encode(mirrorFloats(v, sentinels)); err != nil {
 		return "", err
 	}
 	s := strings.TrimSuffix(buf.String(), "\n")
 	// pyFloat.MarshalJSON emits a quoted sentinel string in place of a
 	// non-finite value (Go's encoder rejects the bare NaN/Infinity
-	// tokens Python's json.dumps writes -- see the sentinel constants'
-	// doc comment in pyfloat.go); swap them in now that the full
-	// document is valid, fully-encoded JSON text.
-	s = strings.ReplaceAll(s, nanSentinelJSON, "NaN")
-	s = strings.ReplaceAll(s, posInfSentinelJSON, "Infinity")
-	s = strings.ReplaceAll(s, negInfSentinelJSON, "-Infinity")
+	// tokens Python's json.dumps writes -- see jsonSentinels' doc
+	// comment in pyfloat.go); swap THIS call's sentinels in now that the
+	// full document is valid, fully-encoded JSON text. The substituted-
+	// out sentinel never survives past this function, so the final
+	// output is fully deterministic despite being random internally.
+	s = strings.ReplaceAll(s, sentinels.nanJSON, "NaN")
+	s = strings.ReplaceAll(s, sentinels.posInfJSON, "Infinity")
+	s = strings.ReplaceAll(s, sentinels.negInfJSON, "-Infinity")
 	return s, nil
 }
 

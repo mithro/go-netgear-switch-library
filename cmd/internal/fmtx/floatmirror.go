@@ -15,11 +15,13 @@ var jsonMarshalerType = reflect.TypeFor[interface{ MarshalJSON() ([]byte, error)
 // mirrorFloats returns a value that json.Marshal renders IDENTICALLY to
 // v, field-for-field, EXCEPT that every float64 reachable from v (direct
 // field, slice/array element, or pointee -- recursively) is replaced by
-// a pyFloat, so it marshals via pyFloatRepr (json.dumps-compatible)
-// instead of Go's default float formatting. This is what makes ToJSON's
-// float handling GENERIC rather than a one-off for model.Sensor.Value:
-// any float64 field this codebase's model types gain in the future gets
-// the same treatment automatically, with no fmtx change required.
+// a pyFloat (carrying s, THIS call's sentinels -- see jsonSentinels' doc
+// comment in pyfloat.go for why they must be per-call), so it marshals
+// via pyFloatRepr (json.dumps-compatible) instead of Go's default float
+// formatting. This is what makes ToJSON's float handling GENERIC rather
+// than a one-off for model.Sensor.Value: any float64 field this
+// codebase's model types gain in the future gets the same treatment
+// automatically, with no fmtx change required.
 //
 // When v contains no float64 anywhere (the overwhelming majority of this
 // codebase's JSON output -- every type except model.Sensor and anything
@@ -37,11 +39,11 @@ var jsonMarshalerType = reflect.TypeFor[interface{ MarshalJSON() ([]byte, error)
 // test (a "3300" instead of "3300.0" in the JSON) rather than silently,
 // exactly like every other renderer in this package that documents what
 // it does NOT yet handle rather than guessing.
-func mirrorFloats(v any) any {
+func mirrorFloats(v any, s *jsonSentinels) any {
 	if v == nil {
 		return nil
 	}
-	mv, changed := mirrorValue(reflect.ValueOf(v))
+	mv, changed := mirrorValue(reflect.ValueOf(v), s)
 	if !changed {
 		return v
 	}
@@ -51,7 +53,7 @@ func mirrorFloats(v any) any {
 // mirrorValue recursively mirrors rv (see mirrorFloats), returning the
 // (possibly reconstructed) value and whether anything actually changed.
 // A false changed return means the caller may keep using rv/v as-is.
-func mirrorValue(rv reflect.Value) (reflect.Value, bool) {
+func mirrorValue(rv reflect.Value, s *jsonSentinels) (reflect.Value, bool) {
 	if !rv.IsValid() {
 		return rv, false
 	}
@@ -65,13 +67,13 @@ func mirrorValue(rv reflect.Value) (reflect.Value, bool) {
 
 	switch t.Kind() {
 	case reflect.Float64:
-		return reflect.ValueOf(pyFloat(rv.Float())), true
+		return reflect.ValueOf(pyFloat{v: rv.Float(), s: s}), true
 
 	case reflect.Pointer:
 		if rv.IsNil() {
 			return rv, false
 		}
-		elem, changed := mirrorValue(rv.Elem())
+		elem, changed := mirrorValue(rv.Elem(), s)
 		if !changed {
 			return rv, false
 		}
@@ -83,7 +85,7 @@ func mirrorValue(rv reflect.Value) (reflect.Value, bool) {
 		if rv.IsNil() {
 			return rv, false
 		}
-		elem, changed := mirrorValue(rv.Elem())
+		elem, changed := mirrorValue(rv.Elem(), s)
 		if !changed {
 			return rv, false
 		}
@@ -93,13 +95,13 @@ func mirrorValue(rv reflect.Value) (reflect.Value, bool) {
 		if rv.IsNil() {
 			return rv, false
 		}
-		return mirrorSequence(rv, t)
+		return mirrorSequence(rv, t, s)
 
 	case reflect.Array:
-		return mirrorSequence(rv, t)
+		return mirrorSequence(rv, t, s)
 
 	case reflect.Struct:
-		return mirrorStruct(rv, t)
+		return mirrorStruct(rv, t, s)
 
 	default:
 		// string, int*, uint*, bool, map, chan, func, complex*, etc.:
@@ -112,13 +114,13 @@ func mirrorValue(rv reflect.Value) (reflect.Value, bool) {
 }
 
 // mirrorSequence mirrors a slice or array's elements; see mirrorValue.
-func mirrorSequence(rv reflect.Value, t reflect.Type) (reflect.Value, bool) {
+func mirrorSequence(rv reflect.Value, t reflect.Type, s *jsonSentinels) (reflect.Value, bool) {
 	n := rv.Len()
 	elems := make([]reflect.Value, n)
 	anyChanged := false
 	elemType := t.Elem()
 	for i := 0; i < n; i++ {
-		ev, changed := mirrorValue(rv.Index(i))
+		ev, changed := mirrorValue(rv.Index(i), s)
 		if changed {
 			anyChanged = true
 		}
@@ -165,7 +167,7 @@ func mirrorSequence(rv reflect.Value, t reflect.Type) (reflect.Value, bool) {
 // without changing the JSON output either way). Field order and every
 // json/other struct tag are preserved exactly, so key order and naming
 // stay byte-identical to the original type's own marshaling.
-func mirrorStruct(rv reflect.Value, t reflect.Type) (reflect.Value, bool) {
+func mirrorStruct(rv reflect.Value, t reflect.Type, s *jsonSentinels) (reflect.Value, bool) {
 	n := t.NumField()
 	fields := make([]reflect.StructField, 0, n)
 	values := make([]reflect.Value, 0, n)
@@ -177,7 +179,7 @@ func mirrorStruct(rv reflect.Value, t reflect.Type) (reflect.Value, bool) {
 			continue // unexported: never JSON-visible, drop from the mirror
 		}
 		fv := rv.Field(i)
-		nv, changed := mirrorValue(fv)
+		nv, changed := mirrorValue(fv, s)
 		if changed {
 			anyChanged = true
 			sf.Type = nv.Type()

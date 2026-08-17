@@ -5,7 +5,7 @@ import (
 )
 
 func TestMirrorFloatsNil(t *testing.T) {
-	if got := mirrorFloats(nil); got != nil {
+	if got := mirrorFloats(nil, newJSONSentinels()); got != nil {
 		t.Errorf("mirrorFloats(nil) = %v, want nil", got)
 	}
 }

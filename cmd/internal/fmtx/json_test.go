@@ -2,6 +2,7 @@ package fmtx
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"math"
 	"strings"
@@ -240,6 +241,87 @@ func TestToJSONSensorNonFiniteValue(t *testing.T) {
 	}
 }
 
+// TestToJSONOldFixedSentinelNoLongerSpecial is the Round-2 adversarial-
+// review regression test: this package's ORIGINAL (pre-fix) design used
+// a FIXED, package-level sentinel string for the NaN placeholder, and
+// ToJSON did a blind whole-document strings.ReplaceAll of it -- so a real
+// field whose value happened to equal that exact text byte-for-byte was
+// silently corrupted from a quoted JSON string into a bare `NaN` token.
+// This is reachable in practice: encoding/json preserves raw bytes
+// end-to-end, and snmp/parse.go's SNMP-string decoding can pass a NUL
+// byte straight through from a device's raw reply into
+// model.Sensor.Name/PortStatus.Name/VLANInfo.Name and others, so an
+// agent whose EntPhysicalName happened to equal the old fixed sentinel
+// would have corrupted `--json` output.
+//
+// The fix (pyfloat.go's jsonSentinels) makes the sentinel fresh and
+// cryptographically random on EVERY ToJSON call, so there is no longer
+// any FIXED text for a field to collide with. This test proves it
+// directly: construct a Sensor whose Name is byte-identical to the OLD
+// fixed sentinel text (kept here, inert, purely to build this
+// regression case -- it is no longer referenced by any production code)
+// and confirm the name survives as an ordinary, correctly quoted JSON
+// string, NOT as a corrupted bare `NaN` token.
+func TestToJSONOldFixedSentinelNoLongerSpecial(t *testing.T) {
+	// The exact fixed sentinel text this package used to hardcode for
+	// NaN before the per-call-random fix. Deliberately NOT referencing
+	// any production symbol (there is none any more) -- this is the
+	// literal bytes a real device's SNMP reply could have produced.
+	const oldFixedNaNSentinel = "\x00ngsw:pyfloat:nan\x00"
+
+	s := model.Sensor{Name: oldFixedNaNSentinel, Kind: "fan", Value: 1.0, Unit: "rpm"}
+	got, err := ToJSON(s)
+	if err != nil {
+		t.Fatalf("ToJSON() error = %v, want nil", err)
+	}
+
+	if strings.Contains(got, `"name": NaN`) {
+		t.Fatalf("ToJSON() corrupted a field value equal to the OLD fixed sentinel into a bare NaN token -- the exact Round-2 regression: %s", got)
+	}
+
+	wantNameJSON, err := json.Marshal(oldFixedNaNSentinel)
+	if err != nil {
+		t.Fatalf("json.Marshal(sentinel) error = %v", err)
+	}
+	wantLine := `  "name": ` + string(wantNameJSON) + `,`
+	if !strings.Contains(got, wantLine) {
+		t.Errorf("ToJSON(Sensor{Name: <old fixed sentinel>}) = %s, want the name preserved as a properly quoted JSON string: %s", got, wantLine)
+	}
+	// value: 1.0 (a real, unrelated float) must still render correctly
+	// too -- the fix must not have broken the ACTUAL NaN/Inf path for a
+	// genuinely non-finite value elsewhere in the same document (see
+	// TestToJSONSensorNonFiniteValue for that direct coverage); this
+	// just confirms this specific document's other field is untouched.
+	if !strings.Contains(got, `"value": 1.0`) {
+		t.Errorf("ToJSON(Sensor{Value: 1.0}) = %s, want \"value\": 1.0", got)
+	}
+}
+
+// TestJSONSentinelsAreRandomPerCall directly proves newJSONSentinels'
+// core property: two separate calls (i.e. two separate ToJSON
+// invocations) never produce the same sentinel text, which is what makes
+// the whole-document substitution in ToJSON safe against ANY fixed field
+// value (there is no longer a fixed value to check against).
+func TestJSONSentinelsAreRandomPerCall(t *testing.T) {
+	a := newJSONSentinels()
+	b := newJSONSentinels()
+	if a.nan == b.nan {
+		t.Error("newJSONSentinels() produced the same NaN sentinel twice in a row, want cryptographically distinct per-call tokens")
+	}
+	if a.posInf == b.posInf {
+		t.Error("newJSONSentinels() produced the same +Inf sentinel twice in a row, want cryptographically distinct per-call tokens")
+	}
+	if a.negInf == b.negInf {
+		t.Error("newJSONSentinels() produced the same -Inf sentinel twice in a row, want cryptographically distinct per-call tokens")
+	}
+	// The three sentinels within ONE call must also be pairwise distinct
+	// -- otherwise a NaN value could be mistaken for +Inf after
+	// substitution.
+	if a.nan == a.posInf || a.nan == a.negInf || a.posInf == a.negInf {
+		t.Errorf("newJSONSentinels() produced overlapping sentinels within one call: nan=%q posInf=%q negInf=%q", a.nan, a.posInf, a.negInf)
+	}
+}
+
 // TestToJSONSwitchDataWithSensorsNestedFloat exercises the FULL
 // GetSensors/Snapshot shape the bug report named: a float64 nested two
 // levels deep (SwitchData -> []Sensor -> Value), confirming mirrorFloats'
@@ -281,9 +363,12 @@ func TestToJSONPointerToSensor(t *testing.T) {
 // for every type with no float64 anywhere -- the overwhelming majority
 // of this codebase's JSON output -- so the float64 fix carries no
 // regression risk for anything else already byte-parity-tested above.
+// Passing a nil *jsonSentinels also proves the no-op path never even
+// dereferences it (it would panic on a real float64 field, but
+// PortStatus has none).
 func TestMirrorFloatsNoOpWithoutAnyFloatField(t *testing.T) {
 	v := model.PortStatus{Port: 1, AdminEnabled: true}
-	got := mirrorFloats(v)
+	got := mirrorFloats(v, nil)
 	gotPS, ok := got.(model.PortStatus)
 	if !ok {
 		t.Fatalf("mirrorFloats(PortStatus) returned %T, want model.PortStatus unchanged", got)
