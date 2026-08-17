@@ -182,7 +182,7 @@ func TestGetStatsWalksSevenOIDsInOrderAndJoinsFields(t *testing.T) {
 
 // --- GetVLANs / GetPVIDs -----------------------------------------------
 
-func TestGetVLANsWalksThreeOIDsInOrderAndJoinsFields(t *testing.T) {
+func TestGetVLANsWalksSixOIDsInOrderAndJoinsFields(t *testing.T) {
 	fc := newFakeReaderClient(fullReaderTables(t))
 	r, err := NewReader(fc, mustModel(t, "gsm7252ps"))
 	if err != nil {
@@ -192,7 +192,13 @@ func TestGetVLANsWalksThreeOIDsInOrderAndJoinsFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetVLANs: %v", err)
 	}
-	want := []string{Dot1qVlanStaticName, Dot1qVlanStaticEgress, Dot1qVlanStaticUntagged}
+	// GAP-2 fix (parity with Python commit 3f25b0b): IfType (physical-port
+	// filtering) and the dot1qVlanCurrentTable pair (VLANs the static table
+	// omits) join the three static-table walks -- see ParseVlans.
+	want := []string{
+		Dot1qVlanStaticName, Dot1qVlanStaticEgress, Dot1qVlanStaticUntagged,
+		IfType, Dot1qVlanCurrentEgress, Dot1qVlanCurrentUntagged,
+	}
 	if diff := cmp.Diff(want, fc.walked); diff != "" {
 		t.Errorf("walked OIDs mismatch (-want +got):\n%s", diff)
 	}

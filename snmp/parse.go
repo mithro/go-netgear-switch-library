@@ -472,19 +472,89 @@ func intSliceDiff(a, b []int) []int {
 	return out
 }
 
-// ParseVlans builds the switch's VLAN table from the dot1qVlanStaticName/
-// dot1qVlanStaticEgressPorts/dot1qVlanStaticUntaggedPorts column walks.
+// currentVlanBitmapMap maps a dot1qVlanCurrentTable bitmap column walk
+// (Dot1qVlanCurrentEgress/Dot1qVlanCurrentUntagged) to {vlan_id: bitmap
+// bytes}.
 //
-// VLANs are enumerated names-walk-only: only a VLAN ID present in the names
-// walk becomes a VLANInfo, even if it also has an egress/untagged bitmap --
-// a bitmap-only VLAN (no name row) is silently dropped. MemberPorts is the
-// decoded egress bitmap; UntaggedPorts is the decoded untagged bitmap;
+// Separate from vlanBitmapMap because the two tables are indexed
+// differently: the STATIC table is indexed by dot1qVlanIndex alone, while
+// the CURRENT table is indexed by <dot1qVlanTimeMark>.<dot1qVlanIndex>
+// (RFC 2674). MEASURED live on a GS728TPP (10.2.5.10, firmware 6.0.1.30)
+// every row is "...4.2.1.4.0.<vlan>" -- time mark 0. A suffix that is not
+// exactly two all-digit components is drift and returns an error wrapping
+// model.ErrSNMP naming the offending OID, rather than being silently
+// dropped.
+func currentVlanBitmapMap(rows []Row, baseOID string) (map[int][]byte, error) {
+	out := make(map[int][]byte)
+	for _, row := range rows {
+		s, ok := suffix(row, baseOID)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(s, ".")
+		if len(parts) != 2 || !isAllDigits(parts[0]) || !isAllDigits(parts[1]) {
+			return nil, errOID(row.OID, "malformed dot1qVlanCurrentTable index %q", s)
+		}
+		var data []byte
+		switch v := row.Value.(type) {
+		case []byte:
+			data = v
+		case string:
+			data = []byte(v)
+		default:
+			return nil, errOID(row.OID, "malformed VLAN port bitmap type")
+		}
+		idx, err := strconv.Atoi(parts[1])
+		if err != nil {
+			// Unreachable: isAllDigits already guarantees parts[1] parses cleanly.
+			return nil, errOID(row.OID, "malformed dot1qVlanCurrentTable index %q", s)
+		}
+		out[idx] = data
+	}
+	return out, nil
+}
+
+// ParseVlans builds the switch's VLAN table from the dot1qVlanStaticName/
+// dot1qVlanStaticEgressPorts/dot1qVlanStaticUntaggedPorts column walks,
+// completed by the dot1qVlanCurrentTable and physical-port-filtered via an
+// optional ifType walk.
+//
+// ifTypes filters membership to physical ports, exactly as
+// ParsePortStatus/ParsePvids already do. Without it a LAG shows up as a
+// phantom member port: MEASURED on a GS728TPP (10.2.5.10, firmware
+// 6.0.1.30), whose 126-byte PortList sets bit 1000 -- "po 1", ifType 161
+// (ieee8023adLag), confirmed identity-mapped via dot1dBasePortIfIndex -- in
+// 11 of its 13 VLANs. The switch has 28 ports, so "member port 1000" is
+// not something a caller can act on, and the HTTP backend never reports
+// it. ifTypes empty (no walk at all) keeps every decoded port, exactly
+// like physicalPorts' other callers.
+//
+// currentEgress/currentUntagged add VLANs the STATIC table omits. That is
+// not hypothetical: the same GS728TPP publishes only 12 static rows (ids
+// 2..99) while dot1qVlanCurrentTable has 13 -- VLAN 1, the default VLAN,
+// exists ONLY there, with dot1qVlanStatus = 1 (other) rather than
+// 2 (permanent). Reading the static table alone silently loses the VLAN
+// that carries this switch's own management ports (24/25/27, untagged),
+// which the web UI does list. Such a VLAN has no dot1qVlanStaticName row,
+// so its Name is nil -- matching what the HTTP backend reports for it.
+//
+// The static bitmaps win where both tables have the VLAN: they are the
+// CONFIGURED membership. On the live GS728TPP the two agreed byte-for-byte
+// for all 12 shared VLANs, so this ordering was measured, not assumed.
+//
 // TaggedPorts is always derived as MemberPorts minus UntaggedPorts, never
-// read from a separate source. A VLAN with a name but no egress/untagged
-// row at all (absent, not malformed) gets empty, non-nil port sets. Name is
-// nil for an empty-string dot1qVlanStaticName value, consistent with the
-// nil-for-absent-or-empty convention used throughout this package.
-func ParseVlans(names, egress, untagged []Row) ([]model.VLANInfo, error) {
+// read from a separate source, on whichever pair (static or current) fed
+// this VLAN. A VLAN with a name but no egress/untagged row at all (absent,
+// not malformed) gets empty, non-nil port sets.
+func ParseVlans(names, egress, untagged, ifTypes, currentEgress, currentUntagged []Row) ([]model.VLANInfo, error) {
+	physical, err := physicalPorts(ifTypes)
+	if err != nil {
+		return nil, err
+	}
+	portsOf := func(bitmap []byte) []int {
+		return filterPhysical(DecodePortBitmap(bitmap), physical)
+	}
+
 	nameMap, err := IndexStrColumn(names, Dot1qVlanStaticName)
 	if err != nil {
 		return nil, err
@@ -497,19 +567,41 @@ func ParseVlans(names, egress, untagged []Row) ([]model.VLANInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	curEgressMap, err := currentVlanBitmapMap(currentEgress, Dot1qVlanCurrentEgress)
+	if err != nil {
+		return nil, err
+	}
+	curUntagMap, err := currentVlanBitmapMap(currentUntagged, Dot1qVlanCurrentUntagged)
+	if err != nil {
+		return nil, err
+	}
 
-	ids := make([]int, 0, len(nameMap))
+	idSet := make(map[int]struct{}, len(nameMap)+len(curEgressMap))
 	for id := range nameMap {
+		idSet[id] = struct{}{}
+	}
+	for id := range curEgressMap {
+		idSet[id] = struct{}{}
+	}
+	ids := make([]int, 0, len(idSet))
+	for id := range idSet {
 		ids = append(ids, id)
 	}
 	sort.Ints(ids)
 
 	result := make([]model.VLANInfo, 0, len(ids))
 	for _, vid := range ids {
-		member := DecodePortBitmap(egressMap[vid])
-		untag := DecodePortBitmap(untagMap[vid])
+		n, staticRow := nameMap[vid]
+		var member, untag []int
+		if staticRow {
+			member = portsOf(egressMap[vid])
+			untag = portsOf(untagMap[vid])
+		} else {
+			member = portsOf(curEgressMap[vid])
+			untag = portsOf(curUntagMap[vid])
+		}
 		var name *string
-		if n := nameMap[vid]; n != "" {
+		if n != "" {
 			name = model.Ptr(n)
 		}
 		result = append(result, model.VLANInfo{

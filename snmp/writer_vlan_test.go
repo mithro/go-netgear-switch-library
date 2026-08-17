@@ -257,6 +257,38 @@ func TestSetVlanMembershipRMWPreservesOtherPorts(t *testing.T) {
 	}
 }
 
+// TestSetVlanMembershipVerifiesAgainstPhysicalPortsOnlyWhenLAGPresent pins
+// a GAP-2 ripple effect (parity with Python commit 3f25b0b): once GetVLANs
+// drops LAG bridge-ports from VLAN membership (ParseVlans), SetVlanMembership
+// verifies by decoding the bitmap it just SENT and comparing it against
+// what GetVLANs reads back -- so it must filter its OWN "wanted" set to
+// physical ports too, or the LAG bit it never touched makes every write on
+// that VLAN raise a bogus WriteVerificationError. MEASURED: the real
+// GSM7252PS (virtual.SeedGSM7252PS) has a LAG ("lag 1", ifIndex 418) that
+// IS a member of several VLANs -- this is the normal case there, not an
+// edge case. Port 1000 here stands in for that LAG.
+func TestSetVlanMembershipVerifiesAgainstPhysicalPortsOnlyWhenLAGPresent(t *testing.T) {
+	tables := mergeTables(
+		vlanTables(90, []int{1, 2, 1000}, []int{1, 2}),
+		map[string][]Row{
+			IfType: {
+				NewIntRow(IfType+".1", EthernetCsmacd),
+				NewIntRow(IfType+".2", EthernetCsmacd),
+				NewIntRow(IfType+".25", EthernetCsmacd),
+				NewIntRow(IfType+".1000", 161), // ieee8023adLag
+			},
+		},
+	)
+	client := newScriptedWriteClient(tables, applyVlanBitmaps)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetVlanMembership(context.Background(), 90, 25, model.VlanTagged, true); err != nil {
+		t.Fatalf("SetVlanMembership: %v", err)
+	}
+}
+
 func TestSetVlanMembershipCatchesDroppedUntaggedWrite(t *testing.T) {
 	client := newScriptedWriteClient(vlanTables(90, []int{1, 2, 10}, []int{1, 2}), applyEgressOnly)
 	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))

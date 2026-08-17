@@ -448,6 +448,9 @@ func TestSeedGSM7252PSRoundtripsThroughParsers(t *testing.T) {
 		rowsFor(m, snmp.Dot1qVlanStaticName),
 		rowsFor(m, snmp.Dot1qVlanStaticEgress),
 		rowsFor(m, snmp.Dot1qVlanStaticUntagged),
+		rowsFor(m, snmp.IfType),
+		rowsFor(m, snmp.Dot1qVlanCurrentEgress),
+		rowsFor(m, snmp.Dot1qVlanCurrentUntagged),
 	)
 	if err != nil {
 		t.Fatalf("ParseVlans: %v", err)

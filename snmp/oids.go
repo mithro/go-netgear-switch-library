@@ -66,6 +66,21 @@ const (
 	Dot1qVlanStaticEgress = "1.3.6.1.2.1.17.7.1.4.3.1.2"
 	// Dot1qVlanStaticUntagged is dot1qVlanStaticUntaggedPorts.
 	Dot1qVlanStaticUntagged = "1.3.6.1.2.1.17.7.1.4.3.1.4"
+	// Dot1qVlanCurrentEgress is dot1qVlanCurrentEgressPorts -- the
+	// OPERATIONAL VLAN table, indexed by <dot1qVlanTimeMark>.<dot1qVlanIndex>
+	// (the static columns above are indexed by the VLAN id alone). Read
+	// alongside the static table because a VLAN can exist here and NOT
+	// there: MEASURED on a GS728TPP (10.2.5.10, firmware 6.0.1.30) VLAN 1
+	// has no dot1qVlanStaticTable row at all, only a current-table row with
+	// dot1qVlanStatus = 1 (other) -- see ParseVlans.
+	Dot1qVlanCurrentEgress = "1.3.6.1.2.1.17.7.1.4.2.1.4"
+	// Dot1qVlanCurrentUntagged is dot1qVlanCurrentUntaggedPorts.
+	Dot1qVlanCurrentUntagged = "1.3.6.1.2.1.17.7.1.4.2.1.5"
+	// Dot1qVlanStatus is dot1qVlanStatus (1 other, 2 permanent,
+	// 3 dynamicGvrp). Documented for parity with the Python source; not
+	// walked anywhere today -- ParseVlans distinguishes a static-table row
+	// from a current-table-only row by presence in the name column instead.
+	Dot1qVlanStatus = "1.3.6.1.2.1.17.7.1.4.2.1.6"
 	// Dot1qPvid is dot1qPvid.
 	Dot1qPvid = "1.3.6.1.2.1.17.7.1.4.5.1.1"
 	// Dot1qVlanStaticRowStatus is dot1qVlanStaticRowStatus.
