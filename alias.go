@@ -16,6 +16,8 @@ type (
 	VlanMode = model.VlanMode
 	// IPMode is aliased from model.IPMode.
 	IPMode = model.IPMode
+	// PortSpeed is aliased from model.PortSpeed.
+	PortSpeed = model.PortSpeed
 	// PortStatus is aliased from model.PortStatus.
 	PortStatus = model.PortStatus
 	// PoEStatus is aliased from model.PoEStatus.
@@ -32,6 +34,14 @@ type (
 	PortStats = model.PortStats
 	// MgmtIPConfig is aliased from model.MgmtIPConfig.
 	MgmtIPConfig = model.MgmtIPConfig
+	// ServiceStatus is aliased from model.ServiceStatus.
+	ServiceStatus = model.ServiceStatus
+	// SwitchUser is aliased from model.SwitchUser.
+	SwitchUser = model.SwitchUser
+	// SyslogServer is aliased from model.SyslogServer.
+	SyslogServer = model.SyslogServer
+	// SyslogConfig is aliased from model.SyslogConfig.
+	SyslogConfig = model.SyslogConfig
 	// DetectedModel is aliased from model.DetectedModel.
 	DetectedModel = model.DetectedModel
 	// Pvid is aliased from model.Pvid.
@@ -155,6 +165,42 @@ const (
 // model.LinkSpeedFromByte.
 func LinkSpeedFromByte(b byte) LinkSpeed {
 	return model.LinkSpeedFromByte(b)
+}
+
+// AutoPortSpeed returns the auto-negotiate PortSpeed configuration; see
+// model.AutoPortSpeed.
+func AutoPortSpeed() PortSpeed {
+	return model.AutoPortSpeed()
+}
+
+// ForcedPortSpeed returns a forced fixed-rate/duplex PortSpeed
+// configuration; see model.ForcedPortSpeed.
+func ForcedPortSpeed(speedMbps int, fullDuplex bool) PortSpeed {
+	return model.ForcedPortSpeed(speedMbps, fullDuplex)
+}
+
+// PrivilegedAccess reports whether accessMode is a full-privilege access
+// level; see model.PrivilegedAccess.
+func PrivilegedAccess(accessMode string) *bool {
+	return model.PrivilegedAccess(accessMode)
+}
+
+// SyslogSeverity maps a switch's severity WORD to its standard number; see
+// model.SyslogSeverity.
+func SyslogSeverity(name string) (int, error) {
+	return model.SyslogSeverity(name)
+}
+
+// SyslogSeverityWord maps a severity NUMBER to the CLI's word for it; see
+// model.SyslogSeverityWord.
+func SyslogSeverityWord(level int) (string, error) {
+	return model.SyslogSeverityWord(level)
+}
+
+// SyslogSeverityLabel maps a severity NUMBER to the web UI's word for it;
+// see model.SyslogSeverityLabel.
+func SyslogSeverityLabel(level int) (string, error) {
+	return model.SyslogSeverityLabel(level)
 }
 
 // VLANEngine values, re-exported from model.

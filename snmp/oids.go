@@ -26,6 +26,28 @@ const (
 	// (authoritative), else carried raw.
 	SysObjectID = "1.3.6.1.2.1.1.2.0"
 
+	// SysName is sysName: the switch's host name. A STANDARD MIB-II
+	// scalar, which is why it is the one hostname source that also works
+	// on gs728tpp -- that agent publishes no Netgear vendor subtree at
+	// all.
+	//
+	// WRITABLE on every SNMP model in this fleet. Measured 2026-08-02 by
+	// SETting the value the switch already had: a zero-impact writability
+	// probe, since the device state cannot change but a read-only column
+	// still answers notWritable. All five accepted -- gsm7228ps
+	// (10.1.5.11) on community `public`, which is the only one it has,
+	// and m4300-24x (.13), m4300-16x (.20), gsm7252ps (.22) and gs728tpp
+	// (10.2.5.10) on `private`.
+	//
+	// NOT the same value as the FASTPATH `hostname` running-config
+	// directive. On m4300-16x sysName is
+	// "sw-netgear-m4300-16x-poe-s2" while running-config holds
+	// "manage-sw-netgear-m4300-16x-poe-s2", and on gsm7252ps
+	// running-config carries no hostname at all. sysName tracks `show
+	// hosts`, which is therefore what the CLI reader parses so that the
+	// two backends cannot disagree.
+	SysName = "1.3.6.1.2.1.1.5.0"
+
 	// IfType is ifType (6 = ethernetCsmacd = physical port); see
 	// EthernetCsmacd. Filters LAG(161)/CPU(1)/l2vlan(135) pseudo-interfaces
 	// out of ports/stats/pvids.
@@ -52,6 +74,31 @@ const (
 	IfHighSpeed = "1.3.6.1.2.1.31.1.1.1.15"
 	// IfAlias is ifAlias.
 	IfAlias = "1.3.6.1.2.1.31.1.1.1.18"
+
+	// EtherLike-MIB (RFC 3635) per-port duplex and pause (flow control).
+	// NOT served by every agent, and the difference is per-model,
+	// measured 2026-08-03:
+	//
+	//   gs728tpp 10.2.5.10 : dot3StatsTable has column 19,
+	//                        dot3PauseTable has columns 1 and 2 -- both
+	//                        readable for all 36 interfaces.
+	//   gsm7252ps 10.1.5.22: dot3StatsTable stops at column 16 (no 19)
+	//                        and dot3PauseTable serves only the COUNTERS
+	//                        (3-6), not AdminMode/OperMode. So duplex and
+	//                        flow control are genuinely unavailable over
+	//                        SNMP there, and stay nil rather than being
+	//                        invented.
+	//
+	// Dot3StatsDuplexStatus: 1 unknown, 2 halfDuplex, 3 fullDuplex.
+	// Dot3PauseOperMode:     1 disabled, 2 enabledXmit, 3 enabledRcv,
+	//                        4 enabledXmitAndRcv.
+
+	// Dot3StatsDuplexStatus is dot3StatsDuplexStatus.
+	Dot3StatsDuplexStatus = "1.3.6.1.2.1.10.7.2.1.19"
+	// Dot3PauseAdminMode is dot3PauseAdminMode.
+	Dot3PauseAdminMode = "1.3.6.1.2.1.10.7.10.1.1"
+	// Dot3PauseOperMode is dot3PauseOperMode.
+	Dot3PauseOperMode = "1.3.6.1.2.1.10.7.10.1.2"
 
 	// Dot1dBaseBridgeAddress is dot1dBaseBridgeAddress: a scalar (.0);
 	// BRIDGE-MIB base MAC.
@@ -180,6 +227,43 @@ type VendorOids struct {
 	// symbol every call site uses for the DHCP-mode OID; no call site may
 	// hard-code a ".99.1" literal.
 	DHCPModeUnverified string
+	// SyslogAdminMode is {Base}.14.1.4.1.0.
+	SyslogAdminMode string
+	// SyslogLocalPort is {Base}.14.1.4.3.0.
+	SyslogLocalPort string
+	// SyslogHostAddr is {Base}.14.1.4.5.1.3.
+	SyslogHostAddr string
+	// SyslogHostPort is {Base}.14.1.4.5.1.4.
+	SyslogHostPort string
+	// SyslogHostSeverity is {Base}.14.1.4.5.1.5.
+	SyslogHostSeverity string
+	// SyslogHostStatus is {Base}.14.1.4.5.1.7.
+	//
+	// SyslogAdminMode/SyslogLocalPort/SyslogHostAddr/SyslogHostPort/
+	// SyslogHostSeverity/SyslogHostStatus are remote-logging
+	// configuration, under <base>.14 on BOTH vendor families -- 4526.10
+	// (FASTPATH) and 4526.11 (S3300) share the column layout.
+	//
+	// Located 2026-08-02 by reading each switch's own `show logging` /
+	// `show logging hosts` and then searching a full walk for those
+	// values; every field of the CLI output is accounted for by a column
+	// and the two agree. On m4300-24x (10.1.5.13) the host row reads
+	// 10.1.5.1 / port 514 / severity 6 / status 1 against a CLI table of
+	// "10.1.5.1  info  514 Active" -- so severity is the standard syslog
+	// scale (6 = info) and status 1 = Active.
+	//
+	// <base>.17 is NOT this: it looks like logging until you notice it
+	// holds port 123 and the string "NTP Bits". It is SNTP, and this
+	// fleet's NTP server and syslog server are the same host, which is
+	// what makes the confusion easy.
+	//
+	// The admin-mode enum is 1 = enabled, 2 = disabled, confirmed twice
+	// over on m4300-24x: syslog reads 1 while `show logging` says
+	// "Syslog Logging : enabled", and the console column reads 2 while
+	// it says "Console Logging : disabled". The console severity column
+	// independently reads 3 against a CLI "error", matching the same
+	// syslog scale.
+	SyslogHostStatus string
 	// MgmtWriteAddrUnverified is {Base}.98.1.
 	MgmtWriteAddrUnverified string
 	// MgmtWriteNetmaskUnverified is {Base}.98.2.
@@ -208,6 +292,12 @@ func vendorOidsFor(base string) VendorOids {
 		BoxPSUPower:                base + ".43.1.8.1.5",
 		BoxTemp:                    base + ".43.1.15.1.3",
 		DHCPModeUnverified:         base + "." + DHCPModeOIDSuffix,
+		SyslogAdminMode:            base + ".14.1.4.1.0",
+		SyslogLocalPort:            base + ".14.1.4.3.0",
+		SyslogHostAddr:             base + ".14.1.4.5.1.3",
+		SyslogHostPort:             base + ".14.1.4.5.1.4",
+		SyslogHostSeverity:         base + ".14.1.4.5.1.5",
+		SyslogHostStatus:           base + ".14.1.4.5.1.7",
 		MgmtWriteAddrUnverified:    base + ".98.1",
 		MgmtWriteNetmaskUnverified: base + ".98.2",
 		MgmtWriteGatewayUnverified: base + ".98.3",
