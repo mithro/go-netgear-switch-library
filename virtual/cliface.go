@@ -103,6 +103,12 @@ var (
 	cliNetworkParmsRE = regexp.MustCompile(`^network parms ` + cliIPPattern + ` ` + cliIPPattern + `(?: ` + cliIPPattern + `)?$`)
 	cliIPMgmtAddrRE   = regexp.MustCompile(`^ip management address ` + cliIPPattern + ` ` + cliIPPattern + `$`)
 	cliIPGatewayRE    = regexp.MustCompile(`^ip default-gateway ` + cliIPPattern + `$`)
+	// cliHostnameRE mirrors the global-config `hostname <name>` command
+	// (set_hostname). Not mode-gated beyond the surrounding `f.mode() ==
+	// cliModeConfig` check -- a bare "hostname" (no argument) deliberately
+	// does NOT match this regex, so it falls through to the catch-all
+	// "Command not found" response, mirroring the real device rejecting it.
+	cliHostnameRE = regexp.MustCompile(`^hostname (.+)$`)
 )
 
 // Mode names for CliFace.modes (dossier §3.3).
@@ -549,6 +555,10 @@ func (f *CliFace) configCommand(c string) (string, bool) {
 		return f.vlanDBCommand(c)
 	}
 	if f.mode() == cliModeConfig {
+		if m := cliHostnameRE.FindStringSubmatch(c); m != nil {
+			f.state.Hostname = m[1]
+			return cliAccepted, true
+		}
 		if m := cliInterfaceRE.FindStringSubmatch(c); m != nil {
 			port, ok := f.portForIface(m[1])
 			if !ok {
@@ -635,6 +645,8 @@ func (f *CliFace) run(command string) string {
 		return f.renderEnvironment()
 	case f.spec.NetworkCmd:
 		return f.renderNetwork()
+	case f.spec.HostsCmd:
+		return f.renderHosts()
 	case f.spec.UsersCmd:
 		return f.renderUsers()
 	case f.spec.HTTPServiceCmd:

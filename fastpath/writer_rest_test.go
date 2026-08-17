@@ -492,6 +492,89 @@ func TestWriterSetPortEnabledVerificationMismatch(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// SetHostname -- NOT force-gated, refuses an empty name before any I/O
+// ---------------------------------------------------------------------
+
+func TestWriterSetHostnameWritesAndVerifies(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	spec := mustCLISpec(t, m)
+	before := hostsFixture("old-name")
+	after := hostsFixture("new-name")
+
+	sess := newQueuedSession(
+		ok(before),
+		ok(""), // enter: configure
+		ok(""), // hostname new-name
+		ok(""), // unwind: exit
+		ok(after),
+	)
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.SetHostname(context.Background(), "new-name", false); err != nil {
+		t.Fatalf("SetHostname: %v", err)
+	}
+	wantCmds := []string{spec.HostsCmd, spec.ConfigureCmd, spec.HostnameConfig("new-name"), spec.ExitCmd, spec.HostsCmd}
+	assertCommands(t, sess, wantCmds)
+}
+
+// TestWriterSetHostnameNotForceGated proves force=false succeeds -- renaming
+// cannot strand the switch, unlike SetMgmtIP just below.
+func TestWriterSetHostnameNotForceGated(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	before := hostsFixture("old-name")
+	after := hostsFixture("renamed")
+	sess := newQueuedSession(ok(before), ok(""), ok(""), ok(""), ok(after))
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.SetHostname(context.Background(), "renamed", false); err != nil {
+		t.Fatalf("SetHostname(force=false) = %v, want success (not force-gated)", err)
+	}
+}
+
+// TestWriterSetHostnameRejectsEmptyName mirrors Python's
+// test_empty_hostname_is_refused_not_sent: `hostname` with no argument is
+// rejected by the device itself, so this library refuses client-side,
+// issuing ZERO session calls -- a plain (non-sentinel) error, mirroring
+// Python's bare ValueError.
+func TestWriterSetHostnameRejectsEmptyName(t *testing.T) {
+	m := mustGetModel(t, "m4300-24x")
+	sess := newQueuedSession()
+	w := mustNewWriter(t, sess, m)
+
+	err := w.SetHostname(context.Background(), "   ", false)
+	if err == nil {
+		t.Fatal("SetHostname(\"   \") = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "must not be empty") {
+		t.Errorf("SetHostname(\"   \") error = %q, want it to mention 'must not be empty'", err.Error())
+	}
+	if errors.Is(err, model.ErrUnsupportedCapability) || errors.Is(err, model.ErrProtectedPort) {
+		t.Errorf("SetHostname(\"   \") error = %v, want a PLAIN error (mirroring Python's bare ValueError)", err)
+	}
+	if len(sess.calls) != 0 {
+		t.Fatalf("commands = %v, want zero -- the empty-name check must fire before any session I/O", sess.calls)
+	}
+}
+
+func TestWriterSetHostnameVerificationFailureRaises(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	stuck := hostsFixture("stuck-name")
+	// Device ignores the write: every read (before AND after) answers the
+	// same fixture.
+	sess := newQueuedSession(ok(stuck), ok(""), ok(""), ok(""), ok(stuck))
+	w := mustNewWriter(t, sess, m)
+
+	err := w.SetHostname(context.Background(), "new-name", false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("SetHostname error = %v, want *model.WriteVerificationError", err)
+	}
+	if verr.Before != "stuck-name" || verr.After != "stuck-name" {
+		t.Errorf("verification error before/after = %v/%v, want stuck-name/stuck-name", verr.Before, verr.After)
+	}
+}
+
+// ---------------------------------------------------------------------
 // SetMgmtIP (dossier §4.8) -- unconditional force + first-mismatch verify
 // ---------------------------------------------------------------------
 

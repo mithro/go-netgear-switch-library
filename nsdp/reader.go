@@ -328,6 +328,29 @@ func (r *Reader) GetMgmtIP(ctx context.Context) (model.MgmtIPConfig, error) {
 	return mapMgmtIP(dev), nil
 }
 
+// GetHostname reads the switch's host name from the NSDP HOSTNAME tag
+// (0x0003), mirroring Python's NsdpReader.get_hostname (nsdp_read.py:236-
+// 246). The same value SNMP would report as sysName -- except that a Plus
+// switch has no SNMP agent at all, which is why NSDP carries it.
+//
+// A switch that has never been named answers the tag with nothing, and that
+// is a real answer rather than a failure: unlike SNMP's sysName, which is a
+// mandatory scalar, this tag is genuinely optional -- so an absent Hostname
+// maps to "", never an error.
+//
+// Requests, via device: TagHostname (plus TagModel, prepended by
+// withModel), mirroring Python's get_hostname/[Tag.HOSTNAME].
+func (r *Reader) GetHostname(ctx context.Context) (string, error) {
+	dev, err := r.device(ctx, []Tag{TagHostname})
+	if err != nil {
+		return "", err
+	}
+	if dev.Hostname == nil {
+		return "", nil
+	}
+	return *dev.Hostname, nil
+}
+
 // GetDevice returns the COMPLETE raw NsdpDevice for this switch: every tag
 // ParseDevice knows how to decode, in one round trip. Unlike the other
 // Get* methods above, this returns the NSDP-native shape (including the

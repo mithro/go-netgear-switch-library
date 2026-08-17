@@ -290,6 +290,19 @@ func TestParseGoAheadBaseMACFromSystemInfo(t *testing.T) {
 	}
 }
 
+// TestParseGoAheadHostnameFromSystemInfo pins DeviceBasicInfo/deviceName --
+// MEASURED on the live GS728TPP (10.2.5.10, firmware 6.0.1.30, 2026-08-03)
+// reading byte-for-byte what SNMP reports through sysName.
+func TestParseGoAheadHostnameFromSystemInfo(t *testing.T) {
+	got, err := webui.ParseGoAheadHostname(readFixture(t, "gs728tpp_device_info_and_sensors.xml"))
+	if err != nil {
+		t.Fatalf("ParseGoAheadHostname() error = %v", err)
+	}
+	if got != "sw-netgear-gs728tpp" {
+		t.Errorf("ParseGoAheadHostname() = %q, want %q", got, "sw-netgear-gs728tpp")
+	}
+}
+
 // TestGoAheadRejectsWrongPageAndDTD pins the two failure shapes
 // (test_parse.py::test_goahead_rejects_wrong_page_and_dtd): a page that
 // isn't a wcd response, and a DTD/entity payload smuggled inside the data

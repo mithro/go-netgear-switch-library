@@ -244,6 +244,21 @@ func (r *Reader) GetServices(ctx context.Context) ([]model.ServiceStatus, error)
 	return parseServices(httpText, telnetText, sshText), nil
 }
 
+// GetHostname reads the switch's host name from "show hosts", mirroring
+// Python `CliReader.get_hostname` (cli_read.py:143-150). One command:
+// HostsCmd ("show hosts"). No model gating.
+//
+// Deliberately NOT "show running-config": the two report different values
+// on real hardware, and only "show hosts" agrees with SNMP's sysName -- see
+// parseHostname's own doc comment.
+func (r *Reader) GetHostname(ctx context.Context) (string, error) {
+	text, err := r.session.Run(ctx, r.spec.HostsCmd)
+	if err != nil {
+		return "", err
+	}
+	return parseHostname(text)
+}
+
 // Identify detects a switch's model from "show version" output, mirroring
 // Python `CliReader.identify` (dossier §3.10, cli_read.py:106-107). Unlike
 // every other op, this passes the GLOBAL model registry (model.Models()),

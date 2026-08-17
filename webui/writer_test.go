@@ -650,6 +650,35 @@ func TestSetFlowControlIsUnsupportedOnGs305ep(t *testing.T) {
 	wantUnsupported(t, err, "SetFlowControl")
 }
 
+// TestSetHostnameIsUnsupportedOnGs305ep proves the STANDARD dialect refuses
+// SetHostname by name -- its identity page carries no host-name field to
+// write, and this is neither the GS110EMX form nor the GoAhead XML API.
+func TestSetHostnameIsUnsupportedOnGs305ep(t *testing.T) {
+	sess := newWriterFakeSession(true)
+	w := mustNewWriter(t, sess, "gs305ep")
+	err := w.SetHostname(context.Background(), "renamed", false)
+	wantUnsupported(t, err, "SetHostname")
+	if len(sess.posts) != 0 {
+		t.Errorf("posts = %d, want 0 -- refused before any session I/O", len(sess.posts))
+	}
+}
+
+// TestSetHostnameIsUnsupportedOnGs105pe proves GS105PE -- which CAN read
+// its host name over HTTP (switch_info.cgi's own switch_name field) -- is
+// still refused for the WRITE side: Python's set_hostname wires only
+// GS110EMX (the read-modify-write form) and the GoAhead XML API; GS105PE's
+// own write mechanism for this field is unbuilt, so it is refused by name
+// exactly like gs305ep rather than silently no-oping.
+func TestSetHostnameIsUnsupportedOnGs105pe(t *testing.T) {
+	sess := newWriterFakeSession(true)
+	w := mustNewWriter(t, sess, "gs105pe")
+	err := w.SetHostname(context.Background(), "renamed", false)
+	wantUnsupported(t, err, "SetHostname")
+	if len(sess.posts) != 0 {
+		t.Errorf("posts = %d, want 0 -- refused before any session I/O", len(sess.posts))
+	}
+}
+
 func mapsEqual(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false

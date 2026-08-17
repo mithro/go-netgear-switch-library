@@ -1099,7 +1099,15 @@ func (s *State) ApplyWrite(oid string, value any) {
 		return
 	}
 
-	// 9. Vendor mgmt-IP/dhcp-mode writes -- only for a model with a vendor
+	// 9. sysName: the switch's host name, GROUNDED writable on every SNMP
+	// model (see snmp.SysName's own doc comment) -- no existence check, no
+	// vendor-subtree gate, unlike the mgmt-IP writes just below.
+	if oid == snmp.SysName {
+		s.Hostname = asString(value)
+		return
+	}
+
+	// 10. Vendor mgmt-IP/dhcp-mode writes -- only for a model with a vendor
 	// subtree; a no-vendor model (gs728tpp) never advertises or accepts
 	// these.
 	if v != nil {
@@ -1125,7 +1133,7 @@ func (s *State) ApplyWrite(oid string, value any) {
 		}
 	}
 
-	// 10. Unhandled writable OID: deliberate no-op (verify-after-write
+	// 11. Unhandled writable OID: deliberate no-op (verify-after-write
 	// catches it).
 }
 
@@ -1164,6 +1172,10 @@ func (s *State) IsWritableOID(oid string) bool {
 		return true
 	}
 	if _, ok := columnTail(snmp.Dot1qVlanStaticName, oid); ok {
+		return true
+	}
+	// sysName: GROUNDED writable on every SNMP model, no vendor-subtree gate.
+	if oid == snmp.SysName {
 		return true
 	}
 	// The vendor-subtree mgmt-IP/dhcp-mode write OIDs exist only for a
@@ -1502,6 +1514,14 @@ func (s *State) ApplyNsdpWrite(tag nsdp.Tag, value []byte) {
 		if addr, err := nsdp.ParseIPv4(value); err == nil {
 			s.Mgmt.Gateway = addr
 		}
+	case nsdp.TagHostname:
+		// Bare ASCII name, no length prefix and no port byte -- the SAME
+		// shape the read side decodes (NsdpTlvs above), mirroring
+		// nsdp.HostnameTLV's write encoding (write_tlv.go). An empty value
+		// is accepted as a genuine "" hostname rather than a no-op: nsdp.
+		// Writer.SetHostname itself refuses to send one, but a raw TLV from
+		// any other caller should still round-trip honestly.
+		s.Hostname = string(value)
 	case nsdp.TagDHCPMode:
 		if len(value) == 0 {
 			return

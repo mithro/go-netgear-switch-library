@@ -2,10 +2,11 @@ package nsdp
 
 // write_tlv.go: standalone value-TLV builders for the write TLVs the
 // 1841111->7ebfe5d re-pin added, ported from pin protocols/nsdp/write.py's
-// vlan_destroy_tlv / port_name_tlv (both pure, no I/O). They mirror the pin's
-// own standalone-function structure. VLANDestroyTLV is wired into
-// Writer.DeleteVlan (writer.go); PortNameTLV has no writer method yet (the
-// pin exposes no per-port-name write on NsdpWriter either).
+// vlan_destroy_tlv / port_name_tlv / hostname_tlv (all pure, no I/O). They
+// mirror the pin's own standalone-function structure. VLANDestroyTLV is
+// wired into Writer.DeleteVlan and HostnameTLV into Writer.SetHostname
+// (writer.go); PortNameTLV has no writer method yet (the pin exposes no
+// per-port-name write on NsdpWriter either).
 
 import "encoding/binary"
 
@@ -24,4 +25,12 @@ func VLANDestroyTLV(vlan int) TLVEntry {
 // Ported from pin write.py port_name_tlv; un-exercised on hardware.
 func PortNameTLV(port int, name string) TLVEntry {
 	return TLVEntry{Tag: TagPortName, Value: append([]byte{byte(port)}, name...)} //nolint:gosec // port is a 1-based port number, always well under 256
+}
+
+// HostnameTLV builds the host-name write TLV (tag 0x0003), the SAME shape
+// the read side decodes: the bare name, ASCII, no length prefix and no port
+// byte (unlike PortNameTLV above, whose tag is indexed by port). Ported
+// from pin write.py hostname_tlv.
+func HostnameTLV(name string) TLVEntry {
+	return TLVEntry{Tag: TagHostname, Value: []byte(name)}
 }

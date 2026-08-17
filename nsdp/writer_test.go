@@ -32,9 +32,10 @@ type fakeNsdpWriteClient struct {
 	// as a key get a PORT_STATUS + PORT_NAME TLV pair in Read's response --
 	// empty (the default, every EXISTING test in this file) means GetPorts
 	// sees no ports at all, which is fine since none of those tests call it.
-	ports  map[int]*string
-	writes [][]nsdp.Tag
-	apply  bool
+	ports    map[int]*string
+	hostname string
+	writes   [][]nsdp.Tag
+	apply    bool
 }
 
 type vlanSets struct {
@@ -55,6 +56,7 @@ func newFakeNsdpWriteClient(apply bool) *fakeNsdpWriteClient {
 	c.mgmt.mask = "255.255.255.0"
 	c.mgmt.gw = "10.1.5.1"
 	c.mgmt.dhcp = false
+	c.hostname = "plus-sw"
 	return c
 }
 
@@ -82,6 +84,9 @@ func (c *fakeNsdpWriteClient) Read(_ context.Context, _ []nsdp.Tag) (*nsdp.Packe
 		dhcpByte = 0x01
 	}
 	pkt.AddTLV(nsdp.TagDHCPMode, []byte{dhcpByte})
+	if c.hostname != "" {
+		pkt.AddTLV(nsdp.TagHostname, []byte(c.hostname))
+	}
 	for port, desc := range c.ports {
 		pkt.AddTLV(nsdp.TagPortStatus, []byte{byte(port), 0x05, 0x01}) // gigabit, arbitrary
 		value := []byte{byte(port)}
@@ -128,6 +133,8 @@ func (c *fakeNsdpWriteClient) applyTLV(t nsdp.TLVEntry) {
 		c.mgmt.mask = formatDottedQuad(t.Value)
 	case nsdp.TagGateway:
 		c.mgmt.gw = formatDottedQuad(t.Value)
+	case nsdp.TagHostname:
+		c.hostname = string(t.Value)
 	case nsdp.TagPortName:
 		if len(t.Value) == 0 {
 			return
@@ -345,6 +352,71 @@ func TestWriter_SetMgmtIPRequiresForceAndVerifiesAllThree(t *testing.T) {
 	}
 	if client.mgmt.gw != "10.9.9.1" {
 		t.Errorf("mgmt.gw = %q, want 10.9.9.1", client.mgmt.gw)
+	}
+}
+
+// --- SetHostname (0x0003 HOSTNAME) ---
+
+func TestWriter_SetHostnameWritesAndVerifies(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	w := newTestWriter(t, client)
+	if err := w.SetHostname(context.Background(), "new-name", false); err != nil {
+		t.Fatalf("SetHostname: %v", err)
+	}
+	if client.hostname != "new-name" {
+		t.Errorf("hostname = %q, want %q", client.hostname, "new-name")
+	}
+	if !wroteTags(client.writes, nsdp.TagHostname) {
+		t.Errorf("writes = %+v, want a HOSTNAME (0x0003) write", client.writes)
+	}
+}
+
+// TestWriter_SetHostnameNotForceGated proves force=false succeeds --
+// renaming cannot strand a switch, unlike SetMgmtIP just above.
+func TestWriter_SetHostnameNotForceGated(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	w := newTestWriter(t, client)
+	if err := w.SetHostname(context.Background(), "renamed", false); err != nil {
+		t.Fatalf("SetHostname(force=false) = %v, want success (not force-gated)", err)
+	}
+}
+
+// TestWriter_SetHostnameRejectsEmptyName mirrors Python's bare
+// `raise ValueError("hostname must not be empty")` -- a plain, non-sentinel
+// error, issuing ZERO writes.
+func TestWriter_SetHostnameRejectsEmptyName(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	w := newTestWriter(t, client)
+	err := w.SetHostname(context.Background(), "", false)
+	if err == nil {
+		t.Fatal("SetHostname(\"\") = nil, want an error")
+	}
+	if errors.Is(err, model.ErrUnsupportedCapability) || errors.Is(err, model.ErrProtectedPort) || errors.Is(err, model.ErrNSDP) {
+		t.Errorf("SetHostname(\"\") error = %v, want a PLAIN error (mirroring Python's bare ValueError), not wrapping a sentinel", err)
+	}
+	if len(client.writes) != 0 {
+		t.Errorf("SetHostname(\"\") issued %d writes, want 0", len(client.writes))
+	}
+}
+
+func TestWriter_SetHostnameRejectsWhitespaceOnlyName(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	w := newTestWriter(t, client)
+	if err := w.SetHostname(context.Background(), "   ", false); err == nil {
+		t.Fatal("SetHostname(\"   \") = nil, want an error")
+	}
+}
+
+func TestWriter_SetHostnameVerificationFailureRaises(t *testing.T) {
+	client := newFakeNsdpWriteClient(false) // device ignores the write
+	w := newTestWriter(t, client)
+	err := w.SetHostname(context.Background(), "new-name", false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("SetHostname error = %v, want *model.WriteVerificationError", err)
+	}
+	if verr.Before != "plus-sw" || verr.After != "plus-sw" {
+		t.Errorf("verification error before/after = %v/%v, want plus-sw/plus-sw", verr.Before, verr.After)
 	}
 }
 

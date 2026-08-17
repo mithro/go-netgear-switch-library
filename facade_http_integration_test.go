@@ -272,6 +272,60 @@ func TestFacadeHTTPIntegration_GS110EMXReadsNonVacuousAndSetPortEnabledRoundTrip
 	}
 }
 
+// TestFacadeHTTPIntegration_GS110EMXSetHostnamePreservesNetworkConfig is the
+// FULL-STACK proof of the dangerous GS110EMX read-modify-write, driven
+// through the public Switch facade (New -> Write dispatch ->
+// backend_http.go -> webui.Writer.setGS110EMXHostname) against a real
+// virtual.VirtualSwitch over real TCP loopback: renaming the switch must
+// leave sw.GetMgmtIP() -- DHCP mode, address, netmask, gateway -- byte-
+// identical, exactly mirroring the live 2026-08-05 hardware verification
+// cited in webui.Writer.setGS110EMXHostname's own doc comment. This is the
+// same property virtual/httpface_test.go's
+// TestHTTPFaceGS110EMXWriterSetHostnamePreservesNetworkConfig proves one
+// layer down; this test proves the facade adds no vacuous indirection on
+// top of it.
+func TestFacadeHTTPIntegration_GS110EMXSetHostnamePreservesNetworkConfig(t *testing.T) {
+	vsw := startVirtualSwitch(t, "gs110emx")
+	sw := httpFacadeFor(t, vsw, "gs110emx")
+
+	ctx, cancel := context.WithTimeout(context.Background(), facadeTestTimeout)
+	defer cancel()
+
+	before, err := sw.GetMgmtIP(ctx, overHTTP())
+	if err != nil {
+		t.Fatalf("GetMgmtIP() (before) error = %v", err)
+	}
+
+	if err := sw.SetHostname(ctx, "renamed-gs110emx", httpWrite(false)); err != nil {
+		t.Fatalf("SetHostname(backend=HTTP) error = %v", err)
+	}
+
+	got, err := sw.GetHostname(ctx, overHTTP())
+	if err != nil {
+		t.Fatalf("GetHostname() error = %v", err)
+	}
+	if got != "renamed-gs110emx" {
+		t.Errorf("GetHostname() = %q, want %q", got, "renamed-gs110emx")
+	}
+
+	after, err := sw.GetMgmtIP(ctx, overHTTP())
+	if err != nil {
+		t.Fatalf("GetMgmtIP() (after) error = %v", err)
+	}
+	if after.Mode != before.Mode {
+		t.Errorf("GetMgmtIP().Mode changed: got %v, want unchanged %v", after.Mode, before.Mode)
+	}
+	if derefStr(after.Address) != derefStr(before.Address) {
+		t.Errorf("GetMgmtIP().Address changed: got %s, want unchanged %s", derefStr(after.Address), derefStr(before.Address))
+	}
+	if derefStr(after.Netmask) != derefStr(before.Netmask) {
+		t.Errorf("GetMgmtIP().Netmask changed: got %s, want unchanged %s", derefStr(after.Netmask), derefStr(before.Netmask))
+	}
+	if derefStr(after.Gateway) != derefStr(before.Gateway) {
+		t.Errorf("GetMgmtIP().Gateway changed: got %s, want unchanged %s", derefStr(after.Gateway), derefStr(before.Gateway))
+	}
+}
+
 // TestFacadeHTTPIntegration_GS110EMXUnsupportedHTTPOpsRaise proves the ops
 // gs110emx's HTTPModelSpec genuinely has no page for (no PoE hardware at
 // all, no MAC/FDB/LLDP page) raise ErrUnsupportedCapability over HTTP.

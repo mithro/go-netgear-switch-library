@@ -238,3 +238,18 @@ func TestGS728TPPGetMgmtIP(t *testing.T) {
 		t.Errorf("BaseMac = %v, want \"B0:39:56:77:54:29\" (merged from the SystemInfo page)", mgmt.BaseMac)
 	}
 }
+
+// TestGS728TPPGetHostname exercises reader.go's GetHostname GoAhead branch:
+// DeviceBasicInfo/deviceName, a DIFFERENT page shape from GS110EMX/GS105PE's
+// HTTPSysInfo form scrape (the GoAhead identity data is XML). Mirrors
+// parse_goahead_test.go's own ParseGoAheadHostname pin through the Reader.
+func TestGS728TPPGetHostname(t *testing.T) {
+	r := mustNewReader(t, newFakeSession(gs728tppPages(t)), "gs728tpp")
+	got, err := r.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname() error = %v", err)
+	}
+	if got != "sw-netgear-gs728tpp" {
+		t.Errorf("GetHostname() = %q, want %q", got, "sw-netgear-gs728tpp")
+	}
+}

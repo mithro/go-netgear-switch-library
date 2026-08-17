@@ -21,7 +21,9 @@ package fastpath
 // tests/protocols/cli/test_cli_parse.py assertions, which agree exactly.
 
 import (
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mithro/go-netgear-switch-library/model"
@@ -500,6 +502,65 @@ func TestParseMgmtIP(t *testing.T) {
 				t.Errorf("parseMgmtIP(%s) = %+v, want %+v", tc.fixture, got, tc.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------
+// parseHostname ("show hosts")
+//
+// No captured device-transcript FIXTURE FILE exists for "show hosts" at
+// this pin (mirroring GetUsers/GetServices's own "no fixture" note
+// elsewhere in this package) -- hostsFixture below transcribes the SAME
+// text the pinned Python virtual mock's render_hosts docstring records as
+// captured 2026-08-02 from m4300-24x (10.1.5.13), m4300-16x (10.1.5.20) and
+// gsm7252ps (10.1.5.22), all three labelling the name exactly "Host name".
+// ---------------------------------------------------------------------
+
+// hostsFixture builds a "show hosts" page carrying name as its "Host name"
+// field, transcribed field-for-field from the real captured shape (see this
+// section's own doc comment) -- the resolver/domain/static-mapping
+// boilerplate around it is included because parseHostname has to pick one
+// field out of them, exactly as it must against a real device.
+func hostsFixture(name string) string {
+	return "Host name...................................... " + name + "\n" +
+		"Default domain................................. Domain name is not configured\n" +
+		"Default domain list............................. Domain Name List is not configured\n" +
+		"Domain Name Lookup.............................. Enabled\n" +
+		"Number of retries................................ 2\n" +
+		"Retry timeout period............................. 3\n" +
+		"Name servers (Preference order)................. 10.1.5.1\n" +
+		"\n" +
+		"Configured host name-to-address mapping:\n" +
+		"\n" +
+		" Host                                Addresses\n" +
+		"------------------------ ----------------------\n" +
+		"No host name is configured to IP address\n"
+}
+
+func TestParseHostname(t *testing.T) {
+	got, err := parseHostname(hostsFixture("sw-netgear-m4300-24x"))
+	if err != nil {
+		t.Fatalf("parseHostname: %v", err)
+	}
+	if got != "sw-netgear-m4300-24x" {
+		t.Errorf("parseHostname = %q, want %q", got, "sw-netgear-m4300-24x")
+	}
+}
+
+// TestParseHostnameAbsentFieldRaises mirrors Python's
+// test_parse_hostname_raises_when_the_field_is_absent: an absent "Host
+// name" is a failure to report (the command failed, or the output drifted),
+// not an empty name to fabricate.
+func TestParseHostnameAbsentFieldRaises(t *testing.T) {
+	_, err := parseHostname("Default domain....... not configured\n")
+	if err == nil {
+		t.Fatal("parseHostname on a field-less page = nil error, want one wrapping ErrCliCommandRejected")
+	}
+	if !errors.Is(err, ErrCliCommandRejected) {
+		t.Errorf("parseHostname error = %v, want wrapping ErrCliCommandRejected", err)
+	}
+	if !strings.Contains(err.Error(), "Host name") {
+		t.Errorf("parseHostname error = %q, want it to mention 'Host name'", err.Error())
 	}
 }
 

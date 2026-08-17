@@ -119,6 +119,52 @@ func TestNsdpFaceWriterSetPortDescriptionRoundTrips(t *testing.T) {
 	}
 }
 
+// TestNsdpFaceWriterSetHostnameRoundTrips drives a REAL nsdp.Writer.
+// SetHostname against the REAL GS110EMX NSDP fake over UDP loopback,
+// proving the fake's ApplyNsdpWrite TagHostname (0x0003) handling round-
+// trips end to end: the Plus family's ONLY write route for renaming a
+// switch (no SNMP agent, no CLI).
+func TestNsdpFaceWriterSetHostnameRoundTrips(t *testing.T) {
+	st := SeedGS110EMX()
+	port, _ := startNsdpFace(t, st)
+	client := nsdpTestClient(t, port)
+	m, err := model.GetModel("gs110emx")
+	if err != nil {
+		t.Fatalf("model.GetModel(gs110emx): %v", err)
+	}
+	writer, err := nsdp.NewWriter(client, m, st.NsdpPassword)
+	if err != nil {
+		t.Fatalf("nsdp.NewWriter: %v", err)
+	}
+	reader, err := nsdp.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("nsdp.NewReader: %v", err)
+	}
+	ctx := context.Background()
+
+	original, err := reader.GetHostname(ctx)
+	if err != nil {
+		t.Fatalf("GetHostname (before): %v", err)
+	}
+	if original == "" {
+		t.Fatal("test fixture assumption broken: seed must carry a non-empty hostname")
+	}
+
+	if err := writer.SetHostname(ctx, "ngsw-test-name", false); err != nil {
+		t.Fatalf("SetHostname: %v", err)
+	}
+	if got, err := reader.GetHostname(ctx); err != nil || got != "ngsw-test-name" {
+		t.Errorf("GetHostname after rename = (%q, %v), want (\"ngsw-test-name\", nil)", got, err)
+	}
+
+	if err := writer.SetHostname(ctx, original, false); err != nil {
+		t.Fatalf("SetHostname (restore): %v", err)
+	}
+	if got, err := reader.GetHostname(ctx); err != nil || got != original {
+		t.Errorf("GetHostname after restore = (%q, %v), want (%q, nil)", got, err, original)
+	}
+}
+
 // -- Read/write intent (test_virtual_nsdp_face.py) --------------------------
 
 func TestNsdpFaceReadReturnsSeedPorts(t *testing.T) {

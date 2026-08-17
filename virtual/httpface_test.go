@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mithro/go-netgear-switch-library/model"
+	"github.com/mithro/go-netgear-switch-library/snmp"
 	"github.com/mithro/go-netgear-switch-library/webui"
 )
 
@@ -791,6 +792,78 @@ func TestHTTPFaceGS110EMXGetMgmtIP(t *testing.T) {
 	}
 }
 
+// TestHTTPFaceGS110EMXGetHostname drives webui.Reader.GetHostname against
+// the real virtual HTTP server, proving RenderGS110EMXSysinfo projects
+// state.Hostname through the sysInfo.html switch_name field.
+func TestHTTPFaceGS110EMXGetHostname(t *testing.T) {
+	st := SeedGS110EMX()
+	reader, _ := gs110emxTestReader(t, st)
+	got, err := reader.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname() error = %v", err)
+	}
+	if got != st.Hostname {
+		t.Errorf("GetHostname() = %q, want %q", got, st.Hostname)
+	}
+}
+
+// TestHTTPFaceGS110EMXWriterSetHostnamePreservesNetworkConfig is THE
+// end-to-end proof of the dangerous read-modify-write, driven against the
+// REAL virtual HTTP server (not a hand-built fake session): renaming the
+// switch over HTTP must leave state.Mgmt (DHCP mode/address/netmask/
+// gateway) byte-identical, mirroring the live 2026-08-05 hardware
+// verification cited in webui.Writer.setGS110EMXHostname's own doc comment.
+// A regression that stopped echoing the addressing fields would show up
+// here as state.Mgmt actually changing underneath the SAME *State the SNMP/
+// NSDP/CLI faces would also read from -- not merely as a mismatch against a
+// hand-built fake's own bookkeeping.
+func TestHTTPFaceGS110EMXWriterSetHostnamePreservesNetworkConfig(t *testing.T) {
+	st := SeedGS110EMX()
+	m, err := model.GetModel("gs110emx")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	beforeMode, beforeAddr, beforeMask, beforeGw := st.Mgmt.Mode, st.Mgmt.Address, st.Mgmt.Netmask, st.Mgmt.Gateway
+
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	if err := writer.SetHostname(context.Background(), "renamed-gs110emx", false); err != nil {
+		t.Fatalf("SetHostname() error = %v", err)
+	}
+
+	if st.Hostname != "renamed-gs110emx" {
+		t.Errorf("state.Hostname = %q, want %q", st.Hostname, "renamed-gs110emx")
+	}
+	if st.Mgmt.Mode != beforeMode {
+		t.Errorf("state.Mgmt.Mode changed: got %q, want unchanged %q", st.Mgmt.Mode, beforeMode)
+	}
+	if st.Mgmt.Address != beforeAddr {
+		t.Errorf("state.Mgmt.Address changed: got %q, want unchanged %q", st.Mgmt.Address, beforeAddr)
+	}
+	if st.Mgmt.Netmask != beforeMask {
+		t.Errorf("state.Mgmt.Netmask changed: got %q, want unchanged %q", st.Mgmt.Netmask, beforeMask)
+	}
+	if st.Mgmt.Gateway != beforeGw {
+		t.Errorf("state.Mgmt.Gateway changed: got %q, want unchanged %q", st.Mgmt.Gateway, beforeGw)
+	}
+
+	// Confirm the rename is ALSO visible through the SNMP oid_map()
+	// projection of the SAME State -- an HTTP write must not create a
+	// face-private copy of the hostname.
+	sysName, ok := st.OIDMap()[snmp.SysName]
+	if !ok || sysName.Value != "renamed-gs110emx" {
+		t.Errorf("oid_map[sysName] = %+v, ok=%v, want value %q (SNMP must see the HTTP write)", sysName, ok, "renamed-gs110emx")
+	}
+}
+
 // TestHTTPFaceGS110EMXWriterSetPortEnabled drives webui.Writer.SetPortEnabled
 // end-to-end against the GS110EMX's OWN port-admin mechanism (Physical Mode
 // on port_settings.html, not the FASTPATH XUI grid) -- the one write op
@@ -989,6 +1062,78 @@ func TestHTTPFaceGS728TPPWriterSetPortDescriptionRoundTrips(t *testing.T) {
 	}
 }
 
+// TestHTTPFaceGS728TPPGetHostname drives webui.Reader.GetHostname against
+// the real virtual HTTP server, proving RenderGS728TPPDeviceInfoAndSensors
+// projects state.Hostname through the GoAhead DeviceBasicInfo/deviceName
+// section.
+func TestHTTPFaceGS728TPPGetHostname(t *testing.T) {
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	got, err := reader.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname() error = %v", err)
+	}
+	if got != st.Hostname {
+		t.Errorf("GetHostname() = %q, want %q", got, st.Hostname)
+	}
+}
+
+// TestHTTPFaceGS728TPPWriterSetHostnameRoundTrips drives
+// webui.Writer.SetHostname's GoAhead DeviceBasicInfo/deviceName path
+// end-to-end against the real virtual HTTP server, then confirms the
+// rename is ALSO visible through SNMP's sysName projection of the SAME
+// State -- an HTTP write must not create a face-private copy of the
+// hostname.
+func TestHTTPFaceGS728TPPWriterSetHostnameRoundTrips(t *testing.T) {
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+
+	if err := writer.SetHostname(context.Background(), "renamed-gs728tpp", false); err != nil {
+		t.Fatalf("SetHostname() error = %v", err)
+	}
+	got, err := reader.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname() error = %v", err)
+	}
+	if got != "renamed-gs728tpp" {
+		t.Errorf("GetHostname() after SetHostname = %q, want %q", got, "renamed-gs728tpp")
+	}
+	sysName, ok := st.OIDMap()[snmp.SysName]
+	if !ok || sysName.Value != "renamed-gs728tpp" {
+		t.Errorf("oid_map[sysName] = %+v, ok=%v, want value %q (SNMP must see the HTTP write)", sysName, ok, "renamed-gs728tpp")
+	}
+}
+
 // TestHTTPFaceGS728TPPWriterSetPortSpeedRoundTrips is SetPortDescription's
 // sibling for SetPortSpeed: forcing 100M half-duplex, then returning to
 // auto, both observed through the writer's own verify-after-write and a
@@ -1171,6 +1316,23 @@ func gs105peTestReader(t *testing.T, st *State) *webui.Reader {
 		t.Fatalf("webui.NewReader: %v", err)
 	}
 	return reader
+}
+
+// TestHTTPFaceGS105PEGetHostname drives webui.Reader.GetHostname against
+// the real virtual HTTP server, proving switch_info.cgi projects
+// state.Hostname through its switch_name field -- the same "poe-micro3"
+// value the SNMP/NSDP/CLI backends never see (gs105pe has no SNMP/CLI
+// backend at all) but NSDP's HOSTNAME tag does.
+func TestHTTPFaceGS105PEGetHostname(t *testing.T) {
+	st := SeedGS105PE()
+	reader := gs105peTestReader(t, st)
+	got, err := reader.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname() error = %v", err)
+	}
+	if got != st.Hostname {
+		t.Errorf("GetHostname() = %q, want %q", got, st.Hostname)
+	}
 }
 
 func TestHTTPFaceGS105PEReadPortsMatchesSeed(t *testing.T) {

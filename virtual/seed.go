@@ -736,6 +736,12 @@ func SeedM4300_24X() *State {
 
 	s.Dot1dBaseMacASCII = true
 
+	// MEASURED via sysName/show hosts on the real 10.1.5.13, 2026-08-02 --
+	// see snmp.SysName's own doc comment for why this is NOT the same value
+	// as `show running-config`'s "manage-sw-netgear-..." prefix. Ported
+	// field-for-field from Python's seed_m4300_24x (seed.py:2479).
+	s.Hostname = "sw-netgear-m4300-24x"
+
 	s.SysDescr = "NETGEAR M4300-24X (XSM4324CS) Managed Switch"
 
 	s.SysObjectID = "1.3.6.1.4.1.4526.10.100.24"
@@ -886,6 +892,13 @@ func SeedM4300_16X() *State {
 	s.Mgmt = mgmt
 
 	s.NsdpMac = [6]byte{0x8c, 0x3b, 0xad, 0x69, 0x1c, 0x38}
+
+	// MEASURED via sysName/show hosts on the real 10.1.5.20, 2026-08-02 --
+	// see snmp.SysName's own doc comment: `show running-config` on this SKU
+	// carries the DIFFERENT value "manage-sw-netgear-m4300-16x-poe-s2",
+	// which is deliberately NOT what this library reads. Ported
+	// field-for-field from Python's seed_m4300_16x (seed.py:2679).
+	s.Hostname = "sw-netgear-m4300-16x-poe-s2"
 
 	s.SysDescr = "NETGEAR M4300-16X (XSM4316) Managed Switch"
 

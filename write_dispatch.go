@@ -34,6 +34,12 @@ import (
 // ClearPoEFault take a snmp.PoeCycleTimeouts (re-exported from this package
 // as PoeCycleTimeouts, see alias.go) since the poll deadlines are a per-call,
 // not per-Switch, concern.
+//
+// SetHostname is NOT force-gated by any backend (force is accepted so every
+// writer's signature stays uniform, but never checked): renaming a switch
+// cannot strand it the way a mgmt-IP write can, and it is trivially
+// reversible by writing the old name back, mirroring Python's
+// SnmpWriter/NsdpWriter/CliWriter/HttpWriter.set_hostname exactly.
 type BackendWriter interface {
 	SetPoE(ctx context.Context, port int, on bool, force bool) error
 	SetPortEnabled(ctx context.Context, port int, enabled bool, force bool) error
@@ -47,6 +53,7 @@ type BackendWriter interface {
 	SetMgmtIP(ctx context.Context, address, netmask, gateway string, force bool) error
 	CyclePoE(ctx context.Context, port int, timeouts snmp.PoeCycleTimeouts, force bool) error
 	ClearPoEFault(ctx context.Context, port int, timeouts snmp.PoeCycleTimeouts, force bool) error
+	SetHostname(ctx context.Context, name string, force bool) error
 }
 
 // WriteBackendBuilder constructs the BackendWriter for one backend, given

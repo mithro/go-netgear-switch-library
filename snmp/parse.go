@@ -1633,6 +1633,25 @@ func ParseSystemInfo(rows []Row) (sysDescr, sysObjectID *string, err error) {
 	return sysDescr, sysObjectID, nil
 }
 
+// ParseHostname extracts sysName from one exact-OID GET, mirroring Python
+// parse.parse_hostname.
+//
+// Raises rather than returning a placeholder when the scalar is absent:
+// sysName is a mandatory MIB-II scalar, so an absent one is a real failure
+// to report (an agent or transport failure), not an empty hostname to
+// invent. An empty STRING is a different thing and is passed through: a
+// switch with no name configured genuinely has one.
+func ParseHostname(rows []Row) (string, error) {
+	value, err := scalarText(rows, SysName)
+	if err != nil {
+		return "", err
+	}
+	if value == nil {
+		return "", errOID(SysName, "switch did not answer sysName; it is a mandatory MIB-II scalar, so this is an agent or transport failure rather than an absent hostname")
+	}
+	return *value, nil
+}
+
 // modelMatchTokens returns the name tokens to search for in a sysDescr
 // string.
 //

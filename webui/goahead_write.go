@@ -123,6 +123,24 @@ func portConfigBody(portName string, portID int, description string) string {
 	return goaheadWriteBody("Standard802_3List", "set", entry)
 }
 
+// deviceBasicInfoBody builds the DeviceBasicInfo body that sets the switch's
+// host name, mirroring Python http_write.set_hostname's inline
+// goahead.write_body("DeviceBasicInfo", "set", [{"deviceName": name}]) call.
+//
+// Unlike portConfigBody/portSpeedBody's Standard802_3List (a repeated-list
+// section whose one child is keyed "Entry", wrapping its fields --
+// goaheadEntry), DeviceBasicInfo is a SCALAR section: write_body's children
+// list here is `[{"deviceName": name}]`, so _render emits the field
+// DIRECTLY as a child of <DeviceBasicInfo>, with NO <Entry> wrapper at all.
+// Getting that wrong would post a shape this object does not expect. The
+// page's own JS rejects '&' in this field client-side; the value is
+// XML-escaped here, and the switch's own verdict is what checkGoAheadStatus
+// reports.
+func deviceBasicInfoBody(name string) string {
+	entry := "<deviceName>" + goaheadEscaper.Replace(name) + "</deviceName>"
+	return goaheadWriteBody("DeviceBasicInfo", "set", entry)
+}
+
 // Duplex-admin/autoneg-admin wire codes, mirroring Python goahead.py's
 // module constants DUPLEX_ADMIN_FULL/DUPLEX_ADMIN_HALF/AUTONEG_ON/
 // AUTONEG_OFF. duplexAdminFull/duplexAdminHalf are DELIBERATELY NOT the

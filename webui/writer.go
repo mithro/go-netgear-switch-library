@@ -1229,6 +1229,176 @@ func (w *Writer) SetFlowControl(_ context.Context, _ int, _ bool, _ bool) error 
 	return fmt.Errorf("model %q: this web UI's ports page reports flow control but carries no control to change it: %w", w.model.Key, model.ErrUnsupportedCapability)
 }
 
+// emxNameMax is the GS110EMX sysInfo name box's maxlength="20"; its own
+// checkValidName() additionally rejects anything outside printable ASCII.
+// Both read off the live page (10.1.5.27, 2026-08-05), mirroring Python
+// http_write._EMX_NAME_MAX.
+const emxNameMax = 20
+
+// isASCIIPrintable reports whether every byte of s is printable ASCII
+// (0x20-0x7E inclusive), mirroring Python's `name.isascii() and
+// name.isprintable()` combination for an ASCII-only string: for ASCII text,
+// Python's isprintable() is false for exactly the control characters
+// (0x00-0x1F, 0x7F), so the combined check is equivalent to "every
+// character is in 0x20-0x7E" -- precisely the range the GS110EMX page's own
+// checkValidName() builds from `for (var i = 32; i < 127; i++)`. Checking
+// BYTES (not runes) is deliberate and still correct: any multi-byte UTF-8
+// sequence for a non-ASCII rune is made of bytes >= 0x80, so it fails this
+// same byte-range test without needing a separate isascii() pass -- an em
+// dash is rejected exactly as Python's isascii()-then-isprintable() combo
+// rejects it (isprintable() alone is Unicode-aware and would have let it
+// through).
+func isASCIIPrintable(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7E {
+			return false
+		}
+	}
+	return true
+}
+
+// SetHostname sets the host name, where this dialect's identity page
+// carries one, mirroring Python HttpWriter.set_hostname (http_write.py:
+// 1346-1387).
+//
+// Two dialects, and they are nothing alike:
+//
+//   - GoAhead XML API -- DeviceBasicInfo/deviceName IS the host name
+//     (MEASURED: it reads byte-for-byte what SNMP reports through sysName).
+//   - GS110EMX -- an ordinary form POST, but the host name shares that form
+//     with the MANAGEMENT ADDRESS, so it is a read-modify-write. See
+//     setGS110EMXHostname.
+//
+// Every other dialect is refused by name rather than returned empty: an
+// empty answer here would be indistinguishable from a switch that genuinely
+// has none.
+//
+// Not force-gated: renaming cannot strand a switch and is reversible by
+// writing the old name back. force is accepted-but-unused, purely so this
+// method's signature matches every other writer.
+func (w *Writer) SetHostname(ctx context.Context, name string, _ bool) error {
+	if w.spec.HTMLDialect == HTMLDialectGS110EMX {
+		return w.setGS110EMXHostname(ctx, name)
+	}
+	if !isGoAheadDialect(w.spec) {
+		return fmt.Errorf("model %q: this backend does not expose a host-name write: %w", w.model.Key, model.ErrUnsupportedCapability)
+	}
+	path, err := requirePath(w.model.Key, w.spec.SysinfoPath, "the system-information page")
+	if err != nil {
+		return err
+	}
+	beforeHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	before, err := ParseGoAheadHostname(beforeHTML)
+	if err != nil {
+		return err
+	}
+	// DeviceBasicInfo is a SCALAR section, so the body carries the field
+	// directly rather than a repeated <Entry>. The page's own JS rejects
+	// '&' in this field client-side; the value is XML-escaped here, and the
+	// switch's own verdict is what checkGoAheadStatus reports.
+	if err := w.goaheadWrite(ctx, deviceBasicInfoBody(name), fmt.Sprintf("hostname -> %q", name)); err != nil {
+		return err
+	}
+	afterHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	after, err := ParseGoAheadHostname(afterHTML)
+	if err != nil {
+		return err
+	}
+	if after != name {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("hostname did not read back as %q", name),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// setGS110EMXHostname renames a GS110EMX through its sysInfo form, without
+// moving its address, mirroring Python HttpWriter._set_gs110emx_hostname
+// (http_write.py:1388-1472).
+//
+// THE DANGEROUS ONE. That page posts the host name in the SAME form as
+// dhcp_mode/IP_ADDRESS/SUBNET_MASK/GATEWAY_ADDRESS, so a rename is
+// unavoidably a read-modify-write: the current addressing is read from the
+// page and echoed back verbatim, and the write is only considered done once
+// a re-read shows the new name AND every addressing field unchanged.
+// Getting that wrong does not fail the rename, it reconfigures the address
+// the caller is talking to.
+//
+// The envelope is the page's own submitSwitchInfoForm() (read from the live
+// switch's /function.js, 2026-08-05) -- see GS110EMXSwitchInfoForm.
+//
+// LIVE-VERIFIED 2026-08-05 on gs110emx3 (10.1.5.27, firmware 1.0.2.8):
+// renamed to a throwaway, confirmed the addressing was byte-identical,
+// restored the original name and confirmed again.
+func (w *Writer) setGS110EMXHostname(ctx context.Context, name string) error {
+	// The page's own checkValidName() builds its allowed set from
+	// `for (var i = 32; i < 127; i++)` -- so ASCII 32..126, and nothing
+	// else. The input carries maxlength="20". Enforced here so the caller
+	// gets a reason rather than a silently blanked field (that validator
+	// sets the box to "" and pops an alert on failure).
+	if name == "" || len(name) > emxNameMax || !isASCIIPrintable(name) {
+		return fmt.Errorf(
+			"GS110EMX host name %q is not acceptable to this page: it takes 1-%d printable ASCII characters: %w",
+			name, emxNameMax, model.ErrUnsupportedCapability,
+		)
+	}
+	path, err := requirePath(w.model.Key, w.spec.SysinfoPath, "the system-information page")
+	if err != nil {
+		return err
+	}
+	beforeHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	before, err := ParseSysInfo(beforeHTML)
+	if err != nil {
+		return err
+	}
+	dhcpMode := emxDHCPOff
+	if before.IPMode == model.IPModeDHCP {
+		dhcpMode = emxDHCPOn
+	}
+	if _, err := w.session.PostForm(ctx, path, GS110EMXSwitchInfoForm(name, dhcpMode, before.IPAddress, before.SubnetMask, before.GatewayAddress)); err != nil {
+		return err
+	}
+	afterHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	after, err := ParseSysInfo(afterHTML)
+	if err != nil {
+		return err
+	}
+	// The addressing check comes FIRST and is the one that matters: a
+	// rename that moved the management address is a far worse outcome than
+	// a rename that did not happen, and the caller must hear about it even
+	// if the name did change.
+	if after.IPMode != before.IPMode || after.IPAddress != before.IPAddress ||
+		after.SubnetMask != before.SubnetMask || after.GatewayAddress != before.GatewayAddress {
+		return &model.WriteVerificationError{
+			Msg:    "the host-name write CHANGED this switch's management addressing -- it may be unreachable at the old address",
+			Before: [4]string{string(before.IPMode), before.IPAddress, before.SubnetMask, before.GatewayAddress},
+			After:  [4]string{string(after.IPMode), after.IPAddress, after.SubnetMask, after.GatewayAddress},
+		}
+	}
+	if after.SwitchName != name {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("hostname did not read back as %q", name),
+			Before: before.SwitchName,
+			After:  after.SwitchName,
+		}
+	}
+	return nil
+}
+
 // SetMgmtIP sets the switch's static management address through its web
 // UI, mirroring Python HttpWriter.set_mgmt_ip (http_write.py:884-940).
 //

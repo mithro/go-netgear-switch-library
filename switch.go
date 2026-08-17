@@ -774,6 +774,31 @@ func (s *Switch) GetServices(ctx context.Context, opts ...ReadOption) ([]model.S
 	return out, err
 }
 
+// GetHostname reads the switch's host name.
+//
+// Every backend can answer, but from a different place: SNMP reads the
+// standard sysName scalar, NSDP the HOSTNAME tag, the CLI "show hosts", and
+// the web UI the device-identity page -- on the dialects whose page carries
+// the field (GS110EMX, GS105PE, and the GS728TPP's GoAhead
+// DeviceBasicInfo/deviceName section); the rest refuse by name.
+//
+// The CLI deliberately parses "show hosts" rather than "show
+// running-config": the two report different values on real hardware, and
+// only "show hosts" agrees with sysName.
+func (s *Switch) GetHostname(ctx context.Context, opts ...ReadOption) (string, error) {
+	o := resolveReadOptions(opts)
+	var out string
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
+		v, err := r.GetHostname(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
 // GetMgmtIP reads the switch's own management IP configuration.
 func (s *Switch) GetMgmtIP(ctx context.Context, opts ...ReadOption) (model.MgmtIPConfig, error) {
 	o := resolveReadOptions(opts)

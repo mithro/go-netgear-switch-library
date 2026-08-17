@@ -37,6 +37,7 @@ func (f *fakeReader) GetMgmtIP(context.Context) (model.MgmtIPConfig, error) {
 }
 func (f *fakeReader) GetUsers(context.Context) ([]model.SwitchUser, error)       { return nil, nil }
 func (f *fakeReader) GetServices(context.Context) ([]model.ServiceStatus, error) { return nil, nil }
+func (f *fakeReader) GetHostname(context.Context) (string, error)                { return "", nil }
 
 // withRegisteredBackend registers build for backend for the duration of the
 // calling test, restoring whatever (if anything) was registered before via

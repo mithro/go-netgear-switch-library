@@ -753,3 +753,58 @@ func TestReaderFullTablesEndToEnd(t *testing.T) {
 		t.Fatalf("GetMgmtIP = %+v, mismatched expected values", mgmtIP)
 	}
 }
+
+// TestGetHostnameReadsSysNameScalar exercises the standard MIB-II scalar
+// GET, mirroring Python test_snmp_read.py's own hostname test: works on
+// EVERY SNMP model, including one with no vendor OID subtree (gs728tpp).
+func TestGetHostnameReadsSysNameScalar(t *testing.T) {
+	fc := newFakeReaderClient(map[string][]Row{SysName: {NewStrRow(SysName, "sw-netgear-gs728tpp")}})
+	r, err := NewReader(fc, mustModel(t, "gs728tpp"))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := r.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname: %v", err)
+	}
+	if got != "sw-netgear-gs728tpp" {
+		t.Errorf("GetHostname = %q, want %q", got, "sw-netgear-gs728tpp")
+	}
+	if diff := cmp.Diff([][]string{{SysName}}, fc.getCalls); diff != "" {
+		t.Errorf("get calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestGetHostnameEmptyStringIsARealAnswer proves an empty sysName reads
+// through as "" (a switch that has never been named), never mistaken for
+// the absent-scalar failure case below.
+func TestGetHostnameEmptyStringIsARealAnswer(t *testing.T) {
+	fc := newFakeReaderClient(map[string][]Row{SysName: {NewStrRow(SysName, "")}})
+	r, err := NewReader(fc, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := r.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname: %v", err)
+	}
+	if got != "" {
+		t.Errorf("GetHostname = %q, want empty string", got)
+	}
+}
+
+// TestGetHostnameAbsentScalarRaises proves an ENTIRELY MISSING sysName row
+// (not merely an empty string) raises wrapping model.ErrSNMP -- it is a
+// mandatory MIB-II scalar, so silence means an agent/transport failure, not
+// an absent hostname.
+func TestGetHostnameAbsentScalarRaises(t *testing.T) {
+	fc := newFakeReaderClient(nil)
+	r, err := NewReader(fc, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	_, err = r.GetHostname(context.Background())
+	if !errors.Is(err, model.ErrSNMP) {
+		t.Fatalf("GetHostname error = %v, want wrapping model.ErrSNMP", err)
+	}
+}

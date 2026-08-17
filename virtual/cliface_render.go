@@ -185,6 +185,38 @@ func (f *CliFace) renderNetwork() string {
 	}, "\n")
 }
 
+// --- show hosts -------------------------------------------------------------
+
+// renderHosts mirrors Python `render_hosts` (cli_fastpath.py:133-165),
+// transcribed from real output captured 2026-08-02 from m4300-24x
+// (10.1.5.13), m4300-16x (10.1.5.20) and gsm7252ps (10.1.5.22). All three
+// label the name exactly "Host name", and the resolver and static-mapping
+// sections around it are reproduced because the reader has to pick one
+// field out of them -- a mock emitting only the wanted line would not
+// exercise that at all. The trailing static-mapping tables are the empty
+// form all three returned; none had a host-to-address mapping configured.
+func (f *CliFace) renderHosts() string {
+	return strings.Join([]string{
+		cliDotted("Host name", f.state.Hostname),
+		cliDotted("Default domain", "Domain name is not configured"),
+		cliDotted("Default domain list", "Domain Name List is not configured"),
+		cliDotted("Domain Name Lookup", "Enabled"),
+		cliDotted("Number of retries", "2"),
+		cliDotted("Retry timeout period", "3"),
+		cliDotted("Name servers (Preference order)", "10.1.5.1"),
+		"",
+		"Configured host name-to-address mapping:",
+		"",
+		" Host                                Addresses",
+		"------------------------ ----------------------",
+		"No host name is configured to IP address",
+		"",
+		" Host                   Total   Elapsed    Type        Addresses",
+		"---------------------- -------  -------    ----        --------------",
+		"No hostname is mapped to an IP address",
+	}, "\n")
+}
+
 // --- show port all (cli_fastpath.py:133-163) --------------------------------
 
 // renderPorts mirrors Python `render_ports` (cli_fastpath.py:171-204):

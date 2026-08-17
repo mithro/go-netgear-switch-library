@@ -531,6 +531,149 @@ func TestCliFaceWriteVisibleOverSNMPOidMap(t *testing.T) {
 	}
 }
 
+// --- Host name: CLI/SNMP agreement + round trip, mirroring Python's
+// tests/virtual/test_hostname.py exactly. The behaviour worth protecting
+// here is not that a setter sets -- it is that the CLI and SNMP backends
+// report the SAME host name for the same switch, which on real hardware
+// depends entirely on the CLI reader parsing "show hosts" rather than
+// "show running-config" (see snmp.SysName's own doc comment for the
+// measured m4300-16x/gsm7252ps counter-examples this guards against). ---
+
+// hostnameCLIModels/hostnameSNMPModels mirror Python's CLI_MODELS/
+// SNMP_MODELS module constants in test_hostname.py exactly: every CLI
+// model also has SNMP, plus gs728tpp (SNMP + GoAhead HTTP, no CLI at all).
+var (
+	hostnameCLIModels  = []string{"m4300-24x", "m4300-16x", "gsm7252ps", "gsm7228ps"}
+	hostnameSNMPModels = []string{"m4300-24x", "m4300-16x", "gsm7252ps", "gsm7228ps", "gs728tpp"}
+)
+
+// seedByKey mirrors Python test_hostname.py's own `_seed` helper: model key
+// -> that model's Seed* constructor.
+func seedByKey(t *testing.T, key string) *State {
+	t.Helper()
+	switch key {
+	case "gsm7252ps":
+		return SeedGSM7252PS()
+	case "gsm7228ps":
+		return SeedGSM7228PS()
+	case "m4300-24x":
+		return SeedM4300_24X()
+	case "m4300-16x":
+		return SeedM4300_16X()
+	case "gs728tpp":
+		return SeedGS728TPP()
+	default:
+		t.Fatalf("seedByKey: no seed constructor registered for %q", key)
+		return nil
+	}
+}
+
+// TestHostnameSNMPProjectsSysNameForEverySNMPModel mirrors Python's
+// test_snmp_projects_sysname: every SNMP model answers sysName, as all five
+// real switches do -- including gs728tpp, which publishes no Netgear
+// vendor subtree at all (sysName is standard MIB-II, exactly why it is the
+// hostname source).
+func TestHostnameSNMPProjectsSysNameForEverySNMPModel(t *testing.T) {
+	for _, key := range hostnameSNMPModels {
+		t.Run(key, func(t *testing.T) {
+			entry, ok := seedByKey(t, key).OIDMap()[snmp.SysName]
+			if !ok {
+				t.Fatalf("%s does not project sysName", key)
+			}
+			if entry.SnmpType != "OCTETSTR" {
+				t.Errorf("%s sysName type = %q, want OCTETSTR", key, entry.SnmpType)
+			}
+			if entry.Value == "" {
+				t.Errorf("%s projects an empty sysName; no real switch here does", key)
+			}
+		})
+	}
+}
+
+// TestHostnameCLIAndSNMPAgree mirrors Python's test_cli_and_snmp_agree:
+// "show hosts" and sysName report the same name for one switch.
+func TestHostnameCLIAndSNMPAgree(t *testing.T) {
+	for _, key := range hostnameCLIModels {
+		t.Run(key, func(t *testing.T) {
+			st := seedByKey(t, key)
+			face, m := newTestCliFace(t, key, st)
+			reader, err := fastpath.NewReader(face, m)
+			if err != nil {
+				t.Fatalf("fastpath.NewReader: %v", err)
+			}
+			cliName, err := reader.GetHostname(context.Background())
+			if err != nil {
+				t.Fatalf("GetHostname: %v", err)
+			}
+			snmpName := st.OIDMap()[snmp.SysName].Value
+			if cliName != snmpName {
+				t.Errorf("CLI GetHostname() = %q, SNMP sysName = %q, want equal", cliName, snmpName)
+			}
+		})
+	}
+}
+
+// TestHostnameCLIRoundTrip mirrors Python's test_cli_hostname_round_trip.
+func TestHostnameCLIRoundTrip(t *testing.T) {
+	for _, key := range hostnameCLIModels {
+		t.Run(key, func(t *testing.T) {
+			st := seedByKey(t, key)
+			face, m := newTestCliFace(t, key, st)
+			reader, err := fastpath.NewReader(face, m)
+			if err != nil {
+				t.Fatalf("fastpath.NewReader: %v", err)
+			}
+			writer, err := fastpath.NewWriter(face, m)
+			if err != nil {
+				t.Fatalf("fastpath.NewWriter: %v", err)
+			}
+			ctx := context.Background()
+
+			original, err := reader.GetHostname(ctx)
+			if err != nil {
+				t.Fatalf("GetHostname (before): %v", err)
+			}
+			if original == "" {
+				t.Fatal("seed carries no host name; no real FASTPATH switch is nameless")
+			}
+
+			if err := writer.SetHostname(ctx, "ngsw-test-name", false); err != nil {
+				t.Fatalf("SetHostname: %v", err)
+			}
+			if got, err := reader.GetHostname(ctx); err != nil || got != "ngsw-test-name" {
+				t.Errorf("GetHostname after rename = (%q, %v), want (\"ngsw-test-name\", nil)", got, err)
+			}
+
+			if err := writer.SetHostname(ctx, original, false); err != nil {
+				t.Fatalf("SetHostname (restore): %v", err)
+			}
+			if got, err := reader.GetHostname(ctx); err != nil || got != original {
+				t.Errorf("GetHostname after restore = (%q, %v), want (%q, nil)", got, err, original)
+			}
+		})
+	}
+}
+
+// TestHostnameEmptyIsRefusedNotSent mirrors Python's
+// test_empty_hostname_is_refused_not_sent: "hostname" with no argument is
+// rejected by the device itself, so this library refuses client-side
+// before ever issuing the command.
+func TestHostnameEmptyIsRefusedNotSent(t *testing.T) {
+	st := SeedM4300_24X()
+	face, m := newTestCliFace(t, "m4300-24x", st)
+	writer, err := fastpath.NewWriter(face, m)
+	if err != nil {
+		t.Fatalf("fastpath.NewWriter: %v", err)
+	}
+	err = writer.SetHostname(context.Background(), "   ", false)
+	if err == nil {
+		t.Fatal("SetHostname(\"   \") = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "must not be empty") {
+		t.Errorf("SetHostname(\"   \") error = %q, want it to mention \"must not be empty\"", err.Error())
+	}
+}
+
 // --- C3 slice: SetPortDescription / SetPortSpeed / SetFlowControl round
 // trip against the REAL CliFace (description '<text>'/no description,
 // speed auto/speed <rate> <duplex>-duplex, flowcontrol/no flowcontrol) ---
