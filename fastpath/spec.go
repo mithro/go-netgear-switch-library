@@ -111,6 +111,13 @@ type CliModelSpec struct {
 	// Constant across every FASTPATH model (no per-model override exists in
 	// commands.py).
 	HostsCmd string
+	// LoggingCmd/LoggingHostsCmd are "show logging" / "show logging hosts"
+	// (get_syslog): two commands because the switch splits it that way --
+	// the globals (admin mode, local port) live in the first, the
+	// collectors in the second. Constant across every FASTPATH model (no
+	// per-model override exists in commands.py).
+	LoggingCmd      string
+	LoggingHostsCmd string
 
 	// --- physical-interface naming -----------------------------------
 	// IfaceTemplate is how this model's firmware ADDRESSES one physical
@@ -175,6 +182,16 @@ type CliModelSpec struct {
 	// command -- NOT interface-scoped. Constant across every FASTPATH model
 	// (no per-model override exists in commands.py).
 	HostnameConfigCmd string
+	// LoggingSyslogCmd/LoggingNoSyslogCmd are the global-config remote-
+	// logging enable/disable (set_syslog_enabled). LoggingSyslogCmd is
+	// VERBATIM from every switch's own `show running-config` (all four
+	// FASTPATH models print the bare line "logging syslog", read
+	// 2026-08-05); the negation is the standard FASTPATH "no" and is
+	// inferred -- a wrong form is rejected by the device and raised, never
+	// swallowed. Constant across every FASTPATH model (no per-model
+	// override exists in commands.py).
+	LoggingSyslogCmd   string
+	LoggingNoSyslogCmd string
 	// MgmtIPExecCmds / MgmtIPConfigCmds: exactly one is non-empty per model
 	// (commands.py:167) -- the two management-IP write dialects (privileged
 	// EXEC "network parms ..." vs global-config "ip management address ..."
@@ -356,6 +373,16 @@ func (s *CliModelSpec) HostnameConfig(name string) string {
 	return formatOne(s.HostnameConfigCmd, "name", name)
 }
 
+// LoggingSyslog returns LoggingSyslogCmd when enabled, else
+// LoggingNoSyslogCmd, mirroring Python CliModelSpec.logging_syslog
+// (commands.py:389-390).
+func (s *CliModelSpec) LoggingSyslog(enabled bool) string {
+	if enabled {
+		return s.LoggingSyslogCmd
+	}
+	return s.LoggingNoSyslogCmd
+}
+
 // MgmtIP returns (execCmds, configCmds) with {address}/{netmask}/{gateway}
 // filled in on every entry of MgmtIPExecCmds/MgmtIPConfigCmds, mirroring
 // Python CliModelSpec.mgmt_ip (commands.py:221-233). Exactly one of the two
@@ -446,6 +473,8 @@ func newCliModelSpec(modelKey string, captured, readsVerified bool) CliModelSpec
 		TelnetServiceCmd: "show telnetcon",
 		SSHServiceCmd:    "show ip ssh",
 		HostsCmd:         "show hosts",
+		LoggingCmd:       "show logging",
+		LoggingHostsCmd:  "show logging hosts",
 
 		IfaceTemplate:       "1/0/{port}",
 		UplinkIfaceTemplate: "", // None
@@ -476,6 +505,8 @@ func newCliModelSpec(modelKey string, captured, readsVerified bool) CliModelSpec
 		PortEnableCmd:          "no shutdown",
 		PortDisableCmd:         "shutdown",
 		HostnameConfigCmd:      "hostname {name}",
+		LoggingSyslogCmd:       "logging syslog",
+		LoggingNoSyslogCmd:     "no logging syslog",
 		MgmtIPExecCmds:         []string{"network parms {address} {netmask} {gateway}"},
 		MgmtIPConfigCmds:       nil, // ()
 		ReloadCmd:              "reload",

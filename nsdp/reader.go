@@ -408,6 +408,12 @@ const NoUsersMsg = "this backend does not expose local user accounts (no such ta
 // snmp_read.py's own, for the same reason NoUsersMsg is.
 const NoServicesMsg = "this backend does not expose management-service state (http/https/telnet/ssh)"
 
+// NoSyslogMsg is the exact message GetSyslog wraps, mirroring Python
+// nsdp_read.py's get_syslog refusal text (nsdp_read.py:297-306): an
+// exhaustive live tag sweep of a GS110EMX turned up no logging surface of
+// any kind.
+const NoSyslogMsg = "this backend does not expose remote-logging configuration"
+
 // GetUsers always returns an error wrapping model.ErrUnsupportedCapability:
 // NSDP exposes no local-user-account tag on these Plus switches. Mirrors
 // Python's NsdpReader.get_users. ctx is accepted-but-unused; see GetLLDP's
@@ -422,4 +428,13 @@ func (r *Reader) GetUsers(_ context.Context) ([]model.SwitchUser, error) {
 // accepted-but-unused; see GetLLDP's doc comment.
 func (r *Reader) GetServices(_ context.Context) ([]model.ServiceStatus, error) {
 	return nil, fmt.Errorf("model %q: %s: %w", r.model.Key, NoServicesMsg, model.ErrUnsupportedCapability)
+}
+
+// GetSyslog always returns an error wrapping model.ErrUnsupportedCapability:
+// NSDP exposes no remote-logging tag on these Plus switches -- an
+// exhaustive live tag sweep found no logging surface of any kind. Mirrors
+// Python's NsdpReader.get_syslog. ctx is accepted-but-unused; see GetLLDP's
+// doc comment.
+func (r *Reader) GetSyslog(_ context.Context) (model.SyslogConfig, error) {
+	return model.SyslogConfig{}, fmt.Errorf("model %q: %s: %w", r.model.Key, NoSyslogMsg, model.ErrUnsupportedCapability)
 }

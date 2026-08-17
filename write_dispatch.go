@@ -40,6 +40,15 @@ import (
 // cannot strand it the way a mgmt-IP write can, and it is trivially
 // reversible by writing the old name back, mirroring Python's
 // SnmpWriter/NsdpWriter/CliWriter/HttpWriter.set_hostname exactly.
+//
+// SetSyslogEnabled is served over SNMP (the vendor admin-mode scalar) and
+// the FASTPATH CLI (`logging syslog`/`no logging syslog`); the HTTP and NSDP
+// backends refuse by name -- mirroring Python's
+// SnmpWriter/CliWriter.set_syslog_enabled (served) and
+// HttpWriter/NsdpWriter.set_syslog_enabled (refused) exactly. Not
+// force-gated by any backend: toggling log delivery cannot strand a switch
+// and is reversible by writing the old value back. Adding or removing a
+// COLLECTOR is a separate, unbuilt operation (a later slice).
 type BackendWriter interface {
 	SetPoE(ctx context.Context, port int, on bool, force bool) error
 	SetPortEnabled(ctx context.Context, port int, enabled bool, force bool) error
@@ -54,6 +63,7 @@ type BackendWriter interface {
 	CyclePoE(ctx context.Context, port int, timeouts snmp.PoeCycleTimeouts, force bool) error
 	ClearPoEFault(ctx context.Context, port int, timeouts snmp.PoeCycleTimeouts, force bool) error
 	SetHostname(ctx context.Context, name string, force bool) error
+	SetSyslogEnabled(ctx context.Context, enabled bool, force bool) error
 }
 
 // WriteBackendBuilder constructs the BackendWriter for one backend, given

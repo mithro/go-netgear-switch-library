@@ -1064,6 +1064,46 @@ func (w *Writer) SetHostname(ctx context.Context, name string, _ bool) error {
 }
 
 // ---------------------------------------------------------------------
+// SetSyslogEnabled
+// ---------------------------------------------------------------------
+
+// SetSyslogEnabled turns remote logging on or off (`logging syslog` in
+// global config), mirroring Python CliWriter.set_syslog_enabled
+// (cli_write.py:869-892).
+//
+// The positive form is VERBATIM from every switch's own `show
+// running-config` (all four FASTPATH models print the bare line "logging
+// syslog", read 2026-08-05). The negation is the standard FASTPATH "no" and
+// is inferred -- see LoggingSyslog; a wrong form is rejected by the device
+// and raised, never swallowed.
+//
+// Not force-gated: it changes where log messages go, not how traffic is
+// switched, and is reversible by writing the old value back. force is
+// accepted-but-unused, purely so this method's signature matches every
+// other writer.
+func (w *Writer) SetSyslogEnabled(ctx context.Context, enabled bool, _ bool) error {
+	before, err := w.reader.GetSyslog(ctx)
+	if err != nil {
+		return err
+	}
+	if err := inMode(ctx, w.session, []string{w.spec.ConfigureCmd}, []string{w.spec.LoggingSyslog(enabled)}, w.spec.ExitCmd); err != nil {
+		return err
+	}
+	after, err := w.reader.GetSyslog(ctx)
+	if err != nil {
+		return err
+	}
+	if after.Enabled != enabled {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("remote logging did not read back as enabled=%v", enabled),
+			Before: before.Enabled,
+			After:  after.Enabled,
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
 // SetMgmtIP (dossier §4.8)
 // ---------------------------------------------------------------------
 

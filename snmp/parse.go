@@ -1459,6 +1459,104 @@ func toIntBestEffort(v any) (int64, bool) {
 	}
 }
 
+// firstInt returns the value of the first row in rows whose Value is int64,
+// mirroring Python parse._first_int -- the value of a single-varbind scalar
+// GET, when it is an integer. ok=false when no row has an int64 value (the
+// scalar is absent, or every row that arrived is some other type).
+func firstInt(rows []Row) (int64, bool) {
+	for _, row := range rows {
+		if v, ok := row.Value.(int64); ok {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+// syslogAdminEnabled is the vendor logging admin-mode enum's "enabled"
+// value, mirroring Python parse._ADMIN_ENABLED (1; 2 is "disabled").
+const syslogAdminEnabled = 1
+
+// syslogHostStatusActive is the syslog host table's RowStatus "Active"
+// value, mirroring Python parse._HOST_STATUS_ACTIVE. 1 is what the CLI
+// prints as "Active".
+const syslogHostStatusActive = 1
+
+// ParseSyslog builds model.SyslogConfig from the vendor logging admin-mode/
+// local-port scalars plus the host table's address/port/severity/status
+// column walks, mirroring Python parse.parse_syslog (protocols/snmp/
+// parse.py:834-881) EXACTLY.
+//
+// The host table is indexed by an integer row id, and every per-host column
+// is matched to the address column by that index rather than by position --
+// so a table with a gap in its indices (a deleted row) cannot silently
+// shift one row's port onto another row's address.
+//
+// A row whose address is empty is skipped. The address is the only field
+// that makes a row meaningful, and reporting one collector fewer is far
+// better than inventing where logs are being sent.
+//
+// addrBase/portBase/severityBase/statusBase are the exact base OIDs
+// hostAddr/hostPort/hostSeverity/hostStatus were walked from (VendorOids'
+// SyslogHostAddr/SyslogHostPort/SyslogHostSeverity/SyslogHostStatus) --
+// threaded through explicitly, mirroring Python's keyword-only addr_base/
+// port_base/severity_base/status_base, rather than assumed from a shared
+// package constant, since the caller is what actually issued the walk.
+func ParseSyslog(adminMode, localPort, hostAddr, hostPort, hostSeverity, hostStatus []Row, addrBase, portBase, severityBase, statusBase string) (model.SyslogConfig, error) {
+	addresses, err := IndexStrColumn(hostAddr, addrBase)
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+	ports, err := IndexIntColumn(hostPort, portBase)
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+	severities, err := IndexIntColumn(hostSeverity, severityBase)
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+	statuses, err := IndexIntColumn(hostStatus, statusBase)
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+
+	indices := make([]int, 0, len(addresses))
+	for idx := range addresses {
+		indices = append(indices, idx)
+	}
+	sort.Ints(indices)
+
+	var servers []model.SyslogServer
+	for _, idx := range indices {
+		address := addresses[idx]
+		if strings.TrimSpace(address) == "" {
+			continue
+		}
+		index := idx
+		servers = append(servers, model.SyslogServer{
+			Host: address,
+			Port: int(ports[idx]),
+			// The standard syslog severity number, 0-7 -- the SNMP table
+			// reports it as-is, unlike the CLI/HTTP backends, which report a
+			// WORD and go through model.SyslogSeverity to decode it.
+			Severity: int(severities[idx]),
+			Active:   statuses[idx] == syslogHostStatusActive,
+			// The OID instance IS the table's row index, and it is the
+			// handle a RowStatus destroy addresses -- so it is surfaced
+			// rather than dropped. Sparse, exactly as the CLI table shows
+			// it.
+			Index: &index,
+		})
+	}
+
+	adminVal, _ := firstInt(adminMode)
+	localPortVal, _ := firstInt(localPort)
+	return model.SyslogConfig{
+		Enabled:   adminVal == syslogAdminEnabled,
+		LocalPort: int(localPortVal),
+		Servers:   servers,
+	}, nil
+}
+
 // ParseMgmtIP builds the management-IP config from ipAddrTable/
 // ipRouteTable plus the vendor DHCP-mode OID.
 //

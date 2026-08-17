@@ -317,6 +317,12 @@ type HTTPModelSpec struct {
 	HTTPSServicePath  string
 	SSHServicePath    string
 	TelnetServicePath string
+	// SyslogPath is the remote-logging configuration page (GetSyslog). ""
+	// = no such page located for this model's UI. Set for all four managed
+	// models (gsm7252ps, gsm7228ps, m4300-24x -- m4300-16x inherits it
+	// unchanged, a struct copy). See fastpathSyslog/m4300SyslogPath below
+	// for how it was found and on which hosts it was verified.
+	SyslogPath string
 
 	// XMLWritePath is the single POST target every write on a GOAHEAD_XML
 	// (gs728tpp) web UI shares: the object name and action verb INSIDE the
@@ -362,9 +368,17 @@ const (
 	fastpathSSHServicePath    = "/sshConfiguration.html"
 	fastpathTelnetServicePath = "/telnet.html"
 	m4300HTTPServicePath      = "/v1" + fastpathHTTPServicePath
-	m4300HTTPSServicePath     = "/v1" + fastpathHTTPSServicePath
-	m4300SSHServicePath       = "/v1" + fastpathSSHServicePath
-	m4300TelnetServicePath    = "/v1" + fastpathTelnetServicePath
+	// fastpathSyslog is the remote-logging page, shared by every managed
+	// model, transcribed from Python's _FASTPATH_SYSLOG. Found the same way
+	// the VLAN-membership page was -- read out of the switch's own nav JS
+	// rather than guessed. LIVE-FETCHED 2026-08-03 on all four managed
+	// switches (10.1.5.22, 10.1.5.11, 10.1.5.13, 10.1.5.20): each answered
+	// 200 with a Syslog/Server Log title.
+	fastpathSyslog         = "/syslogConfiguration.html"
+	m4300SyslogPath        = "/v1" + fastpathSyslog
+	m4300HTTPSServicePath  = "/v1" + fastpathHTTPSServicePath
+	m4300SSHServicePath    = "/v1" + fastpathSSHServicePath
+	m4300TelnetServicePath = "/v1" + fastpathTelnetServicePath
 )
 
 func intPtr(v int) *int { return &v }
@@ -489,6 +503,10 @@ var gsm7228psSpec = HTTPModelSpec{
 	PvidPath:               "/portPvidConfiguration.html",
 	// reboot_path / logout_path: never captured, not guessed -- stay "".
 
+	// SyslogPath: LIVE-FETCHED 2026-08-03 on 10.1.5.11 -- see
+	// fastpathSyslog's doc comment.
+	SyslogPath: fastpathSyslog,
+
 	IsEPXPoE:      false,
 	ReadsVerified: true,
 	HTMLDialect:   HTMLDialectS3300,
@@ -610,6 +628,12 @@ var m430024xSpec = HTTPModelSpec{
 	SSHServicePath:    m4300SSHServicePath,
 	TelnetServicePath: m4300TelnetServicePath,
 
+	// SyslogPath: LIVE-FETCHED 2026-08-03 on 10.1.5.13 -- see
+	// fastpathSyslog/m4300SyslogPath's doc comments. m430016xSpec (below)
+	// inherits this unchanged, exactly as Python's dataclasses.replace(_M4300,
+	// ...) never touches it.
+	SyslogPath: m4300SyslogPath,
+
 	IsEPXPoE:      false,
 	ReadsVerified: true,
 	HTMLDialect:   HTMLDialectM4300,
@@ -692,6 +716,10 @@ var gsm7252psSpec = HTTPModelSpec{
 	HTTPSServicePath:  fastpathHTTPSServicePath,
 	SSHServicePath:    fastpathSSHServicePath,
 	TelnetServicePath: fastpathTelnetServicePath,
+
+	// SyslogPath: LIVE-FETCHED 2026-08-03 on 10.1.5.22 -- see
+	// fastpathSyslog's doc comment.
+	SyslogPath: fastpathSyslog,
 
 	IsEPXPoE:      false,
 	ReadsVerified: true, // live HTTP<->SNMP cross-verified 2026-07-23

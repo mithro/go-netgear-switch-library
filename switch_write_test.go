@@ -68,6 +68,9 @@ type fakeWriter struct {
 		name  string
 		force bool
 	}
+	setSyslogEnabledCall *struct {
+		enabled, force bool
+	}
 	cyclePoECall *struct {
 		port     int
 		timeouts snmp.PoeCycleTimeouts
@@ -192,6 +195,15 @@ func (f *fakeWriter) SetHostname(_ context.Context, name string, force bool) err
 		name  string
 		force bool
 	}{name, force}
+	return f.err
+}
+
+func (f *fakeWriter) SetSyslogEnabled(_ context.Context, enabled bool, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setSyslogEnabledCall = &struct {
+		enabled, force bool
+	}{enabled, force}
 	return f.err
 }
 
@@ -771,6 +783,9 @@ func (f *fakeVLANReader) GetServices(context.Context) ([]model.ServiceStatus, er
 	panic("not used")
 }
 func (f *fakeVLANReader) GetHostname(context.Context) (string, error) { panic("not used") }
+func (f *fakeVLANReader) GetSyslog(context.Context) (model.SyslogConfig, error) {
+	panic("not used")
+}
 
 func TestDeleteVlan_ProtectedMemberBlocksWithoutForce(t *testing.T) {
 	clearBackendRegistry(t)

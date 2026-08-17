@@ -211,7 +211,7 @@ func httpSpecPathFields(spec *webui.HTTPModelSpec) []string {
 		spec.LogoutPath, spec.SysinfoPath, spec.MgmtIPPath, spec.MacTablePath,
 		spec.LLDPPath, spec.CertUploadPath, spec.VlanMembershipPostPath, spec.PortConfigPath,
 		spec.UsersPath, spec.HTTPServicePath, spec.HTTPSServicePath, spec.SSHServicePath,
-		spec.TelnetServicePath,
+		spec.TelnetServicePath, spec.SyslogPath,
 	}
 }
 
@@ -1114,6 +1114,8 @@ func (f *HTTPFace) renderM4300Page(path string) (string, bool) {
 		return RenderM4300Sysinfo(f.state), true
 	case spec.UsersPath != "" && path == spec.UsersPath:
 		return RenderXUIUsers(f.state, path), true
+	case spec.SyslogPath != "" && path == spec.SyslogPath:
+		return RenderXUISyslog(f.state, path), true
 	}
 	// The M4300 serves http/https as PLAIN named forms and ssh/telnet as
 	// XUI -- measured, see xeServiceFormFields.
@@ -1171,6 +1173,8 @@ func (f *HTTPFace) renderS3300Page(path string) (string, bool) {
 		return RenderXELLDP(f.state), true
 	case spec.SysinfoPath:
 		return RenderS3300Sysinfo(f.state), true
+	case spec.SyslogPath:
+		return RenderXUISyslog(f.state, path), true
 	default:
 		return "", false
 	}
@@ -1200,6 +1204,8 @@ func (f *HTTPFace) renderXEPage(path string) (string, bool) {
 		return RenderXESysinfo(f.state), true
 	case spec.UsersPath:
 		return RenderXUIUsers(f.state, path), true
+	case spec.SyslogPath:
+		return RenderXUISyslog(f.state, path), true
 	}
 	// gsm7252ps renders ALL FOUR service pages as XUI (unlike the M4300).
 	if service, ok := f.serviceFor(path); ok {

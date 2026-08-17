@@ -297,6 +297,23 @@ func (s *Switch) SetHostname(ctx context.Context, name string, o Write) error {
 	})
 }
 
+// SetSyslogEnabled turns remote syslog on or off, dispatched through the
+// resolved backend (o.Backend, or this Switch's default).
+//
+// Served over SNMP (the vendor admin-mode column) and the FASTPATH CLI
+// (`logging syslog`/`no logging syslog`); the HTTP and NSDP backends refuse
+// by name. Adding or removing a COLLECTOR is a separate, unbuilt operation
+// -- it needs a row-status write that has not been driven against hardware.
+// NOT force-gated by any backend: toggling log delivery cannot strand a
+// switch and is reversible by writing the old value back. o.Force is
+// forwarded unchanged, but every backend ignores it -- accepted only so the
+// signature matches every other writer.
+func (s *Switch) SetSyslogEnabled(ctx context.Context, enabled bool, o Write) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
+		return w.SetSyslogEnabled(ctx, enabled, o.Force)
+	})
+}
+
 // SetMgmtIP sets the switch's own management IP (address/netmask/gateway),
 // dispatched through the resolved backend (o.Backend, or this Switch's
 // default). The unconditional force-gate (force=false ALWAYS refuses,

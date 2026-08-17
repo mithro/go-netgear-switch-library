@@ -481,6 +481,10 @@ func TestReader_UnsupportedOpsRaise(t *testing.T) {
 		_, err := reader.GetServices(ctx)
 		requireUnsupported(t, err)
 	})
+	t.Run("GetSyslog", func(t *testing.T) {
+		_, err := reader.GetSyslog(ctx)
+		requireUnsupported(t, err)
+	})
 }
 
 // TestReader_GetUsersGetServicesRefuseByExactMessage mirrors Python's
@@ -499,6 +503,10 @@ func TestReader_GetUsersGetServicesRefuseByExactMessage(t *testing.T) {
 	_, err = reader.GetServices(ctx)
 	if err == nil || !strings.Contains(err.Error(), nsdp.NoServicesMsg) {
 		t.Errorf("GetServices() error = %v, want it to contain %q", err, nsdp.NoServicesMsg)
+	}
+	_, err = reader.GetSyslog(ctx)
+	if err == nil || !strings.Contains(err.Error(), nsdp.NoSyslogMsg) {
+		t.Errorf("GetSyslog() error = %v, want it to contain %q", err, nsdp.NoSyslogMsg)
 	}
 }
 
@@ -641,6 +649,7 @@ func TestExportedRefusalMessagesNonEmpty(t *testing.T) {
 		"NoPoEReadMsg":  nsdp.NoPoEReadMsg,
 		"NoUsersMsg":    nsdp.NoUsersMsg,
 		"NoServicesMsg": nsdp.NoServicesMsg,
+		"NoSyslogMsg":   nsdp.NoSyslogMsg,
 	} {
 		if msg == "" {
 			t.Errorf("%s is empty", name)

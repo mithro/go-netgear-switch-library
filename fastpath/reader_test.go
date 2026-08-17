@@ -576,7 +576,76 @@ func TestReaderGetHostname(t *testing.T) {
 	}
 	wantCmds := []string{r.spec.HostsCmd}
 	if gotCmds := session.commandsSnapshot(); !reflect.DeepEqual(gotCmds, wantCmds) {
-		t.Errorf("commands = %v, want %v", gotCmds, wantCmds)
+		t.Errorf("commands (hostname) = %v, want %v", gotCmds, wantCmds)
+	}
+}
+
+// TestReaderGetSyslog proves GetSyslog issues LoggingCmd then
+// LoggingHostsCmd, in that order, and routes both responses through the
+// already-tested parseSyslog.
+func TestReaderGetSyslog(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	session := &fakeCliSession{respond: func(command string) (string, error) {
+		switch command {
+		case "show logging":
+			return syslogLoggingText, nil
+		case "show logging hosts":
+			return syslogHostsText, nil
+		}
+		return "", nil
+	}}
+	r := mustNewReader(t, session, m)
+
+	got, err := r.GetSyslog(context.Background())
+	if err != nil {
+		t.Fatalf("GetSyslog: %v", err)
+	}
+	want, err := parseSyslog(syslogLoggingText, syslogHostsText)
+	if err != nil {
+		t.Fatalf("test setup: parseSyslog: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GetSyslog() = %+v, want %+v", got, want)
+	}
+	wantCmds := []string{r.spec.LoggingCmd, r.spec.LoggingHostsCmd}
+	if gotCmds := session.commandsSnapshot(); !reflect.DeepEqual(gotCmds, wantCmds) {
+		t.Errorf("commands (syslog) = %v, want %v", gotCmds, wantCmds)
+	}
+}
+
+// TestReaderGetSyslogPropagatesSessionErrorOnFirstCommand proves a session
+// failure on LoggingCmd short-circuits GetSyslog before LoggingHostsCmd is
+// ever issued.
+func TestReaderGetSyslogPropagatesSessionErrorOnFirstCommand(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	wantErr := errors.New("boom")
+	session := &fakeCliSession{respond: func(string) (string, error) { return "", wantErr }}
+	r := mustNewReader(t, session, m)
+
+	if _, err := r.GetSyslog(context.Background()); !errors.Is(err, wantErr) {
+		t.Errorf("GetSyslog() error = %v, want wrapping %v", err, wantErr)
+	}
+	if gotCmds := session.commandsSnapshot(); len(gotCmds) != 1 {
+		t.Errorf("commands = %v, want exactly 1 (LoggingHostsCmd must not be issued)", gotCmds)
+	}
+}
+
+// TestReaderGetSyslogPropagatesSessionErrorOnSecondCommand proves a session
+// failure on LoggingHostsCmd (after LoggingCmd succeeded) still propagates,
+// rather than degrading to a partial answer.
+func TestReaderGetSyslogPropagatesSessionErrorOnSecondCommand(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	wantErr := errors.New("boom")
+	session := &fakeCliSession{respond: func(command string) (string, error) {
+		if command == "show logging" {
+			return syslogLoggingText, nil
+		}
+		return "", wantErr
+	}}
+	r := mustNewReader(t, session, m)
+
+	if _, err := r.GetSyslog(context.Background()); !errors.Is(err, wantErr) {
+		t.Errorf("GetSyslog() error = %v, want wrapping %v", err, wantErr)
 	}
 }
 

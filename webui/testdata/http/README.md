@@ -15,3 +15,9 @@ Twelve more files were copied 2026-08-17 from the same reference @ `b26eb1f`
 `{gsm7252ps,m4300_24x}_telnet.html` (the four management-service pages), plus
 `gsm7228ps_http_configuration.html` (the S3300 page with no admin control at
 all, for `ParseServicePage`'s refusal path).
+
+Four more were copied from the same `b26eb1f` reference, for the GetSyslog
+slice: `{gsm7252ps,gsm7228ps,m4300_24x,m4300_16x}_syslog_configuration.html` --
+`syslogConfiguration.html` on all four managed models, used to verify
+`ParseXUISyslog` against real captures rather than only the virtual mock's
+own renderer.

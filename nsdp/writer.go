@@ -586,6 +586,15 @@ func (w *Writer) SetFlowControl(_ context.Context, _ int, _ bool, _ bool) error 
 	))
 }
 
+// SetSyslogEnabled always returns an error wrapping
+// model.ErrUnsupportedCapability: this backend does not serve a
+// remote-logging toggle. Mirrors Python's NsdpWriter.set_syslog_enabled.
+// Every parameter is accepted-but-unused, purely so this method's signature
+// matches the shared BackendWriter surface (see write_dispatch.go).
+func (w *Writer) SetSyslogEnabled(_ context.Context, _ bool, _ bool) error {
+	return unsupportedWrite(fmt.Sprintf("model %q: this backend does not expose a remote-logging toggle", w.model.Key))
+}
+
 // vlanIDs projects a VLAN list to just its ids, mirroring the
 // `[v.vlan_id for v in vlans]` comprehensions Python's create_vlan/
 // delete_vlan put in their WriteVerificationError before/after payloads.

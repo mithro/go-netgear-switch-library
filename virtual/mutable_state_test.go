@@ -186,6 +186,41 @@ func TestApplyWriteDhcpModeUpdatesReadProjection(t *testing.T) {
 	}
 }
 
+// TestApplyWriteSyslogAdminModeUpdatesReadProjection mirrors
+// TestApplyWriteDhcpModeUpdatesReadProjection's shape for the syslog
+// admin-mode column SetSyslogEnabled writes.
+func TestApplyWriteSyslogAdminModeUpdatesReadProjection(t *testing.T) {
+	st := newWritableFixture()
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vo, err := snmp.GetVendorOids(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if st.Syslog.AdminMode != 2 {
+		t.Fatalf("fixture precondition: Syslog.AdminMode = %d, want 2 (NewState default)", st.Syslog.AdminMode)
+	}
+	if got := st.OIDMap()[vo.SyslogAdminMode]; got != (OIDEntry{"INTEGER", "2"}) {
+		t.Errorf("syslog admin-mode projection = %+v, want disabled (2)", got)
+	}
+
+	st.ApplyWrite(vo.SyslogAdminMode, 1) // 1 = enabled
+	if st.Syslog.AdminMode != 1 {
+		t.Errorf("Syslog.AdminMode = %d, want 1", st.Syslog.AdminMode)
+	}
+	if got := st.OIDMap()[vo.SyslogAdminMode]; got != (OIDEntry{"INTEGER", "1"}) {
+		t.Errorf("syslog admin-mode projection = %+v, want enabled (1)", got)
+	}
+
+	st.ApplyWrite(vo.SyslogAdminMode, 2) // 2 = disabled
+	if st.Syslog.AdminMode != 2 {
+		t.Errorf("Syslog.AdminMode = %d, want 2", st.Syslog.AdminMode)
+	}
+}
+
 // TestApplyWriteUnhandledOIDIsSilentNoOp is the documented contract: an OID
 // that matches no dispatch branch (or a known column whose instance
 // doesn't exist) is a no-op at the state layer -- a verify-after-write
@@ -229,6 +264,7 @@ func TestIsWritableOIDRecognizesKnownColumnsAndScalars(t *testing.T) {
 		vo.MgmtWriteNetmaskUnverified,
 		vo.MgmtWriteGatewayUnverified,
 		vo.DHCPModeUnverified + ".0",
+		vo.SyslogAdminMode,
 	}
 	for _, oid := range trueCases {
 		if !st.IsWritableOID(oid) {

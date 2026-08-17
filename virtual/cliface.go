@@ -109,6 +109,10 @@ var (
 	// does NOT match this regex, so it falls through to the catch-all
 	// "Command not found" response, mirroring the real device rejecting it.
 	cliHostnameRE = regexp.MustCompile(`^hostname (.+)$`)
+	// cliLoggingSyslogRE mirrors the global-config remote-logging enable/
+	// disable (set_syslog_enabled): `logging syslog` / `no logging
+	// syslog`.
+	cliLoggingSyslogRE = regexp.MustCompile(`^(no )?logging syslog$`)
 )
 
 // Mode names for CliFace.modes (dossier §3.3).
@@ -559,6 +563,15 @@ func (f *CliFace) configCommand(c string) (string, bool) {
 			f.state.Hostname = m[1]
 			return cliAccepted, true
 		}
+		if m := cliLoggingSyslogRE.FindStringSubmatch(c); m != nil {
+			// AdminMode is the device's own enum, 1=enabled / 2=not.
+			if m[1] == "" {
+				f.state.Syslog.AdminMode = 1
+			} else {
+				f.state.Syslog.AdminMode = 2
+			}
+			return cliAccepted, true
+		}
 		if m := cliInterfaceRE.FindStringSubmatch(c); m != nil {
 			port, ok := f.portForIface(m[1])
 			if !ok {
@@ -647,6 +660,10 @@ func (f *CliFace) run(command string) string {
 		return f.renderNetwork()
 	case f.spec.HostsCmd:
 		return f.renderHosts()
+	case f.spec.LoggingHostsCmd:
+		return f.renderLoggingHosts()
+	case f.spec.LoggingCmd:
+		return f.renderLogging()
 	case f.spec.UsersCmd:
 		return f.renderUsers()
 	case f.spec.HTTPServiceCmd:

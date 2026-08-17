@@ -217,6 +217,101 @@ func (f *CliFace) renderHosts() string {
 	}, "\n")
 }
 
+// --- show logging / show logging hosts ---------------------------------
+
+// cliSyslogSeverityWords maps a severity number to the word `show logging
+// hosts` prints, mirroring Python cli_fastpath._SEVERITY_WORDS. Only the
+// canonical spelling, so 6 renders "info" and never "informational" --
+// what the live m4300-24x/gsm7252ps/gsm7228ps tables all print (2026-08-05).
+//
+// Written out rather than reusing model.SyslogSeverityWords, so this mock
+// is an INDEPENDENT source: a renderer that shared the reader's own table
+// could only ever agree with it (the same reasoning virtual's HTTP syslog
+// renderer applies to its own severity-word map).
+var cliSyslogSeverityWords = map[int]string{
+	0: "emergency",
+	1: "alert",
+	2: "critical",
+	3: "error",
+	4: "warning",
+	5: "notice",
+	6: "info",
+	7: "debug",
+}
+
+// cliSyslogSeverityWord returns cliSyslogSeverityWords[severity], or the bare
+// number stringified when severity is outside 0-7 -- mirroring Python's
+// `_SEVERITY_WORDS.get(c.severity, str(c.severity))`.
+func cliSyslogSeverityWord(severity int) string {
+	if w, ok := cliSyslogSeverityWords[severity]; ok {
+		return w
+	}
+	return strconv.Itoa(severity)
+}
+
+// renderLogging mirrors Python `render_logging` (cli_fastpath.py:514-546),
+// transcribed from real output captured 2026-08-05. The scalar block the
+// reader picks two fields out of, reproduced with its neighbours because a
+// mock emitting only "Syslog Logging" and "Logging Client Local Port"
+// would not exercise colonFields at all -- and it is the reason the whole
+// block is colon-separated rather than dotted-leader, unlike `show
+// hosts`/`show network`.
+//
+// The surrounding counters and the console/buffered rows are the shape all
+// four switches returned; the gsm7228ps additionally prints two Persistent
+// Logging rows, which is why the reader takes named fields rather than
+// offsets.
+func (f *CliFace) renderLogging() string {
+	adminWord := "disabled"
+	if f.state.Syslog.AdminMode == 1 {
+		adminWord = "enabled"
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("Logging Client Local Port           : %d", f.state.Syslog.LocalPort),
+		"Logging Client Source Interface     : serviceport",
+		"CLI Command Logging                 : disabled",
+		"Console Logging                     : disabled",
+		"Console Logging Severity Filter     : error",
+		"Buffered Logging                    : enabled",
+		"Buffered Logging Severity Filter    : notice",
+		"",
+		"Syslog Logging                      : " + adminWord,
+		"",
+		"Log Messages Received               : 9850",
+		"Log Messages Dropped                : 0",
+		"Log Messages Relayed                : 118",
+	}, "\n")
+}
+
+// renderLoggingHosts mirrors Python `render_logging_hosts` (cli_fastpath.py:
+// 549-574), transcribed from real output captured 2026-08-05. Header and
+// ruler are byte-for-byte what m4300-24x, gsm7252ps and gsm7228ps all
+// printed. The INDEX column is 1-based and positional -- it is what `no
+// logging host <index>` addresses, and the reason a removal has to look
+// the row up rather than name the address.
+//
+// A switch with NO collectors prints the header and ruler and nothing
+// else, which is what makes "empty" distinguishable from "could not ask".
+func (f *CliFace) renderLoggingHosts() string {
+	lines := []string{
+		"Index   IP Address/Hostname     Severity    Port   Status  Mode   Auth    Cert#",
+		"----- ------------------------ ---------- ------ --------- ----- -------- -----",
+	}
+	for _, c := range f.state.Syslog.Collectors {
+		word := cliSyslogSeverityWord(c.Severity)
+		status := "Active"
+		if c.Status != 1 {
+			status = "Inactive"
+		}
+		// c.Index, NOT the loop position. The real table's Index column is
+		// SPARSE -- 1 and 3 with nothing at 2, measured on m4300-24x
+		// 10.1.5.13 -- and a mock that renumbered densely could never
+		// expose the position-for-index bug that shipped.
+		lines = append(lines, fmt.Sprintf("%-5d %-24s %-10s %-6d %-9s udp", c.Index, c.Host, word, c.Port, status))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // --- show port all (cli_fastpath.py:133-163) --------------------------------
 
 // renderPorts mirrors Python `render_ports` (cli_fastpath.py:171-204):
