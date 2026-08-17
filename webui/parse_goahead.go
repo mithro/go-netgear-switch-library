@@ -613,6 +613,24 @@ func ParseGoAheadBaseMAC(body string) (string, bool, error) {
 	return mac, true, nil
 }
 
+// ParseGoAheadHostname parses GS728TPP's SystemInfo (DeviceBasicInfo)
+// section -> the switch's host name. DeviceBasicInfo/deviceName IS the host
+// name, not merely a cosmetic label: MEASURED on the live switch (10.2.5.10,
+// firmware 6.0.1.30, 2026-08-03) it reads "sw-netgear-gs728tpp", byte-for-
+// byte what SNMP reports through sysName.
+//
+// Returns the raw value including "". An empty name is a REAL state on a
+// switch that has never been named, so it must not be turned into an absent
+// marker, which the caller would read as "this backend cannot tell you".
+// Mirrors Python parse.parse_goahead_hostname (source lines 3109-3121).
+func ParseGoAheadHostname(body string) (string, error) {
+	sec, err := goaheadSection(body, "DeviceBasicInfo")
+	if err != nil {
+		return "", err
+	}
+	return gtext(sec, "deviceName"), nil
+}
+
 // ParseGoAheadMgmtIP parses GS728TPP's IPConf_master.xml wcd response ->
 // management IP + gateway. IPv4InterfaceList/ifEntry carries the
 // address/netmask (on the mgmt VLAN interface); IPv4GatewayList/GWEntry the

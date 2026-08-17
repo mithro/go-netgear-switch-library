@@ -280,6 +280,23 @@ func formatIntList(ports []int) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
+// SetHostname sets the switch's host name, dispatched through the resolved
+// backend (o.Backend, or this Switch's default).
+//
+// Written over SNMP (sysName), NSDP (the HOSTNAME tag), the FASTPATH CLI
+// (hostname), or the web UI (GS110EMX's read-modify-write sysInfo form, or
+// the GS728TPP's GoAhead DeviceBasicInfo/deviceName), whichever backend
+// resolves. NOT force-gated: renaming cannot strand a switch and is
+// reversible by writing the old name back, unlike SetMgmtIP, which drops
+// the session that issues it. o.Force is forwarded unchanged, but every
+// backend ignores it -- accepted only so the signature matches every other
+// writer.
+func (s *Switch) SetHostname(ctx context.Context, name string, o Write) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
+		return w.SetHostname(ctx, name, o.Force)
+	})
+}
+
 // SetMgmtIP sets the switch's own management IP (address/netmask/gateway),
 // dispatched through the resolved backend (o.Backend, or this Switch's
 // default). The unconditional force-gate (force=false ALWAYS refuses,

@@ -35,9 +35,11 @@ package nsdp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/mithro/go-netgear-switch-library/model"
 )
@@ -229,6 +231,45 @@ func (w *Writer) SetPVID(ctx context.Context, port, vlan int, force bool) error 
 			Msg:    fmt.Sprintf("PVID for port %d did not read back as %d", port, vlan),
 			Before: pvidLookup(before, port),
 			After:  pvidLookup(after, port),
+		}
+	}
+	return nil
+}
+
+// SetHostname sets the switch's host name over NSDP (tag 0x0003) and
+// verifies the change read back correctly. Ported from Python's
+// NsdpWriter.set_hostname (nsdp_write.py:151-171).
+//
+// The Plus family's only write route for this: those switches have no SNMP
+// agent and no CLI, so without this they cannot be renamed at all.
+//
+// Not force-gated -- renaming cannot strand a switch, and it is reversible
+// by writing the old name back. force is accepted-but-unused, purely so
+// this method's signature matches every other writer.
+//
+// name must not be empty: a bare ValueError (not wrapped in any sentinel,
+// mirroring Python's plain `raise ValueError("hostname must not be
+// empty")`) is returned before any I/O.
+func (w *Writer) SetHostname(ctx context.Context, name string, _ bool) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("hostname must not be empty")
+	}
+	before, err := w.reader.GetHostname(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := w.client.Write(ctx, []TLVEntry{HostnameTLV(name)}, w.password); err != nil {
+		return err
+	}
+	after, err := w.reader.GetHostname(ctx)
+	if err != nil {
+		return err
+	}
+	if after != name {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("host name is %q after writing %q", after, name),
+			Before: before,
+			After:  after,
 		}
 	}
 	return nil

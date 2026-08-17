@@ -792,6 +792,51 @@ func (r *Reader) GetSensors(ctx context.Context) ([]model.Sensor, error) {
 	return parseSensors(r.spec, html)
 }
 
+// hasSysinfoHostname reports whether spec's dialect's identity page carries
+// the switch's host name: true for gs110emx's sysInfo.html (switch_name
+// input), gs105pe's switch_info.cgi, and the GoAhead DeviceBasicInfo section.
+//
+// The GoAhead entry corrects a claim an earlier version of this project's
+// docstring used to make -- that page carries no host-name field; it does --
+// DeviceBasicInfo/deviceName, MEASURED on the live GS728TPP (10.2.5.10,
+// firmware 6.0.1.30, 2026-08-03) reading "sw-netgear-gs728tpp", byte-for-byte
+// what SNMP reports through sysName. The FASTPATH/XE and M4300 identity
+// pages really do lack one, so those models still read the name over SNMP or
+// the CLI. Mirrors Python http_read._has_sysinfo_hostname.
+func hasSysinfoHostname(spec *HTTPModelSpec) bool {
+	return spec.SysinfoPath != "" && (isGS110EMXDialect(spec) || isGS105PEDialect(spec) || isGoAheadDialect(spec))
+}
+
+// GetHostname reads the switch's host name from its device-identity page,
+// mirroring Python HttpReader.get_hostname (http_read.py:684-703).
+//
+// Only the dialects whose identity page actually carries the field can serve
+// this: gs110emx's sysInfo.html and gs105pe's switch_info.cgi (both already
+// expose it as HTTPSysInfo.SwitchName), plus the GoAhead XML API's
+// DeviceBasicInfo/deviceName section (a different section of a different
+// page shape -- the GoAhead identity data is XML, not the HTTPSysInfo form
+// scrape). Every other dialect's identity page has no such field, and is
+// refused by name rather than returning "" -- an empty string is a real
+// host name on a switch that has never been named, so it must not double as
+// "this backend cannot tell you".
+func (r *Reader) GetHostname(ctx context.Context) (string, error) {
+	if !hasSysinfoHostname(r.spec) {
+		return "", unsupportedOp(r.model.Key, "a host name field")
+	}
+	page, err := r.session.GetPage(ctx, r.spec.SysinfoPath)
+	if err != nil {
+		return "", err
+	}
+	if isGoAheadDialect(r.spec) {
+		return ParseGoAheadHostname(page)
+	}
+	info, err := parseSysInfoForModel(r.spec, page)
+	if err != nil {
+		return "", err
+	}
+	return info.SwitchName, nil
+}
+
 // GetMgmtIP reads the switch's own management-IP configuration, mirroring
 // Python HttpReader.get_mgmt_ip (http_read.py:632-649). GoAhead/managed-
 // FASTPATH models need a SECOND page fetch (SysinfoPath) to fill BaseMac,

@@ -1012,6 +1012,58 @@ func (w *Writer) SetPortEnabled(ctx context.Context, port int, enabled bool, for
 }
 
 // ---------------------------------------------------------------------
+// SetHostname
+// ---------------------------------------------------------------------
+
+// SetHostname sets the switch's host name via global-config `hostname
+// <name>` and verifies the change read back correctly. Ported from Python
+// CliWriter.set_hostname (cli_write.py:751-793).
+//
+// Not force-gated: renaming cannot strand the switch and is reversible by
+// writing the old name back, unlike SetMgmtIP below which drops the session
+// that issues it. force is accepted-but-unused, purely so this method's
+// signature matches every other writer.
+//
+// Verified by re-reading "show hosts". That command, rather than "show
+// running-config", is deliberate and load-bearing here: the two report
+// different values on real hardware (see parseHostname's own doc comment),
+// and "show hosts" is the one that agrees with SNMP, so a CLI write
+// verified this way is also observable over SNMP.
+//
+// Nothing is persisted -- no "write memory" -- exactly like every other
+// write in this package.
+func (w *Writer) SetHostname(ctx context.Context, name string, _ bool) error {
+	if strings.TrimSpace(name) == "" {
+		// `hostname` with no argument is rejected by the device itself
+		// ("Command not found / Incomplete command"), so sending it would
+		// surface as a confusing ErrCliCommandRejected from deep in inMode.
+		// CLEARING a host name is a different operation -- FASTPATH spells
+		// it "no hostname" -- and that has not been driven against real
+		// hardware here, so it is not offered rather than guessed at.
+		return errors.New("hostname must not be empty; clearing a switch's host name is `no hostname` on FASTPATH, which this library does not implement because it has not been verified on a device")
+	}
+	before, err := w.reader.GetHostname(ctx)
+	if err != nil {
+		return err
+	}
+	if err := inMode(ctx, w.session, []string{w.spec.ConfigureCmd}, []string{w.spec.HostnameConfig(name)}, w.spec.ExitCmd); err != nil {
+		return err
+	}
+	after, err := w.reader.GetHostname(ctx)
+	if err != nil {
+		return err
+	}
+	if after != name {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("`show hosts` reports %q after setting hostname %q", after, name),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
 // SetMgmtIP (dossier §4.8)
 // ---------------------------------------------------------------------
 

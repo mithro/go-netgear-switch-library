@@ -309,6 +309,18 @@ func (r *Reader) GetMgmtIP(ctx context.Context) (model.MgmtIPConfig, error) {
 	return ParseMgmtIP(addr, netmask, routeDest, routeNexthop, dhcp, baseMac, addrRFC4293)
 }
 
+// GetHostname reads the switch's host name from the standard MIB-II sysName
+// scalar, mirroring Python SnmpReader.get_hostname (snmp_read.py:216-222).
+// Standard, so this works on every SNMP model -- including gs728tpp, which
+// publishes no Netgear vendor subtree at all.
+func (r *Reader) GetHostname(ctx context.Context) (string, error) {
+	rows, err := r.client.Get(ctx, []string{SysName})
+	if err != nil {
+		return "", err
+	}
+	return ParseHostname(rows)
+}
+
 // GetUsers always returns an error wrapping model.ErrUnsupportedCapability:
 // this backend does not serve local user accounts, mirroring Python
 // SnmpReader.get_users (snmp_read.py:265-274). Refused BY NAME rather than

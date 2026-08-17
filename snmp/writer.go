@@ -307,6 +307,43 @@ func quoteOrNone(s *string) string {
 	return strconv.Quote(*s)
 }
 
+// SetHostname sets the switch's host name via the standard MIB-II sysName,
+// mirroring Python SnmpWriter.set_hostname (snmp_write.py:956-978).
+//
+// GROUNDED, unlike SetMgmtIP: sysName was confirmed writable on every SNMP
+// model in this fleet on 2026-08-02, by SETting each switch the value it
+// already held.
+//
+// Not force-gated: renaming a switch cannot strand it the way a mgmt-IP
+// write can, and it is trivially reversible by writing the old name back.
+// force is accepted-but-unused, purely so this method's signature matches
+// every other writer.
+func (w *Writer) SetHostname(ctx context.Context, name string, _ bool) error {
+	before, err := w.reader.GetHostname(ctx)
+	if err != nil {
+		return err
+	}
+	vb, err := NewSetVarbind(SysName, name, "s")
+	if err != nil {
+		return err
+	}
+	if err := w.client.SetMany(ctx, []SetVarbind{vb}); err != nil {
+		return err
+	}
+	after, err := w.reader.GetHostname(ctx)
+	if err != nil {
+		return err
+	}
+	if after != name {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("sysName is %q after writing %q", after, name),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
 // SetPortSpeed always returns an error wrapping
 // model.ErrUnsupportedCapability: this backend cannot configure a port's
 // speed. Mirrors Python's SnmpWriter.set_port_speed.

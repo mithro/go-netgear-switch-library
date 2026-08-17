@@ -435,6 +435,39 @@ func TestFacadeWriteIntegration_SetMgmtIPForceRoundTrip(t *testing.T) {
 	}
 }
 
+// TestFacadeWriteIntegration_SetHostnameNotForceGatedRoundTrip proves
+// SetHostname over the facade's default (SNMP) backend, end-to-end against
+// gsm7252ps: UNLIKE SetMgmtIP just above, force=false succeeds (renaming
+// cannot strand a switch), and the new name is visible through GetHostname
+// immediately after.
+func TestFacadeWriteIntegration_SetHostnameNotForceGatedRoundTrip(t *testing.T) {
+	vsw := startVirtualSwitch(t, "gsm7252ps")
+	sw := writableFacadeFor(t, vsw, "gsm7252ps")
+
+	ctx, cancel := context.WithTimeout(context.Background(), facadeTestTimeout)
+	defer cancel()
+
+	original, err := sw.GetHostname(ctx)
+	if err != nil {
+		t.Fatalf("GetHostname() (before) error = %v", err)
+	}
+
+	if err := sw.SetHostname(ctx, "ngsw-facade-test", netgearswitch.Write{Force: false}); err != nil {
+		t.Fatalf("SetHostname(force=false) error = %v, want nil (not force-gated)", err)
+	}
+	got, err := sw.GetHostname(ctx)
+	if err != nil {
+		t.Fatalf("GetHostname() (after) error = %v", err)
+	}
+	if got != "ngsw-facade-test" {
+		t.Errorf("GetHostname() = %q, want %q", got, "ngsw-facade-test")
+	}
+
+	if err := sw.SetHostname(ctx, original, netgearswitch.Write{Force: false}); err != nil {
+		t.Fatalf("SetHostname(restore) error = %v", err)
+	}
+}
+
 // TestFacadeWriteIntegration_WriteVerificationFailureOnAbsentInstancePort
 // mirrors the Python-pinned write-verification-failure scenario (D-WR §5.2/
 // task brief): ifAdminStatus.<port> is a recognized WRITABLE COLUMN

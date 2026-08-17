@@ -114,6 +114,13 @@ func (s *State) OIDMap() map[string]OIDEntry {
 	}
 	out[snmp.SysObjectID] = entry("OID", sysObjectID)
 
+	// sysName: the switch's host name. A STANDARD MIB-II scalar, WRITABLE on
+	// every SNMP model in this fleet (see snmp.SysName's own doc comment) --
+	// unlike sysDescr/sysObjectID above, this has no model-derived fallback:
+	// an unnamed switch's State.Hostname is honestly "", exactly like real
+	// hardware that has never had `hostname` (CLI) or a sysName SET issued.
+	out[snmp.SysName] = entry("OCTETSTR", s.Hostname)
+
 	for port, sim := range s.Ports {
 		out[colKey(snmp.IfAdminStatus, port)] = entry("INTEGER", boolToStatus(sim.Admin))
 		out[colKey(snmp.IfOperStatus, port)] = entry("INTEGER", boolToStatus(sim.Link))

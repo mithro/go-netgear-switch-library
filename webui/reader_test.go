@@ -268,6 +268,17 @@ func TestGS305EPMACTableUnsupportedOnPlus(t *testing.T) {
 	wantUnsupported(t, err, "GetLLDP")
 }
 
+// TestGS305EPGetHostnameUnsupported proves the STANDARD dialect's identity
+// page carries no host-name field -- refused by name rather than
+// fabricating "" (an empty string is a real host name on a switch that has
+// never been named, so it must not double as "this backend cannot tell
+// you").
+func TestGS305EPGetHostnameUnsupported(t *testing.T) {
+	r := mustNewReader(t, newFakeSession(gs305epPages(t)), "gs305ep")
+	_, err := r.GetHostname(context.Background())
+	wantUnsupported(t, err, "GetHostname")
+}
+
 // --- gsm7228ps (S3300 dialect) -- test_http_read.py::_gsm7228ps_pages ---
 
 func gsm7228psPages(t *testing.T) map[string]any {
@@ -366,6 +377,12 @@ func TestGSM7228PSReadsAreGroundedNotRefused(t *testing.T) {
 
 	_, err = r.GetSensors(ctx)
 	wantUnsupported(t, err, "GetSensors") // S3300 sysInfo has no live fan/temp table
+
+	// S3300's sysInfo exposes only the Base MAC Address -- no switch_name
+	// field, so GetHostname is refused by name, mirroring GS305EP/M4300/
+	// XE_FASTPATH.
+	_, err = r.GetHostname(ctx)
+	wantUnsupported(t, err, "GetHostname")
 }
 
 // --- gs110emx (GS110EMX dialect) -- test_http_read.py::_gs110emx_pages ---
@@ -451,6 +468,19 @@ func TestGS110EMXGetMgmtIPFromSysinfo(t *testing.T) {
 	// real captured page text is lowercase ("bc:a5:11:b8:ec:f1").
 	if mgmt.BaseMac == nil || *mgmt.BaseMac != "BC:A5:11:B8:EC:F1" {
 		t.Errorf("BaseMac = %v, want \"BC:A5:11:B8:EC:F1\"", mgmt.BaseMac)
+	}
+}
+
+// TestGS110EMXGetHostnameFromSysinfo proves the GS110EMX's sysInfo.html
+// identity page carries the host name.
+func TestGS110EMXGetHostnameFromSysinfo(t *testing.T) {
+	r := mustNewReader(t, newFakeSession(gs110emxPages(t)), "gs110emx")
+	got, err := r.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname() error = %v", err)
+	}
+	if got != "sw-netgear-gs110emx1" {
+		t.Errorf("GetHostname() = %q, want %q", got, "sw-netgear-gs110emx1")
 	}
 }
 
@@ -693,6 +723,20 @@ func TestGS105PEHTTPPoEUnsupportedNoPSE(t *testing.T) {
 	wantUnsupported(t, err, "GetPoE")
 }
 
+// TestGS105PEGetHostnameFromSwitchInfo proves the GS105PE's switch_info.cgi
+// identity page carries the host name -- one of only two Plus-class
+// dialects (with GS110EMX) whose sysinfo page has a switch_name field.
+func TestGS105PEGetHostnameFromSwitchInfo(t *testing.T) {
+	r := mustNewReader(t, newFakeSession(gs105pePages(t)), "gs105pe")
+	got, err := r.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname() error = %v", err)
+	}
+	if got != "poe-micro3" {
+		t.Errorf("GetHostname() = %q, want %q", got, "poe-micro3")
+	}
+}
+
 // --- m4300-24x (M4300 dialect) -- test_http_read.py::_m4300_pages ---
 
 func m4300Pages(t *testing.T) map[string]any {
@@ -893,6 +937,15 @@ func TestM4300HTTPMgmtAndSensors(t *testing.T) {
 	if !found {
 		t.Error("expected at least one temperature sensor with value > 0")
 	}
+}
+
+// TestM4300GetHostnameUnsupported proves the M4300's identity page carries
+// no host-name field -- this model reads its name over SNMP or the CLI
+// instead.
+func TestM4300GetHostnameUnsupported(t *testing.T) {
+	r := mustNewReader(t, newFakeSession(m4300Pages(t)), "m4300-24x")
+	_, err := r.GetHostname(context.Background())
+	wantUnsupported(t, err, "GetHostname")
 }
 
 // TestM4300HTTPLLDPMatchesLiveSNMP mirrors test_http_read.py::
@@ -1120,6 +1173,16 @@ func TestGSM7252PSEveryReadOpIsServedOverHTTP(t *testing.T) {
 	if mgmt.Mode != model.IPModeDHCP {
 		t.Errorf("Mode = %v, want IPModeDHCP", mgmt.Mode)
 	}
+}
+
+// TestGSM7252PSGetHostnameUnsupported proves the XE_FASTPATH dialect's
+// identity page carries no host-name field -- the one op that is NOT full
+// parity with SNMP/CLI on this model (this model reads its name over SNMP
+// or the CLI instead).
+func TestGSM7252PSGetHostnameUnsupported(t *testing.T) {
+	r := mustNewReader(t, newFakeSession(gsm7252psPages(t)), "gsm7252ps")
+	_, err := r.GetHostname(context.Background())
+	wantUnsupported(t, err, "GetHostname")
 }
 
 // TestReadFastpathMembershipPostsWhenBaseGETShowsAnotherVLAN exercises

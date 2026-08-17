@@ -555,6 +555,31 @@ func TestReaderGetMgmtIPM4300Rename(t *testing.T) {
 	}
 }
 
+// TestReaderGetHostname mirrors GetMgmtIP's shape: one command (HostsCmd,
+// "show hosts"), routed through the already-tested parseHostname.
+func TestReaderGetHostname(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	text := hostsFixture("sw-netgear-gsm7252ps-s1.welland.mithis.com")
+	session := oneShotSession(text)
+	r := mustNewReader(t, session, m)
+
+	got, err := r.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname: %v", err)
+	}
+	want, err := parseHostname(text)
+	if err != nil {
+		t.Fatalf("test setup: parseHostname: %v", err)
+	}
+	if got != want {
+		t.Errorf("GetHostname() = %q, want %q", got, want)
+	}
+	wantCmds := []string{r.spec.HostsCmd}
+	if gotCmds := session.commandsSnapshot(); !reflect.DeepEqual(gotCmds, wantCmds) {
+		t.Errorf("commands = %v, want %v", gotCmds, wantCmds)
+	}
+}
+
 // ---------------------------------------------------------------------
 // GetUsers/GetServices: no captured device-transcript FIXTURE FILE exists
 // for either command at pin b26eb1f (see parse_users_services_test.go's

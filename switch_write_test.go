@@ -64,6 +64,10 @@ type fakeWriter struct {
 		address, netmask, gateway string
 		force                     bool
 	}
+	setHostnameCall *struct {
+		name  string
+		force bool
+	}
 	cyclePoECall *struct {
 		port     int
 		timeouts snmp.PoeCycleTimeouts
@@ -178,6 +182,16 @@ func (f *fakeWriter) SetMgmtIP(_ context.Context, address, netmask, gateway stri
 		address, netmask, gateway string
 		force                     bool
 	}{address, netmask, gateway, force}
+	return f.err
+}
+
+func (f *fakeWriter) SetHostname(_ context.Context, name string, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setHostnameCall = &struct {
+		name  string
+		force bool
+	}{name, force}
 	return f.err
 }
 
@@ -756,6 +770,7 @@ func (f *fakeVLANReader) GetUsers(context.Context) ([]model.SwitchUser, error) {
 func (f *fakeVLANReader) GetServices(context.Context) ([]model.ServiceStatus, error) {
 	panic("not used")
 }
+func (f *fakeVLANReader) GetHostname(context.Context) (string, error) { panic("not used") }
 
 func TestDeleteVlan_ProtectedMemberBlocksWithoutForce(t *testing.T) {
 	clearBackendRegistry(t)

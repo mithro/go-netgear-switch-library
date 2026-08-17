@@ -861,3 +861,240 @@ func TestGS110EMXPoEAndMgmtIPWriteStayHonest(t *testing.T) {
 		t.Errorf("error = %q, want it to contain \"management-IP form\"", err.Error())
 	}
 }
+
+// --- GS110EMX: THE DANGEROUS ONE -- sysInfo.html's shared hostname/
+// management-addressing read-modify-write ------------------------------
+
+// gs110emxSysinfoFakeSession is a hand-built webui.Session for the
+// GS110EMX's sysInfo.html: the SAME form carries the switch's identity
+// (switch_name) AND its management addressing (dhcp_mode/IP_ADDRESS/
+// SUBNET_MASK/GATEWAY_ADDRESS), so this fake's POST handler mutates
+// EXACTLY the fields the incoming form data names -- reproducing the real
+// page's own "whole form POST-back" behavior closely enough that a caller
+// which fails to echo the addressing fields back unchanged would visibly
+// move this fake's own state, exactly as it would strand a real switch.
+// Field shapes (labeled <td> cells, named <input> values, the
+// data-select-value DHCP row) mirror ParseSysInfo's own read-side regexes
+// (parse_gs110emx.go).
+type gs110emxSysinfoFakeSession struct {
+	path         string
+	switchName   string
+	dhcpMode     string // "1"=DHCP (Enable), "2"=static (Disable) -- forms.emxDHCPOn/Off
+	ip, mask, gw string
+	honourWrites bool
+	// mutateAddressOnWrite, when true, simulates a MISBEHAVING device that
+	// moves its own IP on every apply regardless of what was posted --
+	// used to prove the addressing-changed guard fires even when the name
+	// itself DID apply correctly.
+	mutateAddressOnWrite bool
+	posts                []postRecord
+}
+
+func newGS110EMXSysinfoFakeSession() *gs110emxSysinfoFakeSession {
+	return &gs110emxSysinfoFakeSession{
+		path:         "/iss/specific/sysInfo.html",
+		switchName:   "sw-netgear-gs110emx1",
+		dhcpMode:     "2",
+		ip:           "10.1.5.25",
+		mask:         "255.255.255.0",
+		gw:           "10.1.5.1",
+		honourWrites: true,
+	}
+}
+
+func (s *gs110emxSysinfoFakeSession) render() string {
+	return fmt.Sprintf(
+		`<td>Product Name</td><td>GS110EMX</td>`+
+			`<td>Serial Number</td><td>53H60253A0032</td>`+
+			`<td>MAC Address</td><td>bc:a5:11:b8:ec:f1</td>`+
+			`<td>Firmware Version</td><td>1.0.1.4</td>`+
+			`<input name="switch_name" value="%s">`+
+			`<tr data-select-value="%s">`+
+			`<input name="IP_ADDRESS" value="%s">`+
+			`<input name="SUBNET_MASK" value="%s">`+
+			`<input name="GATEWAY_ADDRESS" value="%s">`,
+		s.switchName, s.dhcpMode, s.ip, s.mask, s.gw,
+	)
+}
+
+func (s *gs110emxSysinfoFakeSession) Login(context.Context) error { return nil }
+
+func (s *gs110emxSysinfoFakeSession) GetPage(_ context.Context, path string) (string, error) {
+	if path != s.path {
+		return "", fmt.Errorf("gs110emxSysinfoFakeSession: no page registered for %q", path)
+	}
+	return s.render(), nil
+}
+
+func (s *gs110emxSysinfoFakeSession) PostForm(_ context.Context, path string, data map[string]string) (string, error) {
+	s.posts = append(s.posts, postRecord{path: path, data: cloneMap(data)})
+	if path != s.path {
+		return "", fmt.Errorf("gs110emxSysinfoFakeSession: PostForm to unexpected path %q", path)
+	}
+	if s.honourWrites {
+		s.switchName = data["switch_name"]
+		s.dhcpMode = data["dhcp_mode"]
+		s.ip = data["IP_ADDRESS"]
+		s.mask = data["SUBNET_MASK"]
+		s.gw = data["GATEWAY_ADDRESS"]
+		if s.mutateAddressOnWrite {
+			s.ip = "10.9.9.9"
+		}
+	}
+	return s.render(), nil
+}
+
+func (s *gs110emxSysinfoFakeSession) PostMultipart(_ context.Context, path string, _ map[string]string, _ webui.MultipartFile) (string, error) {
+	return "", fmt.Errorf("gs110emxSysinfoFakeSession: PostMultipart(%q) not supported by this fake", path)
+}
+
+func (s *gs110emxSysinfoFakeSession) PostXML(_ context.Context, path string, _ string) (string, error) {
+	return "", fmt.Errorf("gs110emxSysinfoFakeSession: PostXML(%q) not supported by this fake", path)
+}
+
+var _ webui.Session = (*gs110emxSysinfoFakeSession)(nil)
+
+func TestGS110EMXSetHostnameRoundTrip(t *testing.T) {
+	sess := newGS110EMXSysinfoFakeSession()
+	w := mustNewWriter(t, sess, "gs110emx")
+
+	if err := w.SetHostname(context.Background(), "new-throwaway-name", false); err != nil {
+		t.Fatalf("SetHostname: %v", err)
+	}
+	if sess.switchName != "new-throwaway-name" {
+		t.Errorf("switchName = %q, want %q", sess.switchName, "new-throwaway-name")
+	}
+}
+
+// TestGS110EMXSetHostnamePreservesNetworkConfig is THE load-bearing test
+// for the dangerous read-modify-write: it proves a hostname change leaves
+// the DHCP mode, IP address, subnet mask and gateway byte-identical to
+// what they were before the write, mirroring the live 2026-08-05 hardware
+// verification cited in webui.Writer.setGS110EMXHostname's own doc
+// comment (renamed to a throwaway, confirmed the addressing was
+// byte-identical, restored the original name and confirmed again). A
+// writer that forgot to echo dhcp_mode/IP_ADDRESS/SUBNET_MASK/
+// GATEWAY_ADDRESS back from the page it just read would either send "" for
+// them (this fake would then visibly blank sess.ip/mask/gw, exactly as a
+// naive write would strand a real switch) or the writer's own POST body
+// would omit them and trip the fake session's honest field application.
+func TestGS110EMXSetHostnamePreservesNetworkConfig(t *testing.T) {
+	sess := newGS110EMXSysinfoFakeSession()
+	sess.dhcpMode = "2" // static, so a bug that flips to DHCP is caught too
+	sess.ip = "10.1.5.25"
+	sess.mask = "255.255.255.0"
+	sess.gw = "10.1.5.1"
+	beforeDHCP, beforeIP, beforeMask, beforeGW := sess.dhcpMode, sess.ip, sess.mask, sess.gw
+
+	w := mustNewWriter(t, sess, "gs110emx")
+	if err := w.SetHostname(context.Background(), "renamed-switch", false); err != nil {
+		t.Fatalf("SetHostname: %v", err)
+	}
+
+	if sess.switchName != "renamed-switch" {
+		t.Errorf("switchName = %q, want %q", sess.switchName, "renamed-switch")
+	}
+	if sess.dhcpMode != beforeDHCP {
+		t.Errorf("dhcp_mode changed: got %q, want unchanged %q", sess.dhcpMode, beforeDHCP)
+	}
+	if sess.ip != beforeIP {
+		t.Errorf("IP_ADDRESS changed: got %q, want unchanged %q", sess.ip, beforeIP)
+	}
+	if sess.mask != beforeMask {
+		t.Errorf("SUBNET_MASK changed: got %q, want unchanged %q", sess.mask, beforeMask)
+	}
+	if sess.gw != beforeGW {
+		t.Errorf("GATEWAY_ADDRESS changed: got %q, want unchanged %q", sess.gw, beforeGW)
+	}
+	// Confirm the POST body itself carried the addressing (not just that
+	// the fake happened to leave it alone) -- this is what proves the
+	// writer READ and RE-SENT it, rather than the fake merely ignoring an
+	// absent field.
+	if len(sess.posts) != 1 {
+		t.Fatalf("posts = %d, want exactly 1", len(sess.posts))
+	}
+	post := sess.posts[0].data
+	if post["dhcp_mode"] != beforeDHCP || post["IP_ADDRESS"] != beforeIP ||
+		post["SUBNET_MASK"] != beforeMask || post["GATEWAY_ADDRESS"] != beforeGW {
+		t.Errorf("POST body addressing = %+v, want it to echo dhcp_mode=%q IP_ADDRESS=%q SUBNET_MASK=%q GATEWAY_ADDRESS=%q",
+			post, beforeDHCP, beforeIP, beforeMask, beforeGW)
+	}
+}
+
+// TestGS110EMXSetHostnameDHCPModeEchoedWhenDHCP proves the RMW ALSO
+// preserves a DHCP-configured switch's mode (not just the static case
+// above) -- dhcp_mode must read back as "1" (forms.emxDHCPOn), not silently
+// coerced to static.
+func TestGS110EMXSetHostnameDHCPModeEchoedWhenDHCP(t *testing.T) {
+	sess := newGS110EMXSysinfoFakeSession()
+	sess.dhcpMode = "1" // DHCP
+	w := mustNewWriter(t, sess, "gs110emx")
+	if err := w.SetHostname(context.Background(), "dhcp-switch", false); err != nil {
+		t.Fatalf("SetHostname: %v", err)
+	}
+	if sess.dhcpMode != "1" {
+		t.Errorf("dhcp_mode = %q after hostname write, want unchanged \"1\" (DHCP)", sess.dhcpMode)
+	}
+}
+
+// TestGS110EMXSetHostnameAddressingChangedRaises proves that if the
+// addressing comes back DIFFERENT after the write (a misbehaving device,
+// simulated here), the write reports THAT -- addressing takes priority
+// over a mere name mismatch, mirroring setGS110EMXHostname's own doc
+// comment ("a rename that moved the management address is a far worse
+// outcome than a rename that did not happen").
+func TestGS110EMXSetHostnameAddressingChangedRaises(t *testing.T) {
+	sess := newGS110EMXSysinfoFakeSession()
+	sess.mutateAddressOnWrite = true
+	w := mustNewWriter(t, sess, "gs110emx")
+	err := w.SetHostname(context.Background(), "renamed", false)
+	wantVerificationError(t, err, "SetHostname addressing-changed")
+	if !strings.Contains(err.Error(), "management addressing") {
+		t.Errorf("error = %q, want it to mention the addressing changing", err.Error())
+	}
+}
+
+// TestGS110EMXSetHostnameVerificationFailureRaises proves a device that
+// silently ignores the name (but leaves addressing alone) is still caught.
+func TestGS110EMXSetHostnameVerificationFailureRaises(t *testing.T) {
+	sess := newGS110EMXSysinfoFakeSession()
+	sess.honourWrites = false
+	w := mustNewWriter(t, sess, "gs110emx")
+	err := w.SetHostname(context.Background(), "renamed", false)
+	wantVerificationError(t, err, "SetHostname not reflected")
+}
+
+// TestGS110EMXSetHostnameRejectsInvalidNames mirrors the page's own
+// checkValidName(): 1-20 printable ASCII characters, enforced BEFORE any
+// session I/O.
+func TestGS110EMXSetHostnameRejectsInvalidNames(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"empty", ""},
+		{"too long (21 chars)", strings.Repeat("x", 21)},
+		{"non-ASCII", "sw-café"}, // an em-dash/accented char is NOT in the page's 32..126 range
+		{"control character", "sw-\x01bad"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := newGS110EMXSysinfoFakeSession()
+			w := mustNewWriter(t, sess, "gs110emx")
+			err := w.SetHostname(context.Background(), tc.value, false)
+			wantUnsupported(t, err, fmt.Sprintf("SetHostname(%q)", tc.value))
+			if len(sess.posts) != 0 {
+				t.Errorf("posts = %d, want 0 -- an invalid name must be refused before any session I/O", len(sess.posts))
+			}
+		})
+	}
+}
+
+func TestGS110EMXSetHostnameAcceptsMaxLengthName(t *testing.T) {
+	sess := newGS110EMXSysinfoFakeSession()
+	w := mustNewWriter(t, sess, "gs110emx")
+	name := strings.Repeat("x", 20) // exactly the page's maxlength
+	if err := w.SetHostname(context.Background(), name, false); err != nil {
+		t.Fatalf("SetHostname(20 chars): %v", err)
+	}
+}

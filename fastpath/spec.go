@@ -104,6 +104,13 @@ type CliModelSpec struct {
 	HTTPServiceCmd   string
 	TelnetServiceCmd string
 	SSHServiceCmd    string
+	// HostsCmd is "show hosts" (get_hostname): deliberately NOT "show
+	// running-config | include hostname" -- the two report different values
+	// on real hardware, and only this one agrees with SNMP's sysName. See
+	// snmp.SysName's own doc comment for the measured m4300-16x example.
+	// Constant across every FASTPATH model (no per-model override exists in
+	// commands.py).
+	HostsCmd string
 
 	// --- physical-interface naming -----------------------------------
 	// IfaceTemplate is how this model's firmware ADDRESSES one physical
@@ -164,6 +171,10 @@ type CliModelSpec struct {
 	PoeResetCmd          string
 	PortEnableCmd        string
 	PortDisableCmd       string
+	// HostnameConfigCmd is "hostname {name}" (set_hostname), a global-config
+	// command -- NOT interface-scoped. Constant across every FASTPATH model
+	// (no per-model override exists in commands.py).
+	HostnameConfigCmd string
 	// MgmtIPExecCmds / MgmtIPConfigCmds: exactly one is non-empty per model
 	// (commands.py:167) -- the two management-IP write dialects (privileged
 	// EXEC "network parms ..." vs global-config "ip management address ..."
@@ -338,6 +349,13 @@ func (s *CliModelSpec) PortAdmin(enabled bool) string {
 	return s.PortDisableCmd
 }
 
+// HostnameConfig returns HostnameConfigCmd with {name} filled in, mirroring
+// Python CliModelSpec's `hostname_config_cmd.format(name=name)` use in
+// CliWriter.set_hostname.
+func (s *CliModelSpec) HostnameConfig(name string) string {
+	return formatOne(s.HostnameConfigCmd, "name", name)
+}
+
 // MgmtIP returns (execCmds, configCmds) with {address}/{netmask}/{gateway}
 // filled in on every entry of MgmtIPExecCmds/MgmtIPConfigCmds, mirroring
 // Python CliModelSpec.mgmt_ip (commands.py:221-233). Exactly one of the two
@@ -427,6 +445,7 @@ func newCliModelSpec(modelKey string, captured, readsVerified bool) CliModelSpec
 		HTTPServiceCmd:   "show ip http",
 		TelnetServiceCmd: "show telnetcon",
 		SSHServiceCmd:    "show ip ssh",
+		HostsCmd:         "show hosts",
 
 		IfaceTemplate:       "1/0/{port}",
 		UplinkIfaceTemplate: "", // None
@@ -456,6 +475,7 @@ func newCliModelSpec(modelKey string, captured, readsVerified bool) CliModelSpec
 		PoeResetCmd:            "poe reset",
 		PortEnableCmd:          "no shutdown",
 		PortDisableCmd:         "shutdown",
+		HostnameConfigCmd:      "hostname {name}",
 		MgmtIPExecCmds:         []string{"network parms {address} {netmask} {gateway}"},
 		MgmtIPConfigCmds:       nil, // ()
 		ReloadCmd:              "reload",

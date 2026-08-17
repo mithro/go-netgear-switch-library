@@ -515,6 +515,62 @@ func TestSetPortDescriptionClearingVerificationFailureRaises(t *testing.T) {
 	}
 }
 
+// applySysName is a scripted-apply function for the SysName scalar
+// (GET-keyed, not walked -- see the Reader.GetHostname/client.Get contract),
+// mirroring applyIfAlias's shape for a column OID.
+func applySysName(tables map[string][]Row, vbs []SetVarbind) {
+	for _, vb := range vbs {
+		if vb.OID != SysName {
+			continue
+		}
+		tables[SysName] = []Row{NewStrRow(SysName, toStrValue(vb.Value))}
+	}
+}
+
+func TestSetHostnameSetsSysNameAndVerifies(t *testing.T) {
+	client := newScriptedWriteClient(map[string][]Row{SysName: {NewStrRow(SysName, "old-name")}}, applySysName)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetHostname(context.Background(), "new-name", false); err != nil {
+		t.Fatalf("SetHostname: %v", err)
+	}
+	want := []SetVarbind{{OID: SysName, Value: "new-name", TypeLetter: "s"}}
+	if !setVarbindsEqual(client.sets, want) {
+		t.Errorf("sets = %+v, want %+v", client.sets, want)
+	}
+}
+
+// TestSetHostnameNotForceGated proves force=false succeeds -- renaming
+// cannot strand a switch, unlike SetMgmtIP.
+func TestSetHostnameNotForceGated(t *testing.T) {
+	client := newScriptedWriteClient(map[string][]Row{SysName: {NewStrRow(SysName, "old-name")}}, applySysName)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetHostname(context.Background(), "renamed", false); err != nil {
+		t.Fatalf("SetHostname(force=false) = %v, want success (not force-gated)", err)
+	}
+}
+
+func TestSetHostnameVerificationFailureRaises(t *testing.T) {
+	client := newScriptedWriteClient(map[string][]Row{SysName: {NewStrRow(SysName, "stuck-name")}}, nil) // device ignores the write
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	err = w.SetHostname(context.Background(), "new-name", false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("SetHostname error = %v, want *model.WriteVerificationError", err)
+	}
+	if verr.Before != "stuck-name" || verr.After != "stuck-name" {
+		t.Errorf("verification error before/after = %q/%q, want stuck-name/stuck-name", verr.Before, verr.After)
+	}
+}
+
 func TestSetPortDescriptionProtectedPortBlocksWithoutForce(t *testing.T) {
 	client := newScriptedWriteClient(portTables(1, 1), applyIfAlias)
 	w, err := NewWriter(client, mustModel(t, "gsm7252ps"), WithProtectedPorts(5))

@@ -720,17 +720,22 @@ func applyGoAheadStandard802_3List(state *State, entries []goaheadStandard802_3E
 
 // goaheadWriteXML captures the "POST wcd" DeviceConfiguration objects this
 // Go codebase's writers can post -- Standard802_3List (SetPortDescription/
-// SetPortSpeed) -- mirroring the shape Python web_gs728tpp.apply_write's
-// per-tag dispatch loop reads. SSLCryptoCertificateImportList is detected
-// and handled separately (applyGoAheadWrite, below): its own decode shape
-// (goaheadCertImportXML) predates this struct and is unrelated to
-// Standard802_3List's fields. Other captures every OTHER top-level child's
-// tag name, purely for an honest "no handler for X" refusal message --
-// mirroring Python's `[s.tag for s in root]` diagnostic -- when neither of
-// the two objects above is present: this Go port does not (yet) wire
-// VLANList/VLANMembershipList/VLANInterfaceList/PoEPSEInterfaceList/
-// DeviceBasicInfo the way the real firmware (and the pinned Python fake)
-// does, since no writer in this codebase posts them over the GoAhead
+// SetPortSpeed) and DeviceBasicInfo (SetHostname) -- mirroring the shape
+// Python web_gs728tpp.apply_write's per-tag dispatch loop reads.
+// SSLCryptoCertificateImportList is detected and handled separately
+// (applyGoAheadWrite, below): its own decode shape (goaheadCertImportXML)
+// predates this struct and is unrelated to Standard802_3List's fields.
+// DeviceBasicInfo is a SCALAR section (see deviceBasicInfoBody's own doc
+// comment in webui/goahead_write.go): its one field, deviceName, is a
+// DIRECT child of <DeviceBasicInfo>, with NO <Entry> wrapper, unlike
+// Standard802_3List's repeated <Entry> children -- decoded with its own
+// struct shape rather than goaheadStandard802_3Entry's. Other captures
+// every OTHER top-level child's tag name, purely for an honest "no handler
+// for X" refusal message -- mirroring Python's `[s.tag for s in root]`
+// diagnostic -- when none of the objects above is present: this Go port
+// does not (yet) wire VLANList/VLANMembershipList/VLANInterfaceList/
+// PoEPSEInterfaceList the way the real firmware (and the pinned Python
+// fake) does, since no writer in this codebase posts them over the GoAhead
 // dialect at this pin (webui.Writer's SetPVID/CreateVlan/DeleteVlan/SetPoE
 // do not branch on HTMLDialectGoAheadXML) -- wiring their fake handling
 // without a real caller would be untested surface, so an unrecognized
@@ -739,6 +744,9 @@ type goaheadWriteXML struct {
 	Standard802_3List *struct {
 		Entries []goaheadStandard802_3Entry `xml:"Entry"`
 	} `xml:"Standard802_3List"`
+	DeviceBasicInfo *struct {
+		DeviceName *string `xml:"deviceName"`
+	} `xml:"DeviceBasicInfo"`
 	Other []struct {
 		XMLName xml.Name
 	} `xml:",any"`
@@ -765,6 +773,12 @@ func applyGoAheadWrite(state *State, xmlBody string) string {
 	}
 	if doc.Standard802_3List != nil {
 		applyGoAheadStandard802_3List(state, doc.Standard802_3List.Entries)
+		return goaheadStatusResponse(0, "")
+	}
+	if doc.DeviceBasicInfo != nil {
+		if doc.DeviceBasicInfo.DeviceName != nil {
+			state.Hostname = *doc.DeviceBasicInfo.DeviceName
+		}
 		return goaheadStatusResponse(0, "")
 	}
 	tags := make([]string, len(doc.Other))
@@ -1206,6 +1220,14 @@ func (f *HTTPFace) renderGS110EMXPage(path string, form map[string]string) strin
 	spec := f.spec
 	switch path {
 	case spec.SysinfoPath:
+		// The sysInfo POST carries capital-"Apply" (its own
+		// submitSwitchInfoForm() sets form1.elements["ACTION"].value =
+		// "Apply") -- deliberately NOT the lowercase "apply" the
+		// port_settings.html AJAX apply sends (see ApplyGS110EMXPortSettings
+		// below); both spellings are real, per page.
+		if form["ACTION"] == "Apply" {
+			return ApplyGS110EMXSysinfo(f.state, f.token, form)
+		}
 		return RenderGS110EMXSysinfo(f.state, f.token)
 	case spec.StatsPath:
 		return RenderGS110EMXInterfaceStats(f.state, f.token)

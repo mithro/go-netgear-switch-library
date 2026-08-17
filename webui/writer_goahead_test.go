@@ -270,3 +270,115 @@ func TestSetPortSpeedGoAheadProtectedPortBlocksWithoutForce(t *testing.T) {
 		t.Errorf("posts = %d, want 0 (blocked before any I/O)", len(state.posts))
 	}
 }
+
+// --- SetHostname (GoAhead dialect: DeviceBasicInfo/deviceName) -----------
+
+// goAheadDeviceInfoState models the GS728TPP's SystemInfo (DeviceBasicInfo)
+// section -- just the switch's host name -- mirroring
+// virtual/web_gs728tpp.go's RenderGS728TPPDeviceInfoAndSensors shape
+// closely enough for ParseGoAheadHostname to read it back.
+type goAheadDeviceInfoState struct {
+	hostname     string
+	honourWrites bool
+	posts        []string
+}
+
+func (s *goAheadDeviceInfoState) page() string {
+	return fmt.Sprintf(
+		`<?xml version="1.0" encoding="UTF-8" ?><ResponseData><DeviceConfiguration><DeviceBasicInfo type="section">`+
+			`<deviceName>%s</deviceName></DeviceBasicInfo></DeviceConfiguration></ResponseData>`,
+		s.hostname,
+	)
+}
+
+// postedDeviceBasicInfo decodes just the field a SetHostname POST body
+// carries: deviceName is a DIRECT child of DeviceBasicInfo (a SCALAR
+// section, unlike Standard802_3List's repeated <Entry> children above --
+// see deviceBasicInfoBody's own doc comment in goahead_write.go).
+type postedDeviceBasicInfo struct {
+	DeviceName *string `xml:"deviceName"`
+}
+
+type postedDeviceInfoBody struct {
+	DeviceBasicInfo *postedDeviceBasicInfo `xml:"DeviceBasicInfo"`
+}
+
+// goAheadDeviceInfoSession is the webui.Session double over
+// goAheadDeviceInfoState.
+type goAheadDeviceInfoSession struct{ *goAheadDeviceInfoState }
+
+func (s *goAheadDeviceInfoSession) Login(context.Context) error { return nil }
+
+func (s *goAheadDeviceInfoSession) GetPage(_ context.Context, _ string) (string, error) {
+	return s.page(), nil
+}
+
+func (s *goAheadDeviceInfoSession) PostForm(_ context.Context, path string, _ map[string]string) (string, error) {
+	return "", fmt.Errorf("goAheadDeviceInfoSession: PostForm(%q) not supported by this GoAhead-only fake", path)
+}
+
+func (s *goAheadDeviceInfoSession) PostMultipart(_ context.Context, path string, _ map[string]string, _ webui.MultipartFile) (string, error) {
+	return "", fmt.Errorf("goAheadDeviceInfoSession: PostMultipart(%q) not supported by this GoAhead-only fake", path)
+}
+
+func (s *goAheadDeviceInfoSession) PostXML(_ context.Context, _ string, body string) (string, error) {
+	s.posts = append(s.posts, body)
+	if s.honourWrites {
+		var doc postedDeviceInfoBody
+		if err := xml.Unmarshal([]byte(body), &doc); err != nil {
+			return "", fmt.Errorf("goAheadDeviceInfoSession: malformed POST body: %w", err)
+		}
+		if doc.DeviceBasicInfo != nil && doc.DeviceBasicInfo.DeviceName != nil {
+			s.hostname = *doc.DeviceBasicInfo.DeviceName
+		}
+	}
+	return `<?xml version="1.0" encoding="UTF-8" ?><ResponseData><statusCode>0</statusCode></ResponseData>`, nil
+}
+
+var _ webui.Session = (*goAheadDeviceInfoSession)(nil)
+
+func TestSetHostnameGoAheadSetsAndVerifies(t *testing.T) {
+	state := &goAheadDeviceInfoState{hostname: "sw-netgear-gs728tpp", honourWrites: true}
+	w := newGoAheadWriter(t, &goAheadDeviceInfoSession{state})
+	if err := w.SetHostname(context.Background(), "renamed-gs728tpp", false); err != nil {
+		t.Fatalf("SetHostname: %v", err)
+	}
+	if state.hostname != "renamed-gs728tpp" {
+		t.Errorf("state.hostname = %q, want %q", state.hostname, "renamed-gs728tpp")
+	}
+	if len(state.posts) != 1 {
+		t.Fatalf("posts = %d, want 1", len(state.posts))
+	}
+	// The wire shape is a DIRECT <deviceName> child -- NOT wrapped in
+	// <Entry> the way Standard802_3List's fields are -- see
+	// deviceBasicInfoBody's own doc comment.
+	if strings.Contains(state.posts[0], "<Entry>") {
+		t.Errorf("POST body = %q, want NO <Entry> wrapper (DeviceBasicInfo is a scalar section)", state.posts[0])
+	}
+	if !strings.Contains(state.posts[0], "<deviceName>renamed-gs728tpp</deviceName>") {
+		t.Errorf("POST body = %q, want it to carry <deviceName>renamed-gs728tpp</deviceName> directly", state.posts[0])
+	}
+}
+
+// TestSetHostnameGoAheadNotForceGated proves force=false succeeds --
+// renaming cannot strand a switch.
+func TestSetHostnameGoAheadNotForceGated(t *testing.T) {
+	state := &goAheadDeviceInfoState{hostname: "sw-netgear-gs728tpp", honourWrites: true}
+	w := newGoAheadWriter(t, &goAheadDeviceInfoSession{state})
+	if err := w.SetHostname(context.Background(), "renamed", false); err != nil {
+		t.Fatalf("SetHostname(force=false) = %v, want success (not force-gated)", err)
+	}
+}
+
+func TestSetHostnameGoAheadVerificationFailureRaises(t *testing.T) {
+	state := &goAheadDeviceInfoState{hostname: "stuck-name", honourWrites: false} // device ignores the write
+	w := newGoAheadWriter(t, &goAheadDeviceInfoSession{state})
+	err := w.SetHostname(context.Background(), "new-name", false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("SetHostname error = %v, want *model.WriteVerificationError", err)
+	}
+	if verr.Before != "stuck-name" || verr.After != "stuck-name" {
+		t.Errorf("verification error before/after = %v/%v, want stuck-name/stuck-name", verr.Before, verr.After)
+	}
+}

@@ -92,6 +92,55 @@ func RenderGS110EMXSysinfo(state *State, token string) string {
 	return replacer.Replace(gs110emxSysinfo)
 }
 
+// ApplyGS110EMXSysinfo applies a sysInfo.html POST (GS110EMXSwitchInfoForm's
+// shape -- switch_name/dhcp_mode/IP_ADDRESS/SUBNET_MASK/GATEWAY_ADDRESS/
+// ACTION) and returns the freshly re-rendered page. Unlike
+// ApplyGS110EMXPortSettings' bare "SUCCESS" (that page's own JS is an AJAX
+// apply), this page's submitSwitchInfoForm() does a plain `form1.submit()`
+// -- an ordinary whole-form POST-back -- so re-rendering the page here is
+// the more faithful response shape for that mechanism, even though (like
+// ApplyGS110EMXPortSettings) no direct capture of THIS specific response
+// exists; both are consistent with this model's OWN two established
+// firmware conventions for its two apply forms.
+//
+// Applying EVERY field this form carries (not just switch_name) is
+// deliberate and load-bearing: webui.Writer.SetHostname's GS110EMX path
+// (the DANGEROUS read-modify-write) re-POSTs the CURRENT dhcp_mode/
+// IP_ADDRESS/SUBNET_MASK/GATEWAY_ADDRESS alongside the new name specifically
+// so this fake's own round trip can prove those fields survive unchanged --
+// a fake that silently ignored them would never catch a caller (or a future
+// regression in that writer) that stopped echoing them.
+func ApplyGS110EMXSysinfo(state *State, token string, form map[string]string) string {
+	if name := form["switch_name"]; name != "" {
+		state.Hostname = name
+	}
+	switch form["dhcp_mode"] {
+	case emxDHCPModeOn:
+		state.Mgmt.Mode = "dhcp"
+	case emxDHCPModeOff:
+		state.Mgmt.Mode = "static"
+	}
+	if addr, ok := form["IP_ADDRESS"]; ok {
+		state.Mgmt.Address = addr
+	}
+	if mask, ok := form["SUBNET_MASK"]; ok {
+		state.Mgmt.Netmask = mask
+	}
+	if gw, ok := form["GATEWAY_ADDRESS"]; ok {
+		state.Mgmt.Gateway = gw
+	}
+	return RenderGS110EMXSysinfo(state, token)
+}
+
+// emxDHCPModeOn/emxDHCPModeOff mirror webui's own emxDHCPOn/emxDHCPOff wire
+// values (the GS110EMX sysInfo page's dhcp_mode select: 1 = Enable (DHCP),
+// 2 = Disable (static)) -- duplicated here rather than imported since
+// package virtual does not (and should not) depend on package webui.
+const (
+	emxDHCPModeOn  = "1"
+	emxDHCPModeOff = "2"
+)
+
 // speedMbpsToGS110EMXText converts state speed (Mbps) to port_settings.html
 // speed text, the inverse of webui.speedTextToMbps so a round trip (state ->
 // HTTP page -> reader) reproduces the state value, and HTTP speed_mbps

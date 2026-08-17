@@ -335,6 +335,49 @@ const (
 	emxCtrlModeDisable = "3"
 )
 
+// emxDHCPOn/emxDHCPOff mirror Python forms.EMX_DHCP_ON/EMX_DHCP_OFF: the
+// GS110EMX sysInfo page's dhcp_mode select value -- 1 = Enable (DHCP), 2 =
+// Disable (static). Read off the live page's own `<select name="dhcp_mode">`,
+// whose current value the page carries as `<tr data-select-value="N">` -- the
+// options themselves have no `selected` attribute, so it is the row
+// attribute that says which one is in force (see webui.ParseSysInfo's
+// dhcpSelectValueRE, the read-side twin of this encoding).
+const (
+	emxDHCPOn  = "1"
+	emxDHCPOff = "2"
+)
+
+// GS110EMXSwitchInfoForm builds the GS110EMX sysInfo.html POST body -- the
+// WHOLE form, per the page's own submitSwitchInfoForm() JS (read from the
+// live switch's /function.js, 2026-08-05), mirroring Python
+// forms.gs110emx_switch_info_form (source lines 285-328).
+//
+// EVERY OTHER FIELD MUST BE ECHOED FROM THE PAGE: this one form carries the
+// management addressing as well as the name, so a caller who omits or
+// guesses dhcpMode/ipAddress/subnetMask/gatewayAddress does not merely fail
+// to rename the switch -- it reconfigures the address it is talking to and
+// strands the device. That is why this builder takes all of them and has no
+// defaults.
+//
+// The Gambit session token is added by the transport, as for every other
+// request on this model.
+func GS110EMXSwitchInfoForm(switchName, dhcpMode, ipAddress, subnetMask, gatewayAddress string) map[string]string {
+	return map[string]string{
+		"switch_name": switchName,
+		"dhcp_mode":   dhcpMode,
+		// The page's checkbox, disabled unless DHCP is being turned on; "0"
+		// is its value in the served markup and means "do not re-request a
+		// lease". Sending "1" would make the switch renew and possibly move.
+		"refresh":         "0",
+		"IP_ADDRESS":      ipAddress,
+		"SUBNET_MASK":     subnetMask,
+		"GATEWAY_ADDRESS": gatewayAddress,
+		"refreshFlag":     "0",
+		"errMsg":          "",
+		"ACTION":          "Apply",
+	}
+}
+
 // GS110EMXPortAdminForm builds the GS110EMX port_settings.html admin-mode
 // POST body, mirroring Python forms.gs110emx_port_admin_form (source lines
 // 268-289, dossier §3.5). The Gambit session token is added by the

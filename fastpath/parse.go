@@ -30,6 +30,7 @@
 package fastpath
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1061,6 +1062,44 @@ func parseMgmtIP(text string) model.MgmtIPConfig {
 		Gateway: gateway,
 		BaseMac: baseMac,
 	}
+}
+
+// parseHostname parses "show hosts" into the switch's host name, mirroring
+// Python parse.parse_hostname EXACTLY. The command reports far more than the
+// name -- DNS servers, the domain list, resolver retry counts, the static
+// host-to-address table -- and only the first labelled field is wanted.
+//
+// This is deliberately NOT "show running-config | include hostname": the two
+// report different values on real hardware (see snmp.SysName's own doc
+// comment for the measured m4300-16x example), and "show hosts" is the one
+// that matches SNMP's sysName, so parsing it is what stops the CLI and SNMP
+// backends disagreeing about the same switch.
+//
+// Raises (wraps ErrCliCommandRejected, mirroring Python's CliCommandError)
+// rather than returning "" when the label is absent: every FASTPATH switch
+// measured answers it, so silence means the command failed or the output
+// drifted, and a blank host name would be a fabrication.
+func parseHostname(text string) (string, error) {
+	name, ok := labelledValues(text)["Host name"]
+	if !ok {
+		return "", fmt.Errorf("%w: `show hosts` output carries no 'Host name' field; got: %s",
+			ErrCliCommandRejected, truncateWords(text, 200))
+	}
+	return name, nil
+}
+
+// truncateWords collapses text's whitespace to single spaces (mirroring
+// Python's `" ".join(text.split())`, via the same whitespaceRE this package
+// already uses for that collapse) and truncates to at most n runes,
+// mirroring the `[:200]` slice Python's own CliCommandError messages use --
+// used only to keep an error message's echoed device output bounded.
+func truncateWords(text string, n int) string {
+	joined := strings.TrimSpace(whitespaceRE.ReplaceAllString(text, " "))
+	r := []rune(joined)
+	if len(r) > n {
+		r = r[:n]
+	}
+	return string(r)
 }
 
 // parseUint64 is the uint64 value of text with surrounding whitespace

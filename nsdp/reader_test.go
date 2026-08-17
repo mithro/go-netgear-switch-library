@@ -339,6 +339,53 @@ func TestReader_GetMgmtIPStatic(t *testing.T) {
 	}
 }
 
+// --- get_hostname ---
+
+// TestReader_GetHostnameReadsHostnameTag mirrors Python's get_hostname
+// test: the HOSTNAME tag (0x0003), the same value SNMP would report as
+// sysName -- except a Plus switch has no SNMP agent at all, which is why
+// NSDP carries it.
+func TestReader_GetHostnameReadsHostnameTag(t *testing.T) {
+	reader := newTestReader(t)
+	got, err := reader.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname: %v", err)
+	}
+	if got != "plus-sw" {
+		t.Errorf("GetHostname = %q, want %q", got, "plus-sw")
+	}
+}
+
+// noHostnameNsdpClient answers every Read with a packet carrying MODEL but
+// deliberately NO HOSTNAME TLV -- mirroring a real Plus switch that has
+// never been named, whose HOSTNAME tag answers with nothing rather than an
+// empty-string TLV.
+type noHostnameNsdpClient struct{}
+
+func (noHostnameNsdpClient) Read(_ context.Context, _ []nsdp.Tag) (*nsdp.Packet, error) {
+	pkt := &nsdp.Packet{Op: nsdp.OpReadResponse, ClientMAC: make([]byte, 6), ServerMAC: make([]byte, 6)}
+	pkt.AddTLV(nsdp.TagModel, []byte("GS110EMX"))
+	return pkt, nil
+}
+
+// TestReader_GetHostnameAbsentTagYieldsEmptyString proves a switch that has
+// never been named answers with "" rather than an error: unlike SNMP's
+// sysName (a mandatory scalar), the NSDP HOSTNAME tag is genuinely
+// optional.
+func TestReader_GetHostnameAbsentTagYieldsEmptyString(t *testing.T) {
+	reader, err := nsdp.NewReader(noHostnameNsdpClient{}, gs110emx(t))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := reader.GetHostname(context.Background())
+	if err != nil {
+		t.Fatalf("GetHostname: %v", err)
+	}
+	if got != "" {
+		t.Errorf("GetHostname = %q, want empty string (never named)", got)
+	}
+}
+
 // --- test_get_device_returns_full_device ---
 
 func TestReader_GetDeviceReturnsFullDevice(t *testing.T) {
