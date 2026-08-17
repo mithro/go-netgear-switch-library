@@ -192,6 +192,45 @@ type PoEStatus struct {
 // Delivering reports whether the port is currently delivering PoE power.
 func (p PoEStatus) Delivering() bool { return p.Detect == PoEDetectDelivering }
 
+// PoeCycleComplete reports whether a power-cycled port has finished coming
+// back, mirroring Python models.poe_cycle_complete EXACTLY (added by
+// python-netgear-switch-library commit f8a890f).
+//
+// Success is relative to the port's PRIOR state, not an absolute DELIVERING
+// requirement: a port with NOTHING attached can never reach DELIVERING, so a
+// predicate that demanded it unconditionally would poll out the full timeout
+// and report WriteVerificationError on a cycle that actually worked.
+// LIVE-PROVEN on sw-netgear-gs728tpp.monarto.mithis.com (10.2.5.10, firmware
+// 6.0.1.30) 2026-08-03: cycling port 17 -- link-down with NOTHING attached --
+// performed the off/on correctly and left the port SEARCHING, and a
+// predicate demanding DELIVERING unconditionally polled the full 60s and
+// then raised on a cycle that had worked.
+//
+//   - now == nil: never complete -- a port absent from the read has
+//     obviously not come back, whatever it was doing before.
+//   - before != nil && before.Delivering(): success is delivering AGAIN --
+//     the entire point of cycling a port that had a live PD attached, and
+//     the strict check worth keeping.
+//   - otherwise (before nil/unknown, or before wasn't delivering): success is
+//     merely re-detecting -- SEARCHING or DELIVERING -- since a port with no
+//     powered device can never reach DELIVERING.
+//
+// Shared by every backend that power-cycles a port (snmp.Writer's CyclePoE/
+// ClearPoEFault via its poeRearm, and the GoAhead HTTP writer's
+// goaheadPoERearm), because "has it come back" is a property of the PORT,
+// not of the protocol used to ask it -- mirroring Python's own module
+// comment on models.poe_cycle_complete ("shared by both writers because
+// 'has it come back' is a property of the port, not of the protocol").
+func PoeCycleComplete(before, now *PoEStatus) bool {
+	if now == nil {
+		return false
+	}
+	if before != nil && before.Delivering() {
+		return now.Delivering()
+	}
+	return now.Detect == PoEDetectDelivering || now.Detect == PoEDetectSearching
+}
+
 // VLANInfo describes a single VLAN's configuration. Port sets are
 // canonical: sorted ascending, never nil.
 type VLANInfo struct {

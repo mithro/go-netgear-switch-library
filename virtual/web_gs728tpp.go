@@ -333,6 +333,27 @@ func RenderGS728TPPWcd(state *State, query string) (string, bool) {
 	return "", false
 }
 
+// UnauthenticatedResponse renders what the switch answers a "wcd" request
+// with no valid session, mirroring Python web_gs728tpp.unauthenticated_
+// response (parity commit 64ac7c7).
+//
+// CAPTURED from the live GS728TPP (10.2.5.10, firmware 6.0.1.30) by issuing
+// a request with a stale sessionID cookie. Note what it is NOT: not a 302,
+// not a 401, and not an empty body -- it is HTTP 200 carrying a normal
+// <ResponseData> envelope whose ActionStatus says statusCode 4. That detail
+// is the whole point of reproducing it: a mock that redirected instead
+// (this one used to) would let a client's session-expiry handling look
+// correct while missing the case real hardware actually produces --
+// webui.HTTPClient's own session-expiry detection (client.go's
+// xmlAPISessionLost) keys off exactly this status code.
+func UnauthenticatedResponse() string {
+	return "<?xml version='1.0' encoding='UTF-8'?>\n<ResponseData>\n<ActionStatus>\n" +
+		"<version>1.0</version>\n<requestURL>wcd</requestURL>\n" +
+		"<statusCode>4</statusCode>\n<deviceStatusCode>0</deviceStatusCode>\n" +
+		"<statusString>Request Is not authenticated</statusString>\n" +
+		"</ActionStatus>\n</ResponseData>\n"
+}
+
 // xmlEscape escapes text for embedding as XML character data, mirroring
 // Python's xml.sax.saxutils.escape usage throughout web_gs728tpp.py (this
 // Go port uses the stdlib encoding/xml escaper -- same one httpface.go's

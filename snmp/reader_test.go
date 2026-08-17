@@ -3,17 +3,42 @@ package snmp
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/mithro/go-netgear-switch-library/model"
 )
 
-// fakeReaderClient serves canned Rows by EXACT walked/get-requested OID (a
-// missing key answers an empty walk, mirroring a real agent's
-// noSuchObject/empty-subtree response, never a test-harness error), and
-// records every OID it was asked for, in order -- the contract every
-// Reader method's walk sequence is asserted against below.
+// walkByPrefix returns every canned row at or under baseOID across every
+// table in tables, as a real agent answers a column-scoped GETBULK walk of
+// a whole table canned under its own root -- mirrors Python's
+// _walk_by_prefix (tests/test_snmp_read.py, parity
+// python-netgear-switch-library commit 86af0a9): PREFIX semantics, not
+// exact-key lookup, so a walk of one COLUMN (e.g. PethPsePortAdmin) finds
+// that column's rows even though every fixture in this package files its
+// PoE rows under the whole TABLE's root key (PethPsePortTable) -- exactly
+// the case that exposed the exact-key fake as unfaithful: a fake that only
+// matched whole-table keys would answer nothing for a column walk and so
+// disagree with every real switch. Shared by fakeReaderClient.Walk (this
+// file) and fakeWriteClient.Walk (writer_test.go) -- both in package snmp.
+func walkByPrefix(tables map[string][]Row, baseOID string) []Row {
+	var out []Row
+	for _, rows := range tables {
+		for _, row := range rows {
+			if row.OID == baseOID || strings.HasPrefix(row.OID, baseOID+".") {
+				out = append(out, row)
+			}
+		}
+	}
+	return out
+}
+
+// fakeReaderClient serves canned Rows by OID PREFIX (a base OID with no
+// matching row anywhere answers an empty walk, mirroring a real agent's
+// noSuchObject/empty-subtree response, never a test-harness error -- see
+// walkByPrefix), and records every OID it was asked for, in order -- the
+// contract every Reader method's walk sequence is asserted against below.
 type fakeReaderClient struct {
 	tables   map[string][]Row
 	walked   []string
@@ -35,7 +60,7 @@ func (f *fakeReaderClient) Get(_ context.Context, oids []string) ([]Row, error) 
 
 func (f *fakeReaderClient) Walk(_ context.Context, base string) ([]Row, error) {
 	f.walked = append(f.walked, base)
-	return append([]Row(nil), f.tables[base]...), nil
+	return walkByPrefix(f.tables, base), nil
 }
 
 // mustModel looks up m by key or fails the test, keeping every test call
@@ -336,7 +361,7 @@ func TestGetMACsWalksTwoOIDsInOrderAndJoinsFields(t *testing.T) {
 
 // --- GetPoE: the zero-PSE guard is the parity-critical case -------------
 
-func TestGetPoEWalksTableThenVendorMwAndJoins(t *testing.T) {
+func TestGetPoEWalksTwoColumnsThenVendorMwAndJoins(t *testing.T) {
 	fc := newFakeReaderClient(fullReaderTables(t))
 	m := mustModel(t, "gsm7252ps")
 	r, err := NewReader(fc, m)
@@ -351,7 +376,7 @@ func TestGetPoEWalksTableThenVendorMwAndJoins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPoE: %v", err)
 	}
-	want := []string{PethPsePortTable, vendor.PoEPowerMw}
+	want := []string{PethPsePortAdmin, PethPsePortDetect, vendor.PoEPowerMw}
 	if diff := cmp.Diff(want, fc.walked); diff != "" {
 		t.Errorf("walked OIDs mismatch (-want +got):\n%s", diff)
 	}
@@ -390,9 +415,9 @@ func TestGetPoERaisesForZeroPSEModelBeforeAnyWalk(t *testing.T) {
 }
 
 // TestGetPoENoVendorOidsLeavesPowerHonestlyNil mirrors the gs728tpp code
-// path: a model WITH PoE but no vendor OID subtree walks only the standard
-// table, never a vendor mW column, and every port's PowerMw is nil rather
-// than fabricated.
+// path: a model WITH PoE but no vendor OID subtree walks only the two
+// standard PoE columns, never a vendor mW column, and every port's PowerMw
+// is nil rather than fabricated.
 func TestGetPoENoVendorOidsLeavesPowerHonestlyNil(t *testing.T) {
 	tables := map[string][]Row{
 		PethPsePortTable: {
@@ -409,7 +434,7 @@ func TestGetPoENoVendorOidsLeavesPowerHonestlyNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPoE: %v", err)
 	}
-	if diff := cmp.Diff([]string{PethPsePortTable}, fc.walked); diff != "" {
+	if diff := cmp.Diff([]string{PethPsePortAdmin, PethPsePortDetect}, fc.walked); diff != "" {
 		t.Errorf("walked OIDs mismatch (-want +got):\n%s", diff)
 	}
 	if len(poe) != 1 || poe[0].PowerMw != nil {

@@ -55,11 +55,16 @@ func poeIsOff(status *model.PoEStatus, portUp bool) bool {
 }
 
 // poeRecovered reports whether detect has left FAULT and settled to
-// DELIVERING or SEARCHING -- looser than CyclePoE's own recovery predicate
-// (strictly DELIVERING): used by ClearPoEFault, which doesn't require the
-// port to actually be delivering power, just no longer faulted. Mirrors
-// Python's module-level _poe_recovered.
-func poeRecovered(status *model.PoEStatus) bool {
+// DELIVERING or SEARCHING -- looser than CyclePoE's recovery predicate
+// (model.PoeCycleComplete, which is strict about a port that WAS delivering
+// having to deliver again): used by ClearPoEFault, which doesn't require the
+// port to actually be delivering power, just no longer faulted, whatever it
+// was doing before the clear. Mirrors Python's module-level _poe_recovered
+// EXACTLY -- before is unused (clearing a fault succeeds when the port has
+// left FAULT, whatever it was doing beforehand), kept in the signature only
+// so both recovery predicates poeRearm accepts share one shape (see
+// model.PoeCycleComplete, which CyclePoE passes directly).
+func poeRecovered(_, status *model.PoEStatus) bool {
 	return status != nil &&
 		(status.Detect == model.PoEDetectDelivering || status.Detect == model.PoEDetectSearching)
 }
@@ -87,7 +92,7 @@ func (w *Writer) poeRearm(
 	ctx context.Context,
 	port int,
 	timeouts PoeCycleTimeouts,
-	onRecovered func(*model.PoEStatus) bool,
+	onRecovered func(before, now *model.PoEStatus) bool,
 	onTimeoutMessage func(timeout time.Duration) string,
 ) error {
 	before, err := w.poeStatus(ctx, port)
@@ -143,7 +148,7 @@ func (w *Writer) poeRearm(
 		if err != nil {
 			return err
 		}
-		if onRecovered(status) {
+		if onRecovered(before, status) {
 			return nil
 		}
 		if !w.clock().Before(deadline) {
@@ -160,21 +165,25 @@ func (w *Writer) poeRearm(
 }
 
 // CyclePoE power-cycles port's PoE: off, poll until it actually turns off,
-// on, poll until it returns to DELIVERING. Ported from Python's
-// SnmpWriter.cycle_poe -- see D-WR §2.7.
+// on, poll until model.PoeCycleComplete says it has come back. Ported from
+// Python's SnmpWriter.cycle_poe -- see D-WR §2.7.
 //
 // The guard fires UNCONDITIONALLY (unlike SetPoE's direction-gated guard):
-// cycling a protected port always needs force=true. CyclePoE's own
-// recovery predicate is the strictest of the three PoE predicates in this
-// file: status must be present AND strictly Delivering().
+// cycling a protected port always needs force=true. The recovery predicate
+// used to be unconditionally "status present AND strictly Delivering()",
+// which reported a successful cycle of a port with NOTHING attached as a
+// WriteVerificationError (a port with no powered device can never reach
+// DELIVERING) -- fixed by python-netgear-switch-library commit f8a890f to
+// judge recovery relative to the port's PRIOR state; see
+// model.PoeCycleComplete's doc comment for the measurement that isolated it.
 func (w *Writer) CyclePoE(ctx context.Context, port int, timeouts PoeCycleTimeouts, force bool) error {
 	if err := w.guard(port, force); err != nil {
 		return err
 	}
 	return w.poeRearm(ctx, port, timeouts,
-		func(status *model.PoEStatus) bool { return status != nil && status.Delivering() },
+		model.PoeCycleComplete,
 		func(timeout time.Duration) string {
-			return fmt.Sprintf("PoE port %d did not return to delivering within %s", port, formatSeconds(timeout))
+			return fmt.Sprintf("PoE port %d did not come back after the power cycle within %s", port, formatSeconds(timeout))
 		},
 	)
 }

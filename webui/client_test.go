@@ -623,6 +623,228 @@ func TestXMLAPILoginMissingSessionIDHeaderIsAuthError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// XML_API session-expiry survival (parity commit 64ac7c7): a "wcd" response
+// can answer HTTP 200 with statusCode 4 ("Request Is not authenticated")
+// mid-session -- GROUNDED on the live GS728TPP capture quoted in client.go's
+// xmlAPIUnauthenticatedStatus doc comment. A GET transparently re-logs-in
+// and retries ONCE; a POST (a write) never retries and raises a distinct
+// model.ErrHTTPAuth naming the write as NOT re-sent.
+// ---------------------------------------------------------------------
+
+// xmlAPIExpiringWcdServer builds an XML_API mux (login always succeeds)
+// whose "wcd" endpoint answers unauthenticated -- the same statusCode-4
+// shape virtual/web_gs728tpp.go's UnauthenticatedResponse renders -- for the
+// next armed count of requests it sees (GET or POST), then normal service.
+// Returns hooks to arm the expiry count and read how many times System.xml
+// (a login) and wcd were each hit.
+func xmlAPIExpiringWcdServer(t *testing.T, password, sessionPath string) (server *httptest.Server, arm func(n int), loginCount, wcdCount func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	var remaining, logins, wcds int
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "/"+sessionPath+"/")
+		w.WriteHeader(http.StatusFound)
+	})
+	mux.HandleFunc("/"+sessionPath+"/System.xml", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		logins++
+		mu.Unlock()
+		if r.URL.Query().Get("action") != "login" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Query().Get("user") != "admin" || r.URL.Query().Get("password") != password {
+			_, _ = fmt.Fprint(w, "<statusCode>1</statusCode>")
+			return
+		}
+		w.Header().Set("sessionID", "sid-999")
+		_, _ = fmt.Fprint(w, "<statusCode>0</statusCode>")
+	})
+	mux.HandleFunc("/"+sessionPath+"/wcd", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		wcds++
+		expired := remaining > 0
+		if expired {
+			remaining--
+		}
+		mu.Unlock()
+		if expired {
+			_, _ = fmt.Fprint(w, "<?xml version='1.0' encoding='UTF-8'?>\n<ResponseData>\n<ActionStatus>\n"+
+				"<version>1.0</version>\n<requestURL>wcd</requestURL>\n"+
+				"<statusCode>4</statusCode>\n<deviceStatusCode>0</deviceStatusCode>\n"+
+				"<statusString>Request Is not authenticated</statusString>\n"+
+				"</ActionStatus>\n</ResponseData>\n")
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = fmt.Fprint(w, "WCD-OK")
+		case http.MethodPost:
+			_, _ = fmt.Fprint(w, "WCD-POST-OK")
+		}
+	})
+	server = httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	arm = func(n int) {
+		mu.Lock()
+		remaining = n
+		mu.Unlock()
+	}
+	loginCount = func() int { mu.Lock(); defer mu.Unlock(); return logins }
+	wcdCount = func() int { mu.Lock(); defer mu.Unlock(); return wcds }
+	return server, arm, loginCount, wcdCount
+}
+
+func TestGetPageSurvivesOneExpiredSessionByReLoggingIn(t *testing.T) {
+	const password, sessionPath = "secret", "cs1"
+	server, arm, logins, wcds := xmlAPIExpiringWcdServer(t, password, sessionPath)
+
+	client := webui.NewHTTPClient(trimScheme(server.URL), password, webui.HTTPSpecs["gs728tpp"])
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login() = %v, want nil", err)
+	}
+	if got := logins(); got != 1 {
+		t.Fatalf("logins after initial Login() = %d, want 1", got)
+	}
+
+	arm(1) // the NEXT wcd hit (this GET's first attempt) answers expired.
+	text, err := client.GetPage(ctx, "wcd")
+	if err != nil {
+		t.Fatalf("GetPage() = %v, want nil (transparent re-login+retry)", err)
+	}
+	if text != "WCD-OK" {
+		t.Errorf("GetPage() = %q, want %q", text, "WCD-OK")
+	}
+	if got := logins(); got != 2 {
+		t.Errorf("logins after one expired GET = %d, want 2 (one re-login)", got)
+	}
+	if got := wcds(); got != 2 {
+		t.Errorf("wcd hits after one expired GET = %d, want 2 (the expired attempt + the retry)", got)
+	}
+}
+
+func TestGetPageFailsAfterOneRetryIfStillUnauthenticated(t *testing.T) {
+	const password, sessionPath = "secret", "cs2"
+	server, arm, _, wcds := xmlAPIExpiringWcdServer(t, password, sessionPath)
+
+	client := webui.NewHTTPClient(trimScheme(server.URL), password, webui.HTTPSpecs["gs728tpp"])
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login() = %v, want nil", err)
+	}
+
+	arm(2) // both the initial attempt AND the one retry see the expired body.
+	_, err := client.GetPage(ctx, "wcd")
+	if err == nil {
+		t.Fatal("GetPage() = nil, want an error (still unauthenticated after the one retry)")
+	}
+	if !errors.Is(err, model.ErrHTTPAuth) {
+		t.Errorf("error = %v, want wrapping model.ErrHTTPAuth", err)
+	}
+	if !strings.Contains(err.Error(), "even after re-authenticating") {
+		t.Errorf("error = %q, want it to say the retry also failed", err)
+	}
+	if got := wcds(); got != 2 {
+		t.Errorf("wcd hits = %d, want exactly 2 (initial + one retry, no further looping)", got)
+	}
+}
+
+func TestPostXMLNeverRetriesOnExpiredSessionAndNamesTheWriteNotResent(t *testing.T) {
+	const password, sessionPath = "secret", "cs3"
+	server, arm, logins, wcds := xmlAPIExpiringWcdServer(t, password, sessionPath)
+
+	client := webui.NewHTTPClient(trimScheme(server.URL), password, webui.HTTPSpecs["gs728tpp"])
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login() = %v, want nil", err)
+	}
+	loginsBefore := logins()
+
+	arm(1)
+	_, err := client.PostXML(ctx, "wcd", "<DeviceConfiguration/>")
+	if err == nil {
+		t.Fatal("PostXML() = nil, want an error (expired session)")
+	}
+	if !errors.Is(err, model.ErrHTTPAuth) {
+		t.Errorf("error = %v, want wrapping model.ErrHTTPAuth", err)
+	}
+	if !strings.Contains(err.Error(), "NOT re-sent") {
+		t.Errorf("error = %q, want it to name the write as NOT re-sent", err)
+	}
+	if got := wcds(); got != 1 {
+		t.Errorf("wcd hits = %d, want exactly 1 (a write is NEVER retried)", got)
+	}
+	if got := logins(); got != loginsBefore {
+		t.Errorf("logins = %d, want unchanged at %d (a write does not silently re-login)", got, loginsBefore)
+	}
+}
+
+// TestReLoginClearsStaleSessionCookiesBeforeReAuthenticating is a regression
+// test for loginXMLAPI's stale-cookie deletion (parity commit 64ac7c7's
+// Python comment: "logging in again over a DEAD session's cookies sends the
+// switch credentials it has already rejected"). This fake 403s a login
+// request that still carries any of the three session cookies, so if
+// loginXMLAPI regressed to NOT clearing them first, GetPage's re-login
+// would fail this 403 and the whole transparent-recovery contract above
+// would break.
+func TestReLoginClearsStaleSessionCookiesBeforeReAuthenticating(t *testing.T) {
+	const password, sessionPath = "secret", "cs4"
+	var mu sync.Mutex
+	wcdCalls := 0
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "/"+sessionPath+"/")
+		w.WriteHeader(http.StatusFound)
+	})
+	mux.HandleFunc("/"+sessionPath+"/System.xml", func(w http.ResponseWriter, r *http.Request) {
+		for _, stale := range []string{"userStatus", "usernme", "sessionID"} {
+			if _, err := r.Cookie(stale); err == nil {
+				http.Error(w, "stale "+stale+" cookie present on login", http.StatusForbidden)
+				return
+			}
+		}
+		if r.URL.Query().Get("user") != "admin" || r.URL.Query().Get("password") != password {
+			_, _ = fmt.Fprint(w, "<statusCode>1</statusCode>")
+			return
+		}
+		w.Header().Set("sessionID", "sid-999")
+		_, _ = fmt.Fprint(w, "<statusCode>0</statusCode>")
+	})
+	mux.HandleFunc("/"+sessionPath+"/wcd", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		wcdCalls++
+		expired := wcdCalls == 1
+		mu.Unlock()
+		if expired {
+			_, _ = fmt.Fprint(w, "<statusCode>4</statusCode>")
+			return
+		}
+		_, _ = fmt.Fprint(w, "WCD-OK")
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := webui.NewHTTPClient(trimScheme(server.URL), password, webui.HTTPSpecs["gs728tpp"])
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login() = %v, want nil", err)
+	}
+
+	text, err := client.GetPage(ctx, "wcd")
+	if err != nil {
+		t.Fatalf("GetPage() = %v, want nil -- the re-login must have cleared the stale cookies first", err)
+	}
+	if text != "WCD-OK" {
+		t.Errorf("GetPage() = %q, want %q", text, "WCD-OK")
+	}
+}
+
+// ---------------------------------------------------------------------
 // Shared validateResponse behaviour (dossier §6.7): >=400 -> HttpError;
 // mid-session "redirect to login" body -> HttpAuthError, GET only.
 // ---------------------------------------------------------------------

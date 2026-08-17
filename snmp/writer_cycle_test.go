@@ -112,10 +112,17 @@ func (c *stuckOffPoeClient) Set(_ context.Context, vb SetVarbind) error {
 // (offAfter+1)th / (onAfter+1)th round (and every one after it) sees the
 // transitioned state. This lets a test pin the EXACT number of poll
 // iterations -- and therefore the exact sleep count -- a phase takes
-// before its predicate is satisfied. Only Walk(PethPsePortTable) advances
+// before its predicate is satisfied. Only Walk(PethPsePortAdmin) advances
 // the per-phase counter (every other walk, e.g. GetPorts' ifAdminStatus/
 // ifOperStatus/etc. walks, passes straight through unmodified), since
-// poeRearm's poll loop reads PoE status exactly once per iteration.
+// poeRearm's poll loop reads PoE status exactly once per iteration --
+// GetPoE now issues TWO column walks per call (PethPsePortAdmin then
+// PethPsePortDetect, parity 86af0a9), so the counter must advance on only
+// ONE of the pair to keep "one poll = one counter increment"; it advances
+// on the FIRST of the two (PethPsePortAdmin) so any table transition
+// decided there is already in place -- consistently, not torn -- by the
+// time the SECOND walk of the same poll (PethPsePortDetect) reads the same
+// underlying c.tables[PethPsePortTable].
 type stepPoeClient struct {
 	*fakeWriteClient
 	port              int
@@ -145,7 +152,7 @@ func (c *stepPoeClient) Set(_ context.Context, vb SetVarbind) error {
 }
 
 func (c *stepPoeClient) Walk(ctx context.Context, base string) ([]Row, error) {
-	if base == PethPsePortTable && c.lastSet != 0 {
+	if base == PethPsePortAdmin && c.lastSet != 0 {
 		need := c.offAfter
 		if c.lastSet == 1 {
 			need = c.onAfter
@@ -335,9 +342,13 @@ func TestCyclePoEOffNeverReachedRaisesTimeoutAndTerminates(t *testing.T) {
 }
 
 func TestCyclePoEOnNeverReachedRaisesTimeoutAndTerminates(t *testing.T) {
-	// Phase 2 (-> delivering) must also time out with a typed error, not
-	// hang, when detect never leaves "searching" after admin is
-	// re-enabled.
+	// Phase 2 (-> delivering again) must also time out with a typed error,
+	// not hang, when detect never leaves "disabled" after admin is
+	// re-enabled -- the genuine-failure half of the poe_cycle_complete
+	// predicate (parity f8a890f): poeFullTables(5) starts the port
+	// DELIVERING (before.Delivering() == true), so recovery here demands
+	// delivering AGAIN, not merely SEARCHING -- and stuckOffPoeClient never
+	// gets there.
 	client := newStuckOffPoeClient(poeFullTables(5))
 	w, err := NewWriter(client, mustModel(t, "gsm7252ps"), WithClock(incrementingClock(100*time.Second), noSleep))
 	if err != nil {
@@ -349,8 +360,72 @@ func TestCyclePoEOnNeverReachedRaisesTimeoutAndTerminates(t *testing.T) {
 	if !errors.As(err, &verr) {
 		t.Fatalf("CyclePoE error = %v, want *model.WriteVerificationError", err)
 	}
-	if !strings.Contains(verr.Msg, "did not return to delivering") {
-		t.Errorf("verr.Msg = %q, want it to contain %q", verr.Msg, "did not return to delivering")
+	if !strings.Contains(verr.Msg, "did not come back after the power cycle") {
+		t.Errorf("verr.Msg = %q, want it to contain %q", verr.Msg, "did not come back after the power cycle")
+	}
+}
+
+// --- poe_cycle_complete predicate: relative to the port's PRIOR state ------
+// (parity f8a890f: models.poe_cycle_complete)
+
+// searchingOnlyPoeClient mimics a PoE port with NOTHING attached: admin off
+// turns detect DISABLED and the link down exactly like coherentPoeClient's
+// off branch, but admin on never reaches DELIVERING -- detect settles at
+// SEARCHING and the link never comes up, exactly what a real port with no
+// powered device does (LIVE-PROVEN on sw-netgear-gs728tpp.monarto.mithis.com
+// port 17, 2026-08-03 -- see model.PoeCycleComplete's doc comment). A
+// recovery predicate that unconditionally demanded DELIVERING would poll out
+// the full timeout and report WriteVerificationError on a cycle that had
+// actually worked; model.PoeCycleComplete must not.
+type searchingOnlyPoeClient struct {
+	*fakeWriteClient
+}
+
+func newSearchingOnlyPoeClient(tables map[string][]Row) *searchingOnlyPoeClient {
+	return &searchingOnlyPoeClient{fakeWriteClient: newFakeWriteClient(tables, false)}
+}
+
+func (c *searchingOnlyPoeClient) Set(_ context.Context, vb SetVarbind) error {
+	c.sets = append(c.sets, vb)
+	c.calls = append(c.calls, []SetVarbind{vb})
+	prefix := PethPsePortTable + ".3.1."
+	if !strings.HasPrefix(vb.OID, prefix) {
+		return nil
+	}
+	port := strings.TrimPrefix(vb.OID, prefix)
+	on := toIntValue(vb.Value) == 1
+	admin, detect := int64(2), int64(1) // off: disabled
+	if on {
+		admin, detect = 1, 2 // on: admin enabled, but only ever SEARCHING -- nothing attached
+	}
+	c.tables[PethPsePortTable] = []Row{
+		NewIntRow(fmt.Sprintf("%s.3.1.%s", PethPsePortTable, port), admin),
+		NewIntRow(fmt.Sprintf("%s.6.1.%s", PethPsePortTable, port), detect),
+	}
+	// The link never comes up -- there is nothing attached to negotiate with.
+	c.tables[IfOperStatus] = []Row{NewIntRow(fmt.Sprintf("%s.%s", IfOperStatus, port), 2)}
+	return nil
+}
+
+// TestCyclePoESucceedsWithNothingAttached is the success half of the
+// poe_cycle_complete regression: before=SEARCHING (nothing attached) and
+// after=SEARCHING (still nothing attached, so it never reaches DELIVERING)
+// must SUCCEED -- no WriteVerificationError -- because the port was never
+// delivering to begin with, so re-detecting is the whole of "back".
+func TestCyclePoESucceedsWithNothingAttached(t *testing.T) {
+	tables := poeFullTables(5)
+	tables[PethPsePortTable] = []Row{
+		NewIntRow(fmt.Sprintf("%s.3.1.5", PethPsePortTable), 1),
+		NewIntRow(fmt.Sprintf("%s.6.1.5", PethPsePortTable), 2), // SEARCHING before the cycle
+	}
+	client := newSearchingOnlyPoeClient(tables)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	timeouts := PoeCycleTimeouts{Off: time.Second, On: time.Second, Poll: 0}
+	if err := w.CyclePoE(context.Background(), 5, timeouts, true); err != nil {
+		t.Fatalf("CyclePoE with nothing attached before/after cycle = %v, want success (parity f8a890f: a port that was never delivering must not be held to a DELIVERING bar)", err)
 	}
 }
 
