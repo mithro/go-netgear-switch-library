@@ -37,6 +37,42 @@ func TestParseGoAheadPorts(t *testing.T) {
 	if p5 := byPort[5]; p5.SpeedMbps == nil || *p5.SpeedMbps != 100 {
 		t.Errorf("ports[5].SpeedMbps = %v, want 100", p5.SpeedMbps)
 	}
+	// Port 1: link-down. duplexOperMode 4 (down) decodes to nil (only code
+	// 2 is mapped -- see goaheadDuplexOper). flowControlOperType 2 ->
+	// false. autoNegotiationAdminEnabled 1 -> Auto.
+	if p1.FullDuplex != nil {
+		t.Errorf("ports[1].FullDuplex = %v, want nil (duplexOperMode 4 == down, unmapped)", *p1.FullDuplex)
+	}
+	if p1.FlowControl == nil || *p1.FlowControl {
+		t.Errorf("ports[1].FlowControl = %v, want false", p1.FlowControl)
+	}
+	if p1.SpeedConfig == nil || !p1.SpeedConfig.Autonegotiate {
+		t.Errorf("ports[1].SpeedConfig = %+v, want Auto", p1.SpeedConfig)
+	}
+	// Port 2: link-up, duplexOperMode 2 -> FullDuplex true.
+	if p2 := byPort[2]; p2.FullDuplex == nil || !*p2.FullDuplex {
+		t.Errorf("ports[2].FullDuplex = %v, want true", p2.FullDuplex)
+	}
+	// Port 25: one of the four SFP uplinks FORCED to 1000 full
+	// (autoNegotiationAdminEnabled 2, speedAdmin 1000, duplexAdminMode 3) --
+	// SpeedConfig must decode the forced rate/duplex, not "Auto", even
+	// though this port is link-down (SpeedConfig is a SETTING, reported
+	// regardless of link state, unlike FullDuplex/SpeedMbps).
+	p25 := byPort[25]
+	if p25.LinkUp {
+		t.Fatalf("ports[25] LinkUp = true, want false (fixture precondition)")
+	}
+	if p25.SpeedConfig == nil || p25.SpeedConfig.Autonegotiate ||
+		p25.SpeedConfig.SpeedMbps == nil || *p25.SpeedConfig.SpeedMbps != 1000 ||
+		p25.SpeedConfig.FullDuplex == nil || !*p25.SpeedConfig.FullDuplex {
+		t.Errorf("ports[25].SpeedConfig = %+v, want Forced(1000, full)", p25.SpeedConfig)
+	}
+	if p25.FullDuplex != nil {
+		t.Errorf("ports[25].FullDuplex = %v, want nil (link down)", *p25.FullDuplex)
+	}
+	if p25.FlowControl == nil || *p25.FlowControl {
+		t.Errorf("ports[25].FlowControl = %v, want false", p25.FlowControl)
+	}
 }
 
 // TestParseGoAheadPVIDs pins webui.ParseGoAheadPVIDs (test_parse.py::test_goahead_pvids).

@@ -600,6 +600,29 @@ func TestFacadeHTTPIntegration_GS728TPPReadsAndUnsupportedStatsAndCertUpload(t *
 	if len(ports) != 28 {
 		t.Errorf("len(GetPorts()) = %d, want 28", len(ports))
 	}
+	byPort := make(map[int]netgearswitch.PortStatus, len(ports))
+	for _, p := range ports {
+		byPort[p.Port] = p
+	}
+	// Port 1: link-down, negotiating (SeedGS728TPP's AutonegAdmin default).
+	// FullDuplex must be nil (a down port's duplexOperMode 4 is unmapped),
+	// FlowControl false (FlowControl zero value, the measured GS728TPP
+	// value), SpeedConfig Auto -- round-tripped over the real GoAhead wcd
+	// XML wire shape (web_gs728tpp.go's RenderGS728TPPPorts ->
+	// webui.ParseGoAheadPorts), not read off the seed directly.
+	if p1 := byPort[1]; p1.FullDuplex != nil || p1.FlowControl == nil || *p1.FlowControl ||
+		p1.SpeedConfig == nil || !p1.SpeedConfig.Autonegotiate {
+		t.Errorf("port 1 = %+v, want FullDuplex nil, FlowControl false, SpeedConfig Auto", p1)
+	}
+	// Port 25: one of the four SFP uplinks SeedGS728TPP forces to 1000 full
+	// (AutonegAdmin "2") -- SpeedConfig must decode the forced rate/duplex
+	// even though the port is link-down (a SETTING, not a negotiation
+	// result).
+	if p25 := byPort[25]; p25.SpeedConfig == nil || p25.SpeedConfig.Autonegotiate ||
+		p25.SpeedConfig.SpeedMbps == nil || *p25.SpeedConfig.SpeedMbps != 1000 ||
+		p25.SpeedConfig.FullDuplex == nil || !*p25.SpeedConfig.FullDuplex {
+		t.Errorf("port 25 SpeedConfig = %+v, want Forced(1000, full)", p25.SpeedConfig)
+	}
 
 	_, statsErr := sw.GetStats(ctx, overHTTP())
 	if !errors.Is(statsErr, netgearswitch.ErrUnsupportedCapability) {

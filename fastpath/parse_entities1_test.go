@@ -19,6 +19,7 @@ package fastpath
 // not independent reasoning about what the fixtures "should" parse to.
 
 import (
+	"fmt"
 	"os"
 	"reflect"
 	"sort"
@@ -113,14 +114,25 @@ func TestParseVersion(t *testing.T) {
 
 // wantPort is a compact literal shape for one expected model.PortStatus
 // row; has/speed together encode the *int SpeedMbps field (has=false ->
-// nil, never a fabricated 0).
+// nil, never a fabricated 0). physMode is the raw "show port all" Physical
+// Mode column text for this port, transcribed directly from the fixture
+// file (ground truth, not re-derived via the code under test): "auto"
+// (every port across all four fixtures this suite reads that column for
+// reports exactly "Auto") or "10g" (a forced "10G Full" port -- the
+// LAG-member/SFP-uplink rows each fixture has). FullDuplex/FlowControl are
+// NOT separate wantPort fields: every fixture's Physical Status duplex text
+// is "Full" wherever present (never "Half"), so FullDuplex == link exactly;
+// and every fixture's Flow Mode column reads "Disable" for every physical
+// port row, so FlowControl is always non-nil false -- both computed in
+// wantPorts below rather than hand-transcribed 144 times each.
 type wantPort struct {
-	port  int
-	name  string
-	admin bool
-	link  bool
-	speed int
-	has   bool
+	port     int
+	name     string
+	admin    bool
+	link     bool
+	speed    int
+	has      bool
+	physMode string
 }
 
 func wantPorts(ws []wantPort) []model.PortStatus {
@@ -132,6 +144,23 @@ func wantPorts(ws []wantPort) []model.PortStatus {
 			v := w.speed
 			speed = &v
 		}
+		var fullDuplex *bool
+		if w.link {
+			v := true
+			fullDuplex = &v
+		}
+		flowControl := model.Ptr(false)
+		var speedConfig *model.PortSpeed
+		switch w.physMode {
+		case "auto":
+			v := model.AutoPortSpeed()
+			speedConfig = &v
+		case "10g":
+			v := model.ForcedPortSpeed(10000, true)
+			speedConfig = &v
+		default:
+			panic(fmt.Sprintf("wantPorts: port %d has unrecognized physMode %q", w.port, w.physMode))
+		}
 		out[i] = model.PortStatus{
 			Port:         w.port,
 			Name:         &name,
@@ -139,6 +168,9 @@ func wantPorts(ws []wantPort) []model.PortStatus {
 			LinkUp:       w.link,
 			SpeedMbps:    speed,
 			Description:  nil,
+			FullDuplex:   fullDuplex,
+			FlowControl:  flowControl,
+			SpeedConfig:  speedConfig,
 		}
 	}
 	return out
@@ -154,90 +186,90 @@ func TestParsePortStatus(t *testing.T) {
 			name:    "gsm7252ps 52 physical ports, 1/0/N names",
 			fixture: "gsm7252ps_show_port_all.txt",
 			want: []wantPort{
-				{1, "1/0/1", true, true, 1000, true},
-				{2, "1/0/2", true, true, 1000, true},
-				{3, "1/0/3", true, true, 1000, true},
-				{4, "1/0/4", true, true, 1000, true},
-				{5, "1/0/5", true, true, 1000, true},
-				{6, "1/0/6", true, false, 0, false},
-				{7, "1/0/7", true, true, 1000, true},
-				{8, "1/0/8", true, false, 0, false},
-				{9, "1/0/9", true, true, 100, true},
-				{10, "1/0/10", true, false, 0, false},
-				{11, "1/0/11", true, true, 1000, true},
-				{12, "1/0/12", true, false, 0, false},
-				{13, "1/0/13", true, true, 1000, true},
-				{14, "1/0/14", true, true, 1000, true},
-				{15, "1/0/15", true, false, 0, false},
-				{16, "1/0/16", true, true, 1000, true},
-				{17, "1/0/17", true, true, 1000, true},
-				{18, "1/0/18", true, true, 1000, true},
-				{19, "1/0/19", true, false, 0, false},
-				{20, "1/0/20", true, true, 1000, true},
-				{21, "1/0/21", true, false, 0, false},
-				{22, "1/0/22", true, true, 1000, true},
-				{23, "1/0/23", true, false, 0, false},
-				{24, "1/0/24", true, true, 1000, true},
-				{25, "1/0/25", true, true, 1000, true},
-				{26, "1/0/26", true, true, 100, true},
-				{27, "1/0/27", true, true, 1000, true},
-				{28, "1/0/28", true, false, 0, false},
-				{29, "1/0/29", true, false, 0, false},
-				{30, "1/0/30", true, true, 1000, true},
-				{31, "1/0/31", true, true, 1000, true},
-				{32, "1/0/32", true, true, 1000, true},
-				{33, "1/0/33", true, true, 1000, true},
-				{34, "1/0/34", true, false, 0, false},
-				{35, "1/0/35", true, false, 0, false},
-				{36, "1/0/36", true, false, 0, false},
-				{37, "1/0/37", true, true, 1000, true},
-				{38, "1/0/38", true, true, 1000, true},
-				{39, "1/0/39", true, false, 0, false},
-				{40, "1/0/40", true, false, 0, false},
-				{41, "1/0/41", true, true, 100, true},
-				{42, "1/0/42", true, true, 1000, true},
-				{43, "1/0/43", true, false, 0, false},
-				{44, "1/0/44", true, false, 0, false},
-				{45, "1/0/45", true, true, 100, true},
-				{46, "1/0/46", true, true, 1000, true},
-				{47, "1/0/47", true, true, 1000, true},
-				{48, "1/0/48", true, false, 0, false},
+				{1, "1/0/1", true, true, 1000, true, "auto"},
+				{2, "1/0/2", true, true, 1000, true, "auto"},
+				{3, "1/0/3", true, true, 1000, true, "auto"},
+				{4, "1/0/4", true, true, 1000, true, "auto"},
+				{5, "1/0/5", true, true, 1000, true, "auto"},
+				{6, "1/0/6", true, false, 0, false, "auto"},
+				{7, "1/0/7", true, true, 1000, true, "auto"},
+				{8, "1/0/8", true, false, 0, false, "auto"},
+				{9, "1/0/9", true, true, 100, true, "auto"},
+				{10, "1/0/10", true, false, 0, false, "auto"},
+				{11, "1/0/11", true, true, 1000, true, "auto"},
+				{12, "1/0/12", true, false, 0, false, "auto"},
+				{13, "1/0/13", true, true, 1000, true, "auto"},
+				{14, "1/0/14", true, true, 1000, true, "auto"},
+				{15, "1/0/15", true, false, 0, false, "auto"},
+				{16, "1/0/16", true, true, 1000, true, "auto"},
+				{17, "1/0/17", true, true, 1000, true, "auto"},
+				{18, "1/0/18", true, true, 1000, true, "auto"},
+				{19, "1/0/19", true, false, 0, false, "auto"},
+				{20, "1/0/20", true, true, 1000, true, "auto"},
+				{21, "1/0/21", true, false, 0, false, "auto"},
+				{22, "1/0/22", true, true, 1000, true, "auto"},
+				{23, "1/0/23", true, false, 0, false, "auto"},
+				{24, "1/0/24", true, true, 1000, true, "auto"},
+				{25, "1/0/25", true, true, 1000, true, "auto"},
+				{26, "1/0/26", true, true, 100, true, "auto"},
+				{27, "1/0/27", true, true, 1000, true, "auto"},
+				{28, "1/0/28", true, false, 0, false, "auto"},
+				{29, "1/0/29", true, false, 0, false, "auto"},
+				{30, "1/0/30", true, true, 1000, true, "auto"},
+				{31, "1/0/31", true, true, 1000, true, "auto"},
+				{32, "1/0/32", true, true, 1000, true, "auto"},
+				{33, "1/0/33", true, true, 1000, true, "auto"},
+				{34, "1/0/34", true, false, 0, false, "auto"},
+				{35, "1/0/35", true, false, 0, false, "auto"},
+				{36, "1/0/36", true, false, 0, false, "auto"},
+				{37, "1/0/37", true, true, 1000, true, "auto"},
+				{38, "1/0/38", true, true, 1000, true, "auto"},
+				{39, "1/0/39", true, false, 0, false, "auto"},
+				{40, "1/0/40", true, false, 0, false, "auto"},
+				{41, "1/0/41", true, true, 100, true, "auto"},
+				{42, "1/0/42", true, true, 1000, true, "auto"},
+				{43, "1/0/43", true, false, 0, false, "auto"},
+				{44, "1/0/44", true, false, 0, false, "auto"},
+				{45, "1/0/45", true, true, 100, true, "auto"},
+				{46, "1/0/46", true, true, 1000, true, "auto"},
+				{47, "1/0/47", true, true, 1000, true, "auto"},
+				{48, "1/0/48", true, false, 0, false, "auto"},
 				// A "PC Mbr" Type value (port 50) must not shift the
 				// Admin/Link/Physical Status columns.
-				{49, "1/0/49", true, true, 10000, true},
-				{50, "1/0/50", true, true, 10000, true},
-				{51, "1/0/51", true, true, 10000, true},
-				{52, "1/0/52", true, false, 0, false},
+				{49, "1/0/49", true, true, 10000, true, "10g"},
+				{50, "1/0/50", true, true, 10000, true, "10g"},
+				{51, "1/0/51", true, true, 10000, true, "10g"},
+				{52, "1/0/52", true, false, 0, false, "10g"},
 			},
 		},
 		{
 			name:    "m4300-24x 24 physical ports, lag/vlan pseudo-ifaces dropped",
 			fixture: "m4300_24x_show_port_all.txt",
 			want: []wantPort{
-				{1, "1/0/1", true, true, 10000, true},
-				{2, "1/0/2", true, true, 10000, true},
-				{3, "1/0/3", true, true, 1000, true},
-				{4, "1/0/4", true, false, 0, false},
-				{5, "1/0/5", true, false, 0, false},
-				{6, "1/0/6", true, false, 0, false},
-				{7, "1/0/7", true, false, 0, false},
-				{8, "1/0/8", true, false, 0, false},
-				{9, "1/0/9", true, true, 1000, true},
-				{10, "1/0/10", true, true, 1000, true},
-				{11, "1/0/11", true, false, 0, false},
-				{12, "1/0/12", true, false, 0, false},
-				{13, "1/0/13", true, false, 0, false},
-				{14, "1/0/14", true, false, 0, false},
-				{15, "1/0/15", true, false, 0, false},
-				{16, "1/0/16", true, false, 0, false},
-				{17, "1/0/17", true, false, 0, false},
-				{18, "1/0/18", true, false, 0, false},
-				{19, "1/0/19", true, true, 10000, true},
-				{20, "1/0/20", true, true, 10000, true},
-				{21, "1/0/21", true, true, 10000, true},
-				{22, "1/0/22", true, true, 10000, true},
-				{23, "1/0/23", true, true, 10000, true},
-				{24, "1/0/24", true, true, 10000, true},
+				{1, "1/0/1", true, true, 10000, true, "auto"},
+				{2, "1/0/2", true, true, 10000, true, "auto"},
+				{3, "1/0/3", true, true, 1000, true, "auto"},
+				{4, "1/0/4", true, false, 0, false, "auto"},
+				{5, "1/0/5", true, false, 0, false, "auto"},
+				{6, "1/0/6", true, false, 0, false, "auto"},
+				{7, "1/0/7", true, false, 0, false, "auto"},
+				{8, "1/0/8", true, false, 0, false, "auto"},
+				{9, "1/0/9", true, true, 1000, true, "auto"},
+				{10, "1/0/10", true, true, 1000, true, "auto"},
+				{11, "1/0/11", true, false, 0, false, "auto"},
+				{12, "1/0/12", true, false, 0, false, "auto"},
+				{13, "1/0/13", true, false, 0, false, "auto"},
+				{14, "1/0/14", true, false, 0, false, "auto"},
+				{15, "1/0/15", true, false, 0, false, "auto"},
+				{16, "1/0/16", true, false, 0, false, "auto"},
+				{17, "1/0/17", true, false, 0, false, "auto"},
+				{18, "1/0/18", true, false, 0, false, "auto"},
+				{19, "1/0/19", true, true, 10000, true, "auto"},
+				{20, "1/0/20", true, true, 10000, true, "auto"},
+				{21, "1/0/21", true, true, 10000, true, "10g"},
+				{22, "1/0/22", true, true, 10000, true, "10g"},
+				{23, "1/0/23", true, true, 10000, true, "10g"},
+				{24, "1/0/24", true, true, 10000, true, "10g"},
 			},
 		},
 		{
@@ -248,22 +280,22 @@ func TestParsePortStatus(t *testing.T) {
 			name:    "m4300-16x 16 physical ports, explicit lag 1 row dropped",
 			fixture: "m4300_16x_show_port_all.txt",
 			want: []wantPort{
-				{1, "1/0/1", true, false, 0, false},
-				{2, "1/0/2", true, false, 0, false},
-				{3, "1/0/3", true, false, 0, false},
-				{4, "1/0/4", true, false, 0, false},
-				{5, "1/0/5", true, false, 0, false},
-				{6, "1/0/6", true, false, 0, false},
-				{7, "1/0/7", true, false, 0, false},
-				{8, "1/0/8", true, false, 0, false},
-				{9, "1/0/9", true, true, 10000, true},
-				{10, "1/0/10", true, false, 0, false},
-				{11, "1/0/11", true, false, 0, false},
-				{12, "1/0/12", true, true, 1000, true},
-				{13, "1/0/13", true, false, 0, false},
-				{14, "1/0/14", true, true, 10000, true},
-				{15, "1/0/15", true, false, 0, false},
-				{16, "1/0/16", true, true, 10000, true},
+				{1, "1/0/1", true, false, 0, false, "auto"},
+				{2, "1/0/2", true, false, 0, false, "auto"},
+				{3, "1/0/3", true, false, 0, false, "auto"},
+				{4, "1/0/4", true, false, 0, false, "auto"},
+				{5, "1/0/5", true, false, 0, false, "auto"},
+				{6, "1/0/6", true, false, 0, false, "auto"},
+				{7, "1/0/7", true, false, 0, false, "auto"},
+				{8, "1/0/8", true, false, 0, false, "auto"},
+				{9, "1/0/9", true, true, 10000, true, "auto"},
+				{10, "1/0/10", true, false, 0, false, "auto"},
+				{11, "1/0/11", true, false, 0, false, "auto"},
+				{12, "1/0/12", true, true, 1000, true, "auto"},
+				{13, "1/0/13", true, false, 0, false, "auto"},
+				{14, "1/0/14", true, true, 10000, true, "auto"},
+				{15, "1/0/15", true, false, 0, false, "auto"},
+				{16, "1/0/16", true, true, 10000, true, "auto"},
 			},
 		},
 		{
@@ -273,58 +305,58 @@ func TestParsePortStatus(t *testing.T) {
 			name:    "gsm7228ps 52 ports, Smart-firmware 1/gN + 1/xgN names",
 			fixture: "gsm7228ps_port_all.txt",
 			want: []wantPort{
-				{1, "1/g1", true, false, 0, false},
-				{2, "1/g2", true, false, 0, false},
-				{3, "1/g3", true, false, 0, false},
-				{4, "1/g4", true, false, 0, false},
-				{5, "1/g5", true, false, 0, false},
-				{6, "1/g6", true, false, 0, false},
-				{7, "1/g7", true, false, 0, false},
-				{8, "1/g8", true, false, 0, false},
-				{9, "1/g9", true, false, 0, false},
-				{10, "1/g10", true, false, 0, false},
-				{11, "1/g11", true, false, 0, false},
-				{12, "1/g12", true, false, 0, false},
-				{13, "1/g13", true, false, 0, false},
-				{14, "1/g14", true, false, 0, false},
-				{15, "1/g15", true, false, 0, false},
-				{16, "1/g16", true, false, 0, false},
-				{17, "1/g17", true, false, 0, false},
-				{18, "1/g18", true, false, 0, false},
-				{19, "1/g19", true, false, 0, false},
-				{20, "1/g20", true, false, 0, false},
-				{21, "1/g21", true, false, 0, false},
-				{22, "1/g22", true, false, 0, false},
-				{23, "1/g23", true, false, 0, false},
-				{24, "1/g24", true, false, 0, false},
-				{25, "1/g25", true, false, 0, false},
-				{26, "1/g26", true, false, 0, false},
-				{27, "1/g27", true, false, 0, false},
-				{28, "1/g28", true, false, 0, false},
-				{29, "1/g29", true, false, 0, false},
-				{30, "1/g30", true, false, 0, false},
-				{31, "1/g31", true, false, 0, false},
-				{32, "1/g32", true, false, 0, false},
-				{33, "1/g33", true, false, 0, false},
-				{34, "1/g34", true, false, 0, false},
-				{35, "1/g35", true, false, 0, false},
-				{36, "1/g36", true, false, 0, false},
-				{37, "1/g37", true, false, 0, false},
-				{38, "1/g38", true, false, 0, false},
-				{39, "1/g39", true, false, 0, false},
-				{40, "1/g40", true, false, 0, false},
-				{41, "1/g41", true, false, 0, false},
-				{42, "1/g42", true, false, 0, false},
-				{43, "1/g43", true, false, 0, false},
-				{44, "1/g44", true, false, 0, false},
-				{45, "1/g45", true, false, 0, false},
-				{46, "1/g46", true, false, 0, false},
-				{47, "1/g47", true, false, 0, false},
-				{48, "1/g48", true, false, 0, false},
-				{49, "1/xg49", true, true, 1000, true},
-				{50, "1/xg50", true, false, 0, false},
-				{51, "1/xg51", true, true, 10000, true},
-				{52, "1/xg52", true, false, 0, false},
+				{1, "1/g1", true, false, 0, false, "auto"},
+				{2, "1/g2", true, false, 0, false, "auto"},
+				{3, "1/g3", true, false, 0, false, "auto"},
+				{4, "1/g4", true, false, 0, false, "auto"},
+				{5, "1/g5", true, false, 0, false, "auto"},
+				{6, "1/g6", true, false, 0, false, "auto"},
+				{7, "1/g7", true, false, 0, false, "auto"},
+				{8, "1/g8", true, false, 0, false, "auto"},
+				{9, "1/g9", true, false, 0, false, "auto"},
+				{10, "1/g10", true, false, 0, false, "auto"},
+				{11, "1/g11", true, false, 0, false, "auto"},
+				{12, "1/g12", true, false, 0, false, "auto"},
+				{13, "1/g13", true, false, 0, false, "auto"},
+				{14, "1/g14", true, false, 0, false, "auto"},
+				{15, "1/g15", true, false, 0, false, "auto"},
+				{16, "1/g16", true, false, 0, false, "auto"},
+				{17, "1/g17", true, false, 0, false, "auto"},
+				{18, "1/g18", true, false, 0, false, "auto"},
+				{19, "1/g19", true, false, 0, false, "auto"},
+				{20, "1/g20", true, false, 0, false, "auto"},
+				{21, "1/g21", true, false, 0, false, "auto"},
+				{22, "1/g22", true, false, 0, false, "auto"},
+				{23, "1/g23", true, false, 0, false, "auto"},
+				{24, "1/g24", true, false, 0, false, "auto"},
+				{25, "1/g25", true, false, 0, false, "auto"},
+				{26, "1/g26", true, false, 0, false, "auto"},
+				{27, "1/g27", true, false, 0, false, "auto"},
+				{28, "1/g28", true, false, 0, false, "auto"},
+				{29, "1/g29", true, false, 0, false, "auto"},
+				{30, "1/g30", true, false, 0, false, "auto"},
+				{31, "1/g31", true, false, 0, false, "auto"},
+				{32, "1/g32", true, false, 0, false, "auto"},
+				{33, "1/g33", true, false, 0, false, "auto"},
+				{34, "1/g34", true, false, 0, false, "auto"},
+				{35, "1/g35", true, false, 0, false, "auto"},
+				{36, "1/g36", true, false, 0, false, "auto"},
+				{37, "1/g37", true, false, 0, false, "auto"},
+				{38, "1/g38", true, false, 0, false, "auto"},
+				{39, "1/g39", true, false, 0, false, "auto"},
+				{40, "1/g40", true, false, 0, false, "auto"},
+				{41, "1/g41", true, false, 0, false, "auto"},
+				{42, "1/g42", true, false, 0, false, "auto"},
+				{43, "1/g43", true, false, 0, false, "auto"},
+				{44, "1/g44", true, false, 0, false, "auto"},
+				{45, "1/g45", true, false, 0, false, "auto"},
+				{46, "1/g46", true, false, 0, false, "auto"},
+				{47, "1/g47", true, false, 0, false, "auto"},
+				{48, "1/g48", true, false, 0, false, "auto"},
+				{49, "1/xg49", true, true, 1000, true, "auto"},
+				{50, "1/xg50", true, false, 0, false, "auto"},
+				{51, "1/xg51", true, true, 10000, true, "10g"},
+				{52, "1/xg52", true, false, 0, false, "10g"},
 			},
 		},
 	}

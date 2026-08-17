@@ -938,35 +938,47 @@ func SeedM4300_16X() *State {
 // serves -- a walk of 1.3.6.1.4.1.4526 answers noSuchObject on this
 // switch.
 func SeedGS728TPP() *State {
+	// ServesEtherlike: true on every physical port below -- this agent DOES
+	// serve the EtherLike duplex/pause columns (unlike the GSM7252PS), and
+	// every port reads flow control OFF (FlowControl zero value), MEASURED
+	// 2026-08-03 across all 28 ports on both the SNMP and HTTP backends at
+	// once. AutonegAdmin "2" on 25-28: the same capture's HTTP wcd page
+	// (tests/fixtures/http/gs728tpp_ports.xml) shows the 24 copper ports
+	// auto-negotiating (autoNegotiationAdminEnabled 1, PhysicalMode "Auto")
+	// while the four SFP uplinks 25-28 are FORCED to 1000 full
+	// (autoNegotiationAdminEnabled 2, SpeedAdmin/DuplexAdminMode at their
+	// "1000"/"3" defaults) -- every port reports speedAdmin 1000 and
+	// duplexAdminMode 3 regardless, so AutonegAdmin is the only thing
+	// telling the two apart, exactly like the real capture.
 	ports := map[int]*PortSim{
-		1:  {Name: "g1", Admin: true, Link: false, Speed: 1000},
-		2:  {Name: "g2", Admin: true, Link: true, Speed: 1000},
-		3:  {Name: "g3", Admin: true, Link: false, Speed: 1000},
-		4:  {Name: "g4", Admin: true, Link: false, Speed: 1000},
-		5:  {Name: "g5", Admin: true, Link: true, Speed: 100},
-		6:  {Name: "g6", Admin: true, Link: false, Speed: 1000},
-		7:  {Name: "g7", Admin: true, Link: false, Speed: 1000},
-		8:  {Name: "g8", Admin: true, Link: false, Speed: 1000},
-		9:  {Name: "g9", Admin: true, Link: false, Speed: 1000},
-		10: {Name: "g10", Admin: true, Link: false, Speed: 1000},
-		11: {Name: "g11", Admin: true, Link: false, Speed: 1000},
-		12: {Name: "g12", Admin: true, Link: true, Speed: 100},
-		13: {Name: "g13", Admin: true, Link: false, Speed: 1000},
-		14: {Name: "g14", Admin: true, Link: false, Speed: 1000},
-		15: {Name: "g15", Admin: true, Link: false, Speed: 1000},
-		16: {Name: "g16", Admin: true, Link: false, Speed: 1000},
-		17: {Name: "g17", Admin: true, Link: false, Speed: 1000},
-		18: {Name: "g18", Admin: true, Link: false, Speed: 1000},
-		19: {Name: "g19", Admin: true, Link: false, Speed: 1000},
-		20: {Name: "g20", Admin: true, Link: false, Speed: 1000},
-		21: {Name: "g21", Admin: true, Link: false, Speed: 1000},
-		22: {Name: "g22", Admin: true, Link: false, Speed: 1000},
-		23: {Name: "g23", Admin: true, Link: true, Speed: 100},
-		24: {Name: "g24", Admin: true, Link: true, Speed: 1000},
-		25: {Name: "g25", Admin: true, Link: false, Speed: 1000},
-		26: {Name: "g26", Admin: true, Link: true, Speed: 1000},
-		27: {Name: "g27", Admin: true, Link: false, Speed: 1000},
-		28: {Name: "g28", Admin: true, Link: true, Speed: 1000},
+		1:  {Name: "g1", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		2:  {Name: "g2", Admin: true, Link: true, Speed: 1000, ServesEtherlike: true},
+		3:  {Name: "g3", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		4:  {Name: "g4", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		5:  {Name: "g5", Admin: true, Link: true, Speed: 100, ServesEtherlike: true},
+		6:  {Name: "g6", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		7:  {Name: "g7", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		8:  {Name: "g8", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		9:  {Name: "g9", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		10: {Name: "g10", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		11: {Name: "g11", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		12: {Name: "g12", Admin: true, Link: true, Speed: 100, ServesEtherlike: true},
+		13: {Name: "g13", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		14: {Name: "g14", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		15: {Name: "g15", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		16: {Name: "g16", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		17: {Name: "g17", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		18: {Name: "g18", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		19: {Name: "g19", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		20: {Name: "g20", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		21: {Name: "g21", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		22: {Name: "g22", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true},
+		23: {Name: "g23", Admin: true, Link: true, Speed: 100, ServesEtherlike: true},
+		24: {Name: "g24", Admin: true, Link: true, Speed: 1000, ServesEtherlike: true},
+		25: {Name: "g25", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true, AutonegAdmin: "2"},
+		26: {Name: "g26", Admin: true, Link: true, Speed: 1000, ServesEtherlike: true, AutonegAdmin: "2"},
+		27: {Name: "g27", Admin: true, Link: false, Speed: 1000, ServesEtherlike: true, AutonegAdmin: "2"},
+		28: {Name: "g28", Admin: true, Link: true, Speed: 1000, ServesEtherlike: true, AutonegAdmin: "2"},
 	}
 	// The eight LAG pseudo-interfaces, MEASURED 2026-08-02 on the live switch:
 	// ifName "po 1".."po 8" at ifIndex 1000-1007, ifType 161 (ieee8023adLag).

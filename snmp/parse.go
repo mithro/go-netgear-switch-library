@@ -218,9 +218,20 @@ func filterPhysical(ports []int, physical map[int]bool) []int {
 	return out
 }
 
-// ParsePortStatus builds the per-port operational status from six column
-// walks (admin/oper/speed/name/alias, plus an optional ifType walk for
-// physical-port filtering).
+// dot3DuplexStatus mirrors Python's protocols.snmp.parse._DUPLEX_STATUS:
+// the EtherLike-MIB dot3StatsDuplexStatus enum, where only 2 (halfDuplex)
+// and 3 (fullDuplex) decode to a value -- 1 (unknown) and any absent row
+// both miss this map, which ParsePortStatus reads as "leave nil", never a
+// fabricated false.
+var dot3DuplexStatus = map[int64]bool{2: false, 3: true}
+
+// ParsePortStatus builds the per-port operational status from admin/oper/
+// speed/name/alias walks, plus three OPTIONAL walks: ifType (physical-port
+// filtering), and the EtherLike-MIB dot3StatsDuplexStatus/dot3PauseOperMode
+// columns (FullDuplex/FlowControl). duplex/pause are genuinely absent on
+// some agents -- the GS728TPP serves them, the GSM7252PS does not publish
+// those columns at all -- so a nil/empty walk for either yields FullDuplex/
+// FlowControl == nil for every port, never an invented value.
 //
 // Ports = sorted(admin keys ∪ oper keys), physical-filtered when ifTypes is
 // non-empty. Per port: LinkUp = (oper == 1); AdminEnabled = (admin == 1)
@@ -232,7 +243,13 @@ func filterPhysical(ports []int, physical map[int]bool) []int {
 // Name/Description are nil when the column has no row for the port OR the
 // value is the empty string -- an absent ifAlias and an empty-string
 // ifAlias both mean "no description set", never a fabricated "".
-func ParsePortStatus(admin, oper, speed, names, aliases, ifTypes []Row) ([]model.PortStatus, error) {
+// FullDuplex comes from dot3StatsDuplexStatus via dot3DuplexStatus (a port
+// with no row there, or a row whose value is neither 2 nor 3, stays nil).
+// FlowControl comes from dot3PauseOperMode: 1 is "disabled"; any other
+// value (2/3/4, the enabled directions) means pause frames are in use; a
+// port with no row there stays nil. SpeedConfig is NOT populated by SNMP on
+// any model measured so far -- see model.PortStatus.SpeedConfig.
+func ParsePortStatus(admin, oper, speed, names, aliases, ifTypes, duplex, pause []Row) ([]model.PortStatus, error) {
 	adminMap, err := IndexIntColumn(admin, IfAdminStatus)
 	if err != nil {
 		return nil, err
@@ -260,6 +277,14 @@ func ParsePortStatus(admin, oper, speed, names, aliases, ifTypes []Row) ([]model
 	if err != nil {
 		return nil, err
 	}
+	duplexMap, err := IndexIntColumn(duplex, Dot3StatsDuplexStatus)
+	if err != nil {
+		return nil, err
+	}
+	pauseMap, err := IndexIntColumn(pause, Dot3PauseOperMode)
+	if err != nil {
+		return nil, err
+	}
 
 	ports := filterPhysical(sortedUnion(adminMap, operMap), physical)
 	result := make([]model.PortStatus, 0, len(ports))
@@ -278,6 +303,14 @@ func ParsePortStatus(admin, oper, speed, names, aliases, ifTypes []Row) ([]model
 		if d, ok := aliasMap[p]; ok && d != "" {
 			description = model.Ptr(d)
 		}
+		var fullDuplex *bool
+		if v, ok := dot3DuplexStatus[duplexMap[p]]; ok {
+			fullDuplex = model.Ptr(v)
+		}
+		var flowControl *bool
+		if mode, ok := pauseMap[p]; ok {
+			flowControl = model.Ptr(mode != 1)
+		}
 		result = append(result, model.PortStatus{
 			Port:         p,
 			Name:         name,
@@ -285,6 +318,8 @@ func ParsePortStatus(admin, oper, speed, names, aliases, ifTypes []Row) ([]model
 			LinkUp:       linkUp,
 			SpeedMbps:    speedMbps,
 			Description:  description,
+			FullDuplex:   fullDuplex,
+			FlowControl:  flowControl,
 		})
 	}
 	return result, nil

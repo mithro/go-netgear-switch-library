@@ -135,7 +135,10 @@ func TestGetPortsWalksSixOIDsInOrderAndJoinsFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPorts: %v", err)
 	}
-	want := []string{IfAdminStatus, IfOperStatus, IfHighSpeed, IfName, IfAlias, IfType}
+	want := []string{
+		IfAdminStatus, IfOperStatus, IfHighSpeed, IfName, IfAlias, IfType,
+		Dot3StatsDuplexStatus, Dot3PauseOperMode,
+	}
 	if diff := cmp.Diff(want, fc.walked); diff != "" {
 		t.Errorf("walked OIDs mismatch (-want +got):\n%s", diff)
 	}
@@ -150,6 +153,47 @@ func TestGetPortsWalksSixOIDsInOrderAndJoinsFields(t *testing.T) {
 	}
 	if deref(ports[0].Description) != "uplink" {
 		t.Errorf("Description = %q, want uplink", deref(ports[0].Description))
+	}
+	// gsm7252ps's dot3StatsTable/dot3PauseTable are absent from
+	// fullReaderTables (that model does not serve them on real hardware --
+	// see ParsePortStatus's doc comment), so both stay honestly nil.
+	if ports[0].FullDuplex != nil {
+		t.Errorf("FullDuplex = %v, want nil (gsm7252ps serves no EtherLike columns)", *ports[0].FullDuplex)
+	}
+	if ports[0].FlowControl != nil {
+		t.Errorf("FlowControl = %v, want nil (gsm7252ps serves no EtherLike columns)", *ports[0].FlowControl)
+	}
+}
+
+// TestGetPortsPopulatesFullDuplexAndFlowControlWhenEtherLikeServed verifies
+// a model whose agent DOES serve the EtherLike-MIB duplex/pause columns
+// (GS728TPP, per dossier measurement) gets non-nil FullDuplex/FlowControl
+// from GetPorts, joined from the same walk.
+func TestGetPortsPopulatesFullDuplexAndFlowControlWhenEtherLikeServed(t *testing.T) {
+	tables := fullReaderTables(t)
+	tables[Dot3StatsDuplexStatus] = intRows(Dot3StatsDuplexStatus, map[int]int64{1: 3}) // fullDuplex
+	tables[Dot3PauseOperMode] = intRows(Dot3PauseOperMode, map[int]int64{1: 1})         // disabled
+	fc := newFakeReaderClient(tables)
+	r, err := NewReader(fc, mustModel(t, "gs728tpp"))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	ports, err := r.GetPorts(context.Background())
+	if err != nil {
+		t.Fatalf("GetPorts: %v", err)
+	}
+	if len(ports) != 1 {
+		t.Fatalf("len(ports) = %d, want 1", len(ports))
+	}
+	if ports[0].FullDuplex == nil || !*ports[0].FullDuplex {
+		t.Errorf("FullDuplex = %v, want true", ports[0].FullDuplex)
+	}
+	if ports[0].FlowControl == nil || *ports[0].FlowControl {
+		t.Errorf("FlowControl = %v, want false (dot3PauseOperMode 1 == disabled)", ports[0].FlowControl)
+	}
+	// SNMP never populates SpeedConfig on any model measured so far.
+	if ports[0].SpeedConfig != nil {
+		t.Errorf("SpeedConfig = %+v, want nil (SNMP never reports the configured speed)", ports[0].SpeedConfig)
 	}
 }
 

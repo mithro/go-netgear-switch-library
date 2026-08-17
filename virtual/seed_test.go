@@ -559,6 +559,8 @@ func TestSeedGSM7252PSEmitsNonemptyPortsPvidsPoeSensors(t *testing.T) {
 		rowsFor(m, snmp.IfName),
 		rowsFor(m, snmp.IfAlias),
 		nil,
+		rowsFor(m, snmp.Dot3StatsDuplexStatus),
+		rowsFor(m, snmp.Dot3PauseOperMode),
 	)
 	if err != nil {
 		t.Fatalf("ParsePortStatus: %v", err)
@@ -579,6 +581,12 @@ func TestSeedGSM7252PSEmitsNonemptyPortsPvidsPoeSensors(t *testing.T) {
 	}
 	if derefStr(p1.Description) != "eth0.rpi5-pmod" {
 		t.Errorf("port 1 description = %s, want eth0.rpi5-pmod", strPtrDebug(p1.Description))
+	}
+	// gsm7252ps's real agent serves neither EtherLike-MIB column (see
+	// PortSim.ServesEtherlike's doc comment), so the mock emits none either
+	// -- FullDuplex/FlowControl stay honestly nil, never fabricated.
+	if p1.FullDuplex != nil || p1.FlowControl != nil {
+		t.Errorf("port 1 FullDuplex/FlowControl = %v/%v, want nil/nil (gsm7252ps serves no EtherLike columns)", p1.FullDuplex, p1.FlowControl)
 	}
 	p6 := byPort[6]
 	if p6.LinkUp {
@@ -947,6 +955,62 @@ func TestSeedGS728TPPMgmtAddress(t *testing.T) {
 	state := SeedGS728TPP()
 	if state.Mgmt.Address != "10.2.5.10" {
 		t.Errorf("Mgmt.Address = %q, want 10.2.5.10", state.Mgmt.Address)
+	}
+}
+
+// TestSeedGS728TPPServesEtherlikeOverSNMP proves the ONE SNMP model
+// measured to serve the EtherLike-MIB dot3StatsDuplexStatus/
+// dot3PauseOperMode columns (PortSim.ServesEtherlike) actually projects
+// them into OIDMap, so snmp.ParsePortStatus's FullDuplex/FlowControl come
+// back non-nil -- unlike gsm7252ps (see
+// TestSeedGSM7252PSEmitsNonemptyPortsPvidsPoeSensors, which pins the
+// opposite: nil on a model that serves neither column).
+func TestSeedGS728TPPServesEtherlikeOverSNMP(t *testing.T) {
+	state := SeedGS728TPP()
+	m := state.OIDMap()
+	ports, err := snmp.ParsePortStatus(
+		rowsFor(m, snmp.IfAdminStatus),
+		rowsFor(m, snmp.IfOperStatus),
+		rowsFor(m, snmp.IfHighSpeed),
+		rowsFor(m, snmp.IfName),
+		rowsFor(m, snmp.IfAlias),
+		nil,
+		rowsFor(m, snmp.Dot3StatsDuplexStatus),
+		rowsFor(m, snmp.Dot3PauseOperMode),
+	)
+	if err != nil {
+		t.Fatalf("ParsePortStatus: %v", err)
+	}
+	byPort := make(map[int]model.PortStatus, len(ports))
+	for _, p := range ports {
+		byPort[p.Port] = p
+	}
+	// Port 2 is link-up (seed.go): dot3StatsDuplexStatus reads 3
+	// (fullDuplex) while the link is up -- FullDuplex must be true.
+	p2 := byPort[2]
+	if p2.FullDuplex == nil || !*p2.FullDuplex {
+		t.Errorf("port 2 FullDuplex = %v, want true (link up)", p2.FullDuplex)
+	}
+	// Port 1 is link-down (seed.go): dot3StatsDuplexStatus reads 1
+	// (unknown) -- FullDuplex must be nil, never a fabricated false.
+	p1 := byPort[1]
+	if p1.FullDuplex != nil {
+		t.Errorf("port 1 FullDuplex = %v, want nil (link down -> unknown)", *p1.FullDuplex)
+	}
+	// FlowControl is measured False on every one of this switch's 28 ports
+	// (seed.go's own doc comment on SeedGS728TPP) -- both ports must agree.
+	if p1.FlowControl == nil || *p1.FlowControl {
+		t.Errorf("port 1 FlowControl = %v, want false", p1.FlowControl)
+	}
+	if p2.FlowControl == nil || *p2.FlowControl {
+		t.Errorf("port 2 FlowControl = %v, want false", p2.FlowControl)
+	}
+	// The LAG pseudo-interfaces (1000-1007) do NOT set ServesEtherlike, so
+	// they must stay nil too -- proving the projection is genuinely
+	// per-port, not a model-wide switch.
+	lag := byPort[1000]
+	if lag.FullDuplex != nil || lag.FlowControl != nil {
+		t.Errorf("lag pseudo-interface 1000 FullDuplex/FlowControl = %v/%v, want nil/nil", lag.FullDuplex, lag.FlowControl)
 	}
 }
 

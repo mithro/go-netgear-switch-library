@@ -123,6 +123,26 @@ func (s *State) OIDMap() map[string]OIDEntry {
 		if sim.Description != nil {
 			out[colKey(snmp.IfAlias, port)] = entry("OCTETSTR", *sim.Description)
 		}
+		// EtherLike-MIB duplex/pause columns: emitted ONLY for a model whose
+		// real agent was measured serving them (see PortSim.ServesEtherlike),
+		// exactly like a real agent answering noSuchObject for the whole
+		// subtree on every other model. dot3StatsDuplexStatus: 3 fullDuplex
+		// while the link is up, 1 unknown while it is down -- what the live
+		// GS728TPP returns for every one of its 28 ports. dot3PauseOperMode/
+		// AdminMode: 1 disabled, 4 enabledXmitAndRcv.
+		if sim.ServesEtherlike {
+			duplex := "1"
+			if sim.Link {
+				duplex = "3"
+			}
+			out[colKey(snmp.Dot3StatsDuplexStatus, port)] = entry("INTEGER", duplex)
+			pauseMode := "1"
+			if sim.FlowControl {
+				pauseMode = "4"
+			}
+			out[colKey(snmp.Dot3PauseOperMode, port)] = entry("INTEGER", pauseMode)
+			out[colKey(snmp.Dot3PauseAdminMode, port)] = entry("INTEGER", pauseMode)
+		}
 		// Stat columns: emitted only if the field is not nil (never a
 		// fabricated 0).
 		for _, sc := range []struct {

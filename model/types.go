@@ -128,21 +128,29 @@ type PortStatus struct {
 	// every backend reports it at all. Measured 2026-08-02: the M4300's
 	// EtherLike-MIB dot3 table exposes only error counters, NOT
 	// dot3StatsDuplexStatus (column 19 is absent), so SNMP cannot answer
-	// this and leaves it nil. The FASTPATH CLI does: `show port all`
-	// reports "1000 Full" in its Physical Status column, carrying speed
-	// and duplex together.
+	// this on that model and leaves it nil; the GS728TPP's dot3 table DOES
+	// serve that column, so SNMP answers it there. The FASTPATH CLI always
+	// can: `show port all` reports "1000 Full" in its Physical Status
+	// column, carrying speed and duplex together. The HTTP GoAhead face
+	// (GS728TPP) answers it too, from duplexOperMode -- decoded against
+	// SNMP's own dot3StatsDuplexStatus on the same live switch, not guessed.
 	FullDuplex *bool `json:"full_duplex"`
 	// FlowControl is whether IEEE 802.3x flow control is enabled on the
 	// port ("Flow Mode" in `show port all`). nil where the backend does
-	// not report it.
+	// not report it: SNMP only on a model whose dot3PauseTable serves
+	// AdminMode/OperMode (GS728TPP; the GSM7252PS's table has only
+	// counters), CLI always (the Flow Mode column, located by header name),
+	// HTTP GoAhead always (flowControlOperType).
 	FlowControl *bool `json:"flow_control"`
 	// SpeedConfig is the port's CONFIGURED speed/duplex -- `show port`'s
 	// "Physical Mode" column, as opposed to the "Physical Status" column
-	// the two fields above come from. nil where the backend cannot tell,
-	// which is every backend but the CLI so far: SNMP's ifSpeed and the
-	// Plus models' NSDP port record both report the NEGOTIATED rate only,
-	// and no vendor column carrying the admin setting has been located on
-	// any of them.
+	// the two fields above come from. nil where the backend cannot tell:
+	// SNMP's ifSpeed and the Plus models' NSDP port record both report the
+	// NEGOTIATED rate only, and no vendor column carrying the admin setting
+	// has been located on either of them. The FASTPATH CLI reports it
+	// (Physical Mode column) and so does the HTTP GoAhead face (GS728TPP),
+	// decoding autoNegotiationAdminEnabled/speedAdmin/duplexAdminMode
+	// exactly as that page's own JS does for display.
 	SpeedConfig *PortSpeed `json:"speed_config"`
 }
 

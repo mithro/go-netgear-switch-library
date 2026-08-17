@@ -330,9 +330,11 @@ var (
 )
 
 // Column indices for parsePortStatus, mirroring Python's
-// _PORT_INTF.._PORT_LINK (parse.py:237-241): header is "Intf | Type |
+// _PORT_INTF.._PORT_LINK (parse.py:248-249): header is "Intf | Type |
 // Admin Mode | Physical Mode | Physical Status | Link Status | Link Trap |
-// LACP Mode | Flow Mode" -- only the first 6 columns are ever consulted.
+// LACP Mode | Flow Mode". These six are FIXED offsets -- safe because
+// nothing before "Flow Mode" has ever been observed to move. Flow Mode
+// itself is NOT among them: see portFlowHeader below.
 const (
 	portIntf = iota
 	portType
@@ -341,6 +343,20 @@ const (
 	portPhysStatus
 	portLink
 )
+
+// portFlowHeader is the (lower-cased) substring parsePortStatus locates the
+// Flow Mode column BY HEADER NAME with, mirroring Python's
+// _PORT_FLOW_HEADER (parse.py:261) EXACTLY -- and the reasoning is the
+// point, not just the value. Flow Mode used to be read as cells[-1] ("the
+// last column, so an omitted intermediate column cannot shift it"), which
+// is exactly backwards for a firmware that APPENDS one: the M4300 images'
+// table ends "... | LACP Mode | Flow Mode | Stack Capable", so cells[-1]
+// there is "Yes"/"No" from Stack Capable, and every M4300 port would report
+// FlowControl=false no matter what its Flow Mode said -- a bug that would
+// have turned into a false verify-after-write the moment anyone enabled
+// flow control. Locating the column by header name, wherever it sits,
+// is what defuses that.
+const portFlowHeader = "flow"
 
 // speedMbps converts a "show port all" Physical Status cell to megabits
 // per second, or ok=false if it doesn't start with a number (a down
@@ -363,6 +379,63 @@ func speedMbps(physStatus string) (int, bool) {
 		return value * 1000, true
 	}
 	return value, true
+}
+
+// duplexText reports FULL/HALF from a "show port all" Physical Status (or
+// Physical Mode) cell, e.g. "1000 Full" -> (true, true), mirroring Python
+// _duplex (parse.py:279-290): blank/neither-substring text -> ok=false,
+// never a fabricated false.
+func duplexText(text string) (bool, bool) {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if strings.Contains(t, "full") {
+		return true, true
+	}
+	if strings.Contains(t, "half") {
+		return false, true
+	}
+	return false, false
+}
+
+// findFlowColumn returns the index of the first header name containing
+// portFlowHeader (case-insensitively), or ok=false if none does -- mirrors
+// Python's `next((i for i, name in enumerate(header_columns(text)) if
+// _PORT_FLOW_HEADER in name.lower()), None)` (parse.py:335-342).
+func findFlowColumn(names []string) (int, bool) {
+	for i, n := range names {
+		if strings.Contains(strings.ToLower(n), portFlowHeader) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// parsePhysicalMode decodes a "show port all" Physical Mode cell into the
+// port's CONFIGURED model.PortSpeed, or nil, mirroring Python
+// parse_physical_mode (parse.py:293-318) EXACTLY. This is the column
+// set_port_speed verifies itself against, and it is a DIFFERENT column from
+// Physical Status: Physical Mode is what the port is SET to, Physical
+// Status what it negotiated -- on a down port the first still reads
+// "Auto"/"100 Full" while the second is blank. "" (blank cell) and any text
+// neither "Auto" nor a decodable "<rate> <duplex>" pair both yield nil --
+// never a guess at a word no measured firmware emits.
+func parsePhysicalMode(cell string) *model.PortSpeed {
+	text := strings.TrimSpace(cell)
+	if text == "" {
+		return nil
+	}
+	if strings.ToLower(text) == "auto" {
+		v := model.AutoPortSpeed()
+		return &v
+	}
+	// Same "<rate> <duplex>" shape Physical Status uses, so this goes
+	// through the same two measured parsers rather than a second regex.
+	rate, rateOK := speedMbps(text)
+	duplex, duplexOK := duplexText(text)
+	if !rateOK || !duplexOK {
+		return nil
+	}
+	v := model.ForcedPortSpeed(rate, duplex)
+	return &v
 }
 
 // parseVersion identifies a switch's model from "show version" output,
@@ -394,14 +467,22 @@ func parseVersion(text string, models []*model.SwitchModel) model.DetectedModel 
 }
 
 // parsePortStatus parses "show port all" into one model.PortStatus per
-// physical port, mirroring Python parse_port_status (parse.py:259-288)
+// physical port, mirroring Python parse_port_status (parse.py:321-377)
 // EXACTLY. "lag N" rows are skipped (physPort returns ok=false for them,
-// not filtered by name). speedMbps is only consulted when Link Status is
-// exactly "up" -- EVEN IF Physical Status happens to carry stale text on a
-// down port, defensive: link down implies no negotiated rate is
-// meaningful. Description is ALWAYS nil: "this command carries no ifAlias
-// column" (honest omission, not a bug).
+// not filtered by name). speedMbps/FullDuplex are only consulted when Link
+// Status is exactly "up" -- EVEN IF Physical Status happens to carry stale
+// text on a down port, defensive: link down implies neither a negotiated
+// rate nor a negotiated duplex is meaningful; both come from the SAME
+// Physical Status cell ("1000 Full" carries speed and duplex together).
+// FlowControl comes from the Flow Mode column, located BY HEADER NAME (see
+// portFlowHeader) -- NOT gated on link_up, unlike the two fields above: a
+// down port still has a configured Flow Mode. SpeedConfig comes from
+// Physical Mode (parsePhysicalMode) and is likewise reported whether the
+// port is up or down -- it is a setting, not a negotiation result.
+// Description is ALWAYS nil: "this command carries no ifAlias column"
+// (honest omission, not a bug).
 func parsePortStatus(text string) []model.PortStatus {
+	flowCol, flowOK := findFlowColumn(headerColumns(text, ""))
 	var out []model.PortStatus
 	for _, cells := range iterTableRows(text, "") {
 		if len(cells) <= portLink {
@@ -413,10 +494,19 @@ func parsePortStatus(text string) []model.PortStatus {
 		}
 		linkUp := strings.ToLower(cells[portLink]) == "up"
 		var speed *int
+		var fullDuplex *bool
 		if linkUp {
 			if v, ok := speedMbps(cells[portPhysStatus]); ok {
 				speed = &v
 			}
+			if v, ok := duplexText(cells[portPhysStatus]); ok {
+				fullDuplex = &v
+			}
+		}
+		var flowControl *bool
+		if flowOK && flowCol < len(cells) {
+			v := strings.ToLower(strings.TrimSpace(cells[flowCol])) == "enable"
+			flowControl = &v
 		}
 		name := cells[portIntf]
 		out = append(out, model.PortStatus{
@@ -426,6 +516,9 @@ func parsePortStatus(text string) []model.PortStatus {
 			LinkUp:       linkUp,
 			SpeedMbps:    speed,
 			Description:  nil,
+			FullDuplex:   fullDuplex,
+			FlowControl:  flowControl,
+			SpeedConfig:  parsePhysicalMode(cells[portPhysMode]),
 		})
 	}
 	return out
