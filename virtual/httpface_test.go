@@ -1907,9 +1907,18 @@ func TestHTTPFaceUnsupportedMethodIsNotImplemented(t *testing.T) {
 	}
 }
 
-// -- GoAhead session-check / unauthenticated-redirect (dossier §3.2 step 5) -
+// -- GoAhead session-check / unauthenticated-response (dossier §3.2 step 5,
+// parity commit 64ac7c7) ------------------------------------------------
 
-func TestHTTPFaceGoAheadUnauthenticatedReadRedirects(t *testing.T) {
+// TestHTTPFaceGoAheadUnauthenticatedReadReturnsExpiredSession is a fidelity
+// test: an unauthenticated wcd read is HTTP 200 with statusCode 4, NOT a
+// redirect. CAPTURED from the live GS728TPP (10.2.5.10, firmware 6.0.1.30)
+// by issuing a request with a stale sessionID cookie -- see
+// UnauthenticatedResponse's own doc comment. The mock used to redirect
+// (302), and that unfaithfulness had a cost: an expired session surfaced to
+// callers as "no <DeviceConfiguration> data block found" instead of a clear
+// auth error.
+func TestHTTPFaceGoAheadUnauthenticatedReadReturnsExpiredSession(t *testing.T) {
 	m, err := model.GetModel("gs728tpp")
 	if err != nil {
 		t.Fatalf("model.GetModel: %v", err)
@@ -1920,18 +1929,27 @@ func TestHTTPFaceGoAheadUnauthenticatedReadRedirects(t *testing.T) {
 	}
 	addr, _ := startHTTPFace(t, NewState("gs728tpp"), spec, "password")
 
-	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := noRedirect.Get("http://" + addr + "/cs0000face/wcd?{file=x}") //nolint:noctx,bodyclose // test-only; body closed below.
+	resp, err := http.Get("http://" + addr + "/cs0000face/wcd?{file=x}") //nolint:noctx,bodyclose // test-only; body closed below.
 	if err != nil {
 		t.Fatalf("GET wcd without a session cookie: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusFound {
-		t.Errorf("GET wcd without a session cookie status = %d, want 302", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET wcd without a session cookie status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading response body: %v", err)
+	}
+	if !strings.Contains(string(body), "<statusCode>4</statusCode>") {
+		t.Errorf("GET wcd without a session cookie body = %q, want <statusCode>4</statusCode>", body)
 	}
 }
 
-func TestHTTPFaceGoAheadUnauthenticatedWriteRedirects(t *testing.T) {
+// TestHTTPFaceGoAheadUnauthenticatedWriteReturnsExpiredSession is the write
+// counterpart of the read fidelity test above: same HTTP 200 + statusCode 4
+// shape, not a redirect.
+func TestHTTPFaceGoAheadUnauthenticatedWriteReturnsExpiredSession(t *testing.T) {
 	m, err := model.GetModel("gs728tpp")
 	if err != nil {
 		t.Fatalf("model.GetModel: %v", err)
@@ -1942,14 +1960,173 @@ func TestHTTPFaceGoAheadUnauthenticatedWriteRedirects(t *testing.T) {
 	}
 	addr, _ := startHTTPFace(t, NewState("gs728tpp"), spec, "password")
 
-	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := noRedirect.Post("http://"+addr+"/cs0000face/wcd", "application/xml", strings.NewReader("<x/>")) //nolint:noctx,bodyclose // test-only; body closed below.
+	resp, err := http.Post("http://"+addr+"/cs0000face/wcd", "application/xml", strings.NewReader("<x/>")) //nolint:noctx,bodyclose // test-only; body closed below.
 	if err != nil {
 		t.Fatalf("POST wcd without a session cookie: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusFound {
-		t.Errorf("POST wcd without a session cookie status = %d, want 302", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("POST wcd without a session cookie status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading response body: %v", err)
+	}
+	if !strings.Contains(string(body), "<statusCode>4</statusCode>") {
+		t.Errorf("POST wcd without a session cookie body = %q, want <statusCode>4</statusCode>", body)
+	}
+}
+
+// TestHTTPFaceGoAheadExpiredSessionReadRecoversTransparently is the Go
+// counterpart of Python's test_expired_session_recovers_on_a_read_but_never_
+// resends_a_write (tests/virtual/test_virtual_http_face.py, parity commit
+// 64ac7c7)'s READ half: a session that dies mid-run (SimulateGoAheadSession
+// Expiry -- see that method's own doc comment for why this mock arms the
+// expiry server-side rather than corrupting the client's private cookie
+// jar the way the Python test does) must not surface as a parse error --
+// webui.HTTPClient.GetPage re-authenticates and re-issues the GET once,
+// transparently, and the caller gets the real page back.
+func TestHTTPFaceGoAheadExpiredSessionReadRecoversTransparently(t *testing.T) {
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, face := startHTTPFace(t, NewState("gs728tpp"), spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	defer client.Close()
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	// A read before arming must not be affected.
+	if body, err := client.GetPage(ctx, spec.VlanConfigPath); err != nil || !strings.Contains(body, "VLANList") {
+		t.Fatalf("GetPage before simulated expiry = (%q, %v), want VLANList data, nil", body, err)
+	}
+
+	face.SimulateGoAheadSessionExpiry(1)
+	body, err := client.GetPage(ctx, spec.VlanConfigPath)
+	if err != nil {
+		t.Fatalf("GetPage after simulated session expiry: %v", err)
+	}
+	if !strings.Contains(body, "VLANList") {
+		t.Errorf("GetPage after transparent re-login = %q, want it to carry VLANList data", body)
+	}
+
+	// The arm-once flag was consumed: a further read is unaffected.
+	if body, err := client.GetPage(ctx, spec.VlanConfigPath); err != nil || !strings.Contains(body, "VLANList") {
+		t.Errorf("GetPage after the one-shot expiry fired = (%q, %v), want VLANList data, nil", body, err)
+	}
+}
+
+// TestHTTPFaceGoAheadExpiredSessionReadFailsIfStillUnauthenticatedAfterRetry
+// covers GetPage's OTHER branch: the retried GET is STILL unauthenticated
+// (the switch genuinely will not let this session back in), so GetPage
+// raises model.ErrHTTPAuth rather than looping -- mirrors Python's
+// `if _xml_api_session_lost(...): raise HttpAuthError(...)` fallback inside
+// get_page (parity commit 64ac7c7), which the mock reaches by leaving the
+// session permanently unauthenticated (no valid cookie at all) rather than
+// arming a one-shot expiry.
+func TestHTTPFaceGoAheadExpiredSessionReadFailsIfStillUnauthenticatedAfterRetry(t *testing.T) {
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, face := startHTTPFace(t, NewState("gs728tpp"), spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	defer client.Close()
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	// times=2: GetPage's own re-login (a "/" redirect + a System.xml GET,
+	// neither of which is a wcd request and so neither consumes this count)
+	// always succeeds against this mock, but BOTH of GetPage's wcd attempts
+	// (the initial one and its one retry) still land on an armed expiry --
+	// modelling a session the switch genuinely will not let back in.
+	face.SimulateGoAheadSessionExpiry(2)
+
+	_, err = client.GetPage(ctx, spec.VlanConfigPath)
+	if err == nil {
+		t.Fatal("GetPage with the session still unauthenticated after retry: want an error, got nil")
+	}
+	if !errors.Is(err, model.ErrHTTPAuth) {
+		t.Errorf("GetPage error = %v, want errors.Is(_, model.ErrHTTPAuth)", err)
+	}
+	if !strings.Contains(err.Error(), "even after re-authenticating") {
+		t.Errorf("GetPage error = %q, want it to say the retry also failed", err)
+	}
+}
+
+// TestHTTPFaceGoAheadExpiredSessionWriteNeverRetries is the Go counterpart
+// of Python's test_expired_session_recovers_on_a_read_but_never_resends_a_
+// write's WRITE half: a write answered as an expired session must NOT be
+// silently re-logged-in-and-resent -- a rejected write is not proof the
+// switch ignored it. webui.HTTPClient.PostXML instead raises
+// model.ErrHTTPAuth naming the write as NOT re-sent, matching Python's
+// `pytest.raises(HttpAuthError, match="NOT re-sent")`.
+func TestHTTPFaceGoAheadExpiredSessionWriteNeverRetries(t *testing.T) {
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	// SeedGS728TPP (not the empty NewState the other session-expiry tests
+	// use): the trailing GetVLANs check below needs a state whose VLANList
+	// page actually parses (an entirely empty VLAN table has no rows to
+	// read), and this seed carries no VLAN 4007 already, so its absence
+	// after the rejected write is a meaningful assertion.
+	addr, face := startHTTPFace(t, SeedGS728TPP(), spec, "password")
+
+	client := webui.NewHTTPClient(addr, "password", spec)
+	defer client.Close()
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	face.SimulateGoAheadSessionExpiry(1)
+	body := "<?xml version='1.0' encoding='utf-8'?><DeviceConfiguration>" +
+		"<VLANList action=\"set\"><VLAN><VLANID>4007</VLANID><VLANName>nope</VLANName></VLAN></VLANList>" +
+		"</DeviceConfiguration>"
+	_, err = client.PostXML(ctx, spec.XMLWritePath, body)
+	if err == nil {
+		t.Fatal("PostXML after simulated session expiry: want an error, got nil")
+	}
+	if !errors.Is(err, model.ErrHTTPAuth) {
+		t.Errorf("PostXML error = %v, want errors.Is(_, model.ErrHTTPAuth)", err)
+	}
+	if !strings.Contains(err.Error(), "NOT re-sent") {
+		t.Errorf("PostXML error = %q, want it to name the write as NOT re-sent", err)
+	}
+
+	// The write must genuinely not have reached applyGoAheadWrite: VLAN 4007
+	// must not exist.
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	vlans, err := reader.GetVLANs(ctx)
+	if err != nil {
+		t.Fatalf("GetVLANs: %v", err)
+	}
+	for _, v := range vlans {
+		if v.VlanID == 4007 {
+			t.Errorf("GetVLANs = %+v, want VLAN 4007 absent (the write must not have been applied)", vlans)
+		}
 	}
 }
 

@@ -56,6 +56,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -210,6 +211,17 @@ func (c *HTTPClient) setLoggedIn(token, sessionPath string) {
 	c.loggedIn = true
 	c.token = token
 	c.sessionPath = sessionPath
+}
+
+// setLoggedOut mirrors GetPage's Python counterpart's bare
+// `self._logged_in = False` assignment (parity commit 64ac7c7): forces the
+// next ensureLoggedIn (or the immediate explicit c.Login call GetPage makes
+// right after) to actually re-authenticate rather than trusting a session
+// the switch has just said is dead.
+func (c *HTTPClient) setLoggedOut() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.loggedIn = false
 }
 
 func (c *HTTPClient) getToken() string {
@@ -393,13 +405,57 @@ func xmlAPISessionPath(spec *HTTPModelSpec, resp *http.Response) (string, error)
 	return m[1], nil
 }
 
+// xmlAPIUnauthenticatedStatus/xmlAPIStatusRE mirror Python's
+// _XML_API_UNAUTHENTICATED/_XML_API_STATUS_RE (parity commit 64ac7c7): what
+// the GS728TPP answers a "wcd" request once its session has expired.
+// CAPTURED from 10.2.5.10 (firmware 6.0.1.30) by making a request with a
+// stale sessionID cookie -- HTTP **200**, with no <DeviceConfiguration>:
+//
+//	<ResponseData><ActionStatus>
+//	  <requestURL>/cs5f72b8e1/wcd</requestURL>
+//	  <statusCode>4</statusCode><deviceStatusCode>0</deviceStatusCode>
+//	  <statusString>Request Is not authenticated</statusString>
+//	</ActionStatus></ResponseData>
+//
+// The status code is the signal. The absence of <ResponseData> is NOT: this
+// reply has one, which is why an earlier guess at the signal did not catch
+// it, and the expiry surfaced several layers up as "no <DeviceConfiguration>
+// data block found" -- reading like a parser bug rather than an expired
+// cookie.
+const xmlAPIUnauthenticatedStatus = 4
+
+var xmlAPIStatusRE = regexp.MustCompile(`<statusCode>(\d+)</statusCode>`)
+
+// xmlAPISessionLost reports whether text is a "wcd" response saying the
+// session is no longer authenticated, mirroring Python
+// _xml_api_session_lost EXACTLY: always false for a non-XML_API model (this
+// detection only applies to the GS728TPP GoAhead dialect).
+func xmlAPISessionLost(spec *HTTPModelSpec, text string) bool {
+	if spec.Scheme != LoginSchemeXMLAPI {
+		return false
+	}
+	m := xmlAPIStatusRE.FindStringSubmatch(text)
+	if m == nil {
+		return false
+	}
+	code, err := strconv.Atoi(m[1])
+	return err == nil && code == xmlAPIUnauthenticatedStatus
+}
+
 // loginXMLAPI is the GS728TPP GoAhead three-step handshake, mirroring
-// Python HttpClient._xml_api_login (source lines 352-363) exactly: GET
-// login_path WITHOUT following the redirect to capture its session-path
-// Location header, GET the session-scoped System.xml login query, then
-// validate the body's <statusCode>0</statusCode> + sessionID response
-// header and set the three cookies the firmware itself never does.
+// Python HttpClient._xml_api_login (source lines 352-363, updated by parity
+// commit 64ac7c7) exactly: clear any stale session cookies first (this is
+// now also a RE-login path -- see GetPage's session-expiry retry -- and
+// logging in again over a DEAD session's cookies would re-present
+// credentials the switch has already rejected), GET login_path WITHOUT
+// following the redirect to capture its session-path Location header, GET
+// the session-scoped System.xml login query, then validate the body's
+// <statusCode>0</statusCode> + sessionID response header and set the three
+// cookies the firmware itself never does.
 func (c *HTTPClient) loginXMLAPI(ctx context.Context) error {
+	for _, stale := range []string{"userStatus", "usernme", "sessionID"} {
+		c.deleteCookie(stale)
+	}
 	resp, err := c.doRequestNoRedirect(ctx, c.spec.LoginPath)
 	if err != nil {
 		return errHTTPCause(err, "web-UI login transport error")
@@ -455,14 +511,49 @@ func (c *HTTPClient) readURL(path string) string {
 	return path
 }
 
-// GetPage fetches path (mirroring Python get_page, source lines 365-377):
+// GetPage fetches path (mirroring Python get_page, source lines 365-377,
+// updated by parity commit 64ac7c7 to survive an expired GoAhead session):
 // applies the session-path prefix / Gambit token query param, then GETs
 // with up to droppedConnectionRetries retries on a genuinely dropped
 // connection (never on an HTTP error status -- see getWithRetry).
+//
+// If the response says the XML_API session has expired
+// (xmlAPISessionLost), a READ re-authenticates and re-issues itself ONCE:
+// re-running a GET is safe, and the alternative is handing the caller a
+// parse error ("no <DeviceConfiguration> data block found") for what is
+// really an expired cookie. If the retried GET is STILL unauthenticated,
+// this raises model.ErrHTTPAuth rather than looping -- writes deliberately
+// do NOT do this (see PostXML).
 func (c *HTTPClient) GetPage(ctx context.Context, path string) (string, error) {
 	if err := c.ensureLoggedIn(ctx); err != nil {
 		return "", err
 	}
+	text, err := c.getPageOnce(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	if !xmlAPISessionLost(c.spec, text) {
+		return text, nil
+	}
+	c.setLoggedOut()
+	if err := c.Login(ctx); err != nil {
+		return "", err
+	}
+	text, err = c.getPageOnce(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	if xmlAPISessionLost(c.spec, text) {
+		return "", errHTTPAuth("GET %s: the web UI answered with its login page even after re-authenticating -- the session cannot be kept", path)
+	}
+	return text, nil
+}
+
+// getPageOnce performs exactly one GET+retry-on-dropped-connection+validate
+// cycle for path -- factored out of GetPage so the session-expiry retry
+// (once, see GetPage's own doc comment) can share it without duplicating
+// the session-path prefix / Gambit token query param logic.
+func (c *HTTPClient) getPageOnce(ctx context.Context, path string) (string, error) {
 	reqPath := c.readURL(path)
 	if c.spec.SessionTokenField != "" {
 		reqPath = appendQueryParam(reqPath, c.spec.SessionTokenField, c.getToken())
@@ -553,9 +644,16 @@ func (c *HTTPClient) PostMultipart(ctx context.Context, path string, data map[st
 }
 
 // PostXML submits body as a raw "application/xml; charset=utf-8" POST to
-// path (the GS728TPP GoAhead cert-upload flow), mirroring Python post_xml
-// (source lines 411-429): the SAME session-path prefixing GetPage applies.
-// NEVER retried, same rationale as PostForm.
+// path (the GS728TPP GoAhead write flow), mirroring Python post_xml (source
+// lines 411-429, updated by parity commit 64ac7c7): the SAME session-path
+// prefixing GetPage applies. NEVER retried, same rationale as PostForm.
+//
+// If the response says the XML_API session has expired
+// (xmlAPISessionLost), this deliberately does NOT re-login and re-send: a
+// rejected write is not proof the switch ignored it, so re-issuing it is
+// exactly what PostForm already refuses to do for a dropped connection.
+// Instead this raises model.ErrHTTPAuth naming the write as NOT re-sent, so
+// the caller re-authenticates and retries deliberately.
 func (c *HTTPClient) PostXML(ctx context.Context, path string, body string) (string, error) {
 	if err := c.ensureLoggedIn(ctx); err != nil {
 		return "", err
@@ -567,6 +665,9 @@ func (c *HTTPClient) PostXML(ctx context.Context, path string, body string) (str
 	}
 	if err := validateResponse(status, text, fmt.Sprintf("POST %s", path), ""); err != nil {
 		return "", err
+	}
+	if xmlAPISessionLost(c.spec, text) {
+		return "", errHTTPAuth("POST %s: the web UI answered with its login page -- the session expired, and this write was NOT re-sent (log in again and retry it deliberately)", path)
 	}
 	return text, nil
 }
@@ -840,4 +941,16 @@ func (c *HTTPClient) hasCookie(name string) bool {
 // Set-Cookie itself, so the client sets these three into its own jar.
 func (c *HTTPClient) setCookie(name, value string) {
 	c.client.Jar.SetCookies(c.cookieURL(), []*http.Cookie{{Name: name, Value: value}})
+}
+
+// deleteCookie mirrors Python loginXMLAPI's re-login-path
+// `self._client.cookies.delete(stale)` calls (parity commit 64ac7c7).
+// net/http/cookiejar.Jar exposes no direct delete method, but per RFC 6265
+// (and (*cookiejar.Jar).newEntry's own handling of it) a cookie submitted
+// via SetCookies with a negative MaxAge is a removal instruction, not a
+// value to store -- the jar drops any existing entry for that name instead
+// of keeping this one. Uses the SAME cookieURL every set/delete call in
+// this file does, so the jar's internal (host, path) key always matches.
+func (c *HTTPClient) deleteCookie(name string) {
+	c.client.Jar.SetCookies(c.cookieURL(), []*http.Cookie{{Name: name, MaxAge: -1}})
 }

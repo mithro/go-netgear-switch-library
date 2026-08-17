@@ -116,6 +116,12 @@ type HTTPFace struct {
 	// validation's response building (only its one state.UploadedCert
 	// assignment).
 	renderMu sync.Mutex
+
+	// expireGoAheadSessionRemaining, guarded by renderMu, counts the number
+	// of upcoming authenticated GoAhead wcd requests (read or write) that
+	// should still answer as an expired session -- see
+	// SimulateGoAheadSessionExpiry.
+	expireGoAheadSessionRemaining int
 }
 
 // NewHTTPFace builds an HTTPFace serving state per spec, accepting only a
@@ -537,8 +543,13 @@ func (f *HTTPFace) goaheadGet(w http.ResponseWriter, r *http.Request) {
 		decoded += "?" + rawQuery
 	}
 	if strings.Contains(decoded, "wcd?") {
-		if !strings.Contains(r.Header.Get("Cookie"), "sessionID=virtualsid") {
-			f.redirectToSession(w)
+		// Real hardware answers an unauthenticated wcd read with HTTP 200 and
+		// statusCode 4 -- NOT a redirect (captured; see
+		// UnauthenticatedResponse). A session that expires MID-RUN (armed via
+		// SimulateGoAheadSessionExpiry) answers the same way even with an
+		// otherwise-valid cookie.
+		if !strings.Contains(r.Header.Get("Cookie"), "sessionID=virtualsid") || f.consumeGoAheadSessionExpiry() {
+			f.send(w, UnauthenticatedResponse(), http.StatusOK, false)
 			return
 		}
 		f.renderMu.Lock()
@@ -560,8 +571,13 @@ func (f *HTTPFace) goaheadGet(w http.ResponseWriter, r *http.Request) {
 // path 404s, mirroring Python Handler._goahead_post (faces/http.py:276-299).
 func (f *HTTPFace) goaheadPost(w http.ResponseWriter, r *http.Request) {
 	pathOnly := r.URL.Path
-	if !strings.Contains(r.Header.Get("Cookie"), "sessionID=virtualsid") {
-		f.redirectToSession(w)
+	// Real hardware answers an unauthenticated write the same way it answers
+	// an unauthenticated read: HTTP 200, statusCode 4 (UnauthenticatedResponse) --
+	// NEVER a redirect. A session that expires MID-RUN (armed via
+	// SimulateGoAheadSessionExpiry) answers the same way even with an
+	// otherwise-valid cookie; the write is never applied in that case.
+	if !strings.Contains(r.Header.Get("Cookie"), "sessionID=virtualsid") || f.consumeGoAheadSessionExpiry() {
+		f.send(w, UnauthenticatedResponse(), http.StatusOK, false)
 		return
 	}
 	if !strings.HasSuffix(pathOnly, "/wcd") {
@@ -579,12 +595,49 @@ func (f *HTTPFace) goaheadPost(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// redirectToSession sends the 302-to-session-path GoAhead uses both for the
-// initial "GET /" step and for any unauthenticated read/write.
+// redirectToSession sends the 302-to-session-path GoAhead uses for the
+// initial "GET /" step -- the one place real hardware genuinely redirects
+// (an unauthenticated wcd read/write instead gets UnauthenticatedResponse,
+// see goaheadGet/goaheadPost).
 func (f *HTTPFace) redirectToSession(w http.ResponseWriter) {
 	w.Header().Set("Location", "/"+f.sessionPath+"/")
 	w.Header().Set("Content-Length", "0")
 	w.WriteHeader(http.StatusFound)
+}
+
+// SimulateGoAheadSessionExpiry arms this face to answer the next `times`
+// authenticated GoAhead wcd requests (read or write) with
+// UnauthenticatedResponse -- HTTP 200 + statusCode 4 -- exactly as if the
+// switch's own session had died server-side mid-run, then resumes normal
+// service once the count is exhausted. times=1 models a session that comes
+// back the moment the caller re-authenticates; times=2 models one that
+// still refuses the caller even after re-authenticating (covering
+// webui.HTTPClient.GetPage's one retry attempt, which makes exactly two wcd
+// requests when the first is expired).
+//
+// Test-only: real hardware's session dies on its own; a same-process
+// net/http test has no equivalent of Python's test reaching into the
+// client's private cookie jar (`client._client.cookies.set("sessionID",
+// "stale")`, tests/virtual/test_virtual_http_face.py's
+// test_expired_session_recovers_on_a_read_but_never_resends_a_write), so
+// this simulates the same OBSERVABLE effect from the server side instead.
+func (f *HTTPFace) SimulateGoAheadSessionExpiry(times int) {
+	f.renderMu.Lock()
+	f.expireGoAheadSessionRemaining = times
+	f.renderMu.Unlock()
+}
+
+// consumeGoAheadSessionExpiry reports whether the current wcd request should
+// be answered as an expired session, decrementing the remaining count if so
+// (see SimulateGoAheadSessionExpiry).
+func (f *HTTPFace) consumeGoAheadSessionExpiry() bool {
+	f.renderMu.Lock()
+	defer f.renderMu.Unlock()
+	if f.expireGoAheadSessionRemaining <= 0 {
+		return false
+	}
+	f.expireGoAheadSessionRemaining--
+	return true
 }
 
 // goaheadCertImportXML is the minimal shape apply_cert_import needs out of
