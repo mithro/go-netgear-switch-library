@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -459,5 +460,94 @@ func TestBuildCLIReader_VerifiedModelStillConstructsNormally(t *testing.T) {
 	}
 	if _, err := buildCLIWriter(sw, cliTransportSSH); err != nil {
 		t.Fatalf("buildCLIWriter() on a verified model: error = %v, want nil", err)
+	}
+}
+
+// --- UploadCertificateSCP --------------------------------------------------
+
+func TestDefaultCLITransportKind_SSHUnlessTelnetOnly(t *testing.T) {
+	// Every model with a real copy-scp SSL-certificate profile declares BOTH
+	// transports and must resolve to SSH.
+	for _, key := range []string{"m4300-24x", "m4300-16x", "gsm7252ps"} {
+		m, err := model.GetModel(key)
+		if err != nil {
+			t.Fatalf("GetModel(%q): %v", key, err)
+		}
+		if got := defaultCLITransportKind(m); got != cliTransportSSH {
+			t.Errorf("defaultCLITransportKind(%q) = %v, want ssh", key, got)
+		}
+	}
+	// gsm7228ps is the one TELNET-but-not-SSH model (FASTPATH-Lite, no SSH
+	// listener) -- mirrors Python's build_sync_cli_client transport branch.
+	m, err := model.GetModel("gsm7228ps")
+	if err != nil {
+		t.Fatalf("GetModel: %v", err)
+	}
+	if got := defaultCLITransportKind(m); got != cliTransportTelnet {
+		t.Errorf("defaultCLITransportKind(gsm7228ps) = %v, want telnet", got)
+	}
+}
+
+func TestUploadCertificateSCP_NoCLIBackendErrors(t *testing.T) {
+	// gs305ep has no CLI backend at all (NSDP+HTTP only) -- fastpath.ScpProfile's
+	// hasCLIBackend gate must refuse before ever touching the (injected) fake
+	// session.
+	fake := &recordingCLISession{}
+	sw := newCLISwitch(t, "gs305ep", WithCLIClient(fake))
+	err := sw.UploadCertificateSCP(context.Background(), "user@host", "pw", "/staging", false)
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("UploadCertificateSCP() error = %v, want wrapping ErrUnsupportedCapability", err)
+	}
+	if fake.commandCount() != 0 {
+		t.Fatalf("UploadCertificateSCP() on a non-CLI model issued %d commands, want 0 (the gate must fire before any session I/O)", fake.commandCount())
+	}
+}
+
+func TestUploadCertificateSCP_KnownMechanismDifferenceGSM7228PS(t *testing.T) {
+	// gsm7228ps has a CLI backend (telnet) but no known copy-scp cert
+	// profile -- its cert upload is the separate HTTP-multipart mechanism
+	// (Switch.UploadCertificate). The refusal must name that difference, and
+	// must still never touch the session.
+	fake := &recordingCLISession{}
+	sw := newCLISwitch(t, "gsm7228ps", WithCLIClient(fake))
+	err := sw.UploadCertificateSCP(context.Background(), "user@host", "pw", "/staging", false)
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("UploadCertificateSCP() error = %v, want wrapping ErrUnsupportedCapability", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP multipart upload") {
+		t.Errorf("UploadCertificateSCP() error = %q, want it to quote the mechanism-difference justification", err.Error())
+	}
+	if fake.commandCount() != 0 {
+		t.Fatalf("UploadCertificateSCP() on gsm7228ps issued %d commands, want 0", fake.commandCount())
+	}
+}
+
+func TestUploadCertificateSCP_Success(t *testing.T) {
+	// m4300-24x has a real copy-scp cert profile (modern crypto,
+	// WritememStuff=false): prove the facade wires ctx/session/model/params
+	// through to fastpath.DeployCertificateSCP correctly end-to-end,
+	// including the dot-to-dash host sanitization Python's
+	// `base = self.host.replace(".", "-")` performs.
+	fake := &recordingCLISession{}
+	m, err := model.GetModel("m4300-24x")
+	if err != nil {
+		t.Fatalf("GetModel: %v", err)
+	}
+	sw, err := New(m, "10.1.5.13", WithCLIClient(fake))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := sw.UploadCertificateSCP(context.Background(), "user@host", "pw", "/staging", true); err != nil {
+		t.Fatalf("UploadCertificateSCP() error = %v, want nil", err)
+	}
+	wantCalls := []string{
+		"no ip http secure-server",
+		"copy scp://user@host/staging/10-1-5-13-server.pem nvram:sslpem-server",
+		"copy scp://user@host/staging/10-1-5-13-root.pem nvram:sslpem-root",
+		"ip http secure-server",
+		"write memory",
+	}
+	if !reflect.DeepEqual(fake.calls, wantCalls) {
+		t.Fatalf("UploadCertificateSCP() calls = %v, want %v", fake.calls, wantCalls)
 	}
 }
