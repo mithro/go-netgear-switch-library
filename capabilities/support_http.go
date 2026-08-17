@@ -36,13 +36,25 @@ func isXMLAPIDialect(spec *webui.HTTPModelSpec) bool {
 	return spec.HTMLDialect == webui.HTMLDialectGoAheadXML
 }
 
-// xmlAPIWrites are the writes the XML-API (GoAhead wcd) writer actually
-// implements, each with a body builder GROUNDED in the page's own
-// JavaScript, mirroring Python's _XML_API_WRITES (capabilities.py:495-513).
-// An op absent here is honestly unsupported on this dialect -- not
-// "probably works": the endpoint is shared, so a missing entry means nobody
-// has established what body that operation sends, and guessing one would
-// write something unintended.
+// xmlAPIWrites are the writes the XML-API (GoAhead wcd) dialect SUPPORTS,
+// mirroring Python's _XML_API_WRITES (capabilities.py:495-513) so this
+// oracle's verdict matches Python's. An op absent here is honestly
+// unsupported on this dialect -- not "probably works": the endpoint is
+// shared, so a missing entry means nobody has established what body that
+// operation sends, and guessing one would write something unintended.
+//
+// HONESTY / TRACKED GAP (Go behind Python's f8a890f writer completion): of
+// these 11 ops, only set_port_description, set_hostname, and set_port_speed
+// are ACTUALLY implemented in webui.Writer today (C3/C4 -- real body builders
+// in webui/goahead_write.go + isGoAheadDialect branches). The other 8 --
+// set_poe, cycle_poe, clear_poe_fault, set_port_enabled, create_vlan,
+// delete_vlan, set_vlan_membership, set_pvid -- are correctly ORACLE-CLAIMED
+// here (Python's HttpWriter implements them via _is_xml_api_dialect) but
+// webui.Writer does NOT yet dispatch to the XML-API path for them, so calling
+// them against gs728tpp fails today. Completing those writers (the GS728TPP
+// GoAhead write-completion follow-up) makes this map's claim true; the same
+// tracked-follow-up honesty applies as noVLANCreateMsg (support_snmp.go) and
+// DialectHasCSRFHash (webui/endpoints.go).
 var xmlAPIWrites = map[string]bool{
 	"set_vlan_membership": true,
 	"set_port_enabled":    true,
