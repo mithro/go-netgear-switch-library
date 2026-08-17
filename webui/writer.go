@@ -696,24 +696,21 @@ func (w *Writer) goaheadPoEStatus(ctx context.Context, port int) (*model.PoEStat
 }
 
 // goaheadPoECycleComplete reports whether a power-cycled port has finished
-// coming back, mirroring Python models.poe_cycle_complete EXACTLY: what
-// counts as "back" depends on what the port was doing before the cycle --
-// a port that was delivering power must be delivering again; a port that
-// was not (nothing attached) merely has to be re-detecting (SEARCHING is
-// enough), since a port with no powered device can never reach DELIVERING.
+// coming back. A thin wrapper around model.PoeCycleComplete -- the SAME
+// predicate snmp.Writer's CyclePoE now uses (python-netgear-switch-library
+// commit f8a890f: "models.poe_cycle_complete, shared by both writers because
+// 'has it come back' is a property of the port, not of the protocol")
+// -- kept as its own named function here (rather than calling
+// model.PoeCycleComplete directly at goaheadPoERearm's one call site) purely
+// so this package's own white-box test (writer_internal_test.go) has a
+// package-local symbol to exercise without reaching into package model.
 // Shared by CyclePoE and ClearPoEFault via goaheadPoERearm below (Python's
 // _goahead_poe_rearm is the SAME function for both, unlike SnmpWriter,
 // which keeps two distinct recovery predicates -- see snmp/writer_cycle.go's
 // poeRecovered doc comment for that asymmetry, which this dialect does not
 // share).
 func goaheadPoECycleComplete(before, now *model.PoEStatus) bool {
-	if now == nil {
-		return false
-	}
-	if before != nil && before.Delivering() {
-		return now.Delivering()
-	}
-	return now.Detect == model.PoEDetectDelivering || now.Detect == model.PoEDetectSearching
+	return model.PoeCycleComplete(before, now)
 }
 
 // goaheadPoERearm power-cycles port's PD by driving its admin state off
