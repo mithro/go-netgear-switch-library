@@ -19,17 +19,30 @@ package webui
 //
 // Unlike snmp.Writer's CyclePoE/ClearPoEFault (which poll with injectable
 // deadlines, snmp.PoeCycleTimeouts), CyclePoE/ClearPoEFault below take no
-// timeouts parameter: HTTP's mechanism is fire-and-forget (a hidden
-// write-only "Port Reset" column, or the Plus CGI's reset form) with no
-// polling loop, mirroring Python's cycle_poe/clear_poe_fault accepting a
-// timeouts parameter purely so the SnmpWriter|NsdpWriter|HttpWriter union
-// typechecks -- it is unused there too. This package deliberately does not
-// import the snmp package to avoid a needless cross-backend dependency; the
-// eventual backend_http.go adapter (root package, which already imports
-// snmp) is expected to drop the timeouts argument when satisfying
-// BackendWriter.CyclePoE/ClearPoEFault, exactly as backend_nsdp.go's
-// adapter does for nsdp.Writer (which has no CyclePoE/ClearPoEFault of its
-// own at all -- see nsdp/writer.go's package doc comment).
+// timeouts parameter: on every dialect but ONE, HTTP's mechanism is
+// fire-and-forget (a hidden write-only "Port Reset" column, or the Plus
+// CGI's reset form) with no polling loop, mirroring Python's cycle_poe/
+// clear_poe_fault accepting a timeouts parameter purely so the
+// SnmpWriter|NsdpWriter|HttpWriter union typechecks -- it is unused there
+// too. This package deliberately does not import the snmp package to avoid
+// a needless cross-backend dependency; the eventual backend_http.go adapter
+// (root package, which already imports snmp) is expected to drop the
+// timeouts argument when satisfying BackendWriter.CyclePoE/ClearPoEFault,
+// exactly as backend_nsdp.go's adapter does for nsdp.Writer (which has no
+// CyclePoE/ClearPoEFault of its own at all -- see nsdp/writer.go's package
+// doc comment).
+//
+// The ONE exception is the GoAhead dialect (gs728tpp): that UI has no reset
+// control at all (see poeAdminBody's doc comment, goahead_write.go), so
+// CyclePoE/ClearPoEFault drive an admin off-then-on re-arm THAT IS
+// genuinely verifiable -- goaheadPoERearm below polls the port's detect
+// status afterward, mirroring Python's _goahead_poe_rearm (http_write.py,
+// pin b26eb1f / commit f8a890f) exactly, using package-local default
+// timeouts (goaheadPoEOnTimeout/goaheadPoEPollInterval) and an injectable
+// Writer.clock/sleep pair (WithClock below, mirroring snmp.WithClock)
+// rather than a caller-supplied PoeCycleTimeouts: this package's exported
+// CyclePoE/ClearPoEFault signature has no timeouts parameter (the design
+// decision above), so there is nowhere for a caller to thread one through.
 //
 // NOTE on set_pvid/create_vlan/delete_vlan verify parsers (source fidelity,
 // not a Go-side simplification): Python's set_pvid/create_vlan/delete_vlan
@@ -57,6 +70,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/mithro/go-netgear-switch-library/model"
 )
@@ -232,6 +246,23 @@ func requireCSRF(html string) (string, error) {
 	return token, nil
 }
 
+// requireCSRFDialect refuses a hash-scraping write on a dialect whose pages
+// carry no token, mirroring Python's _require_csrf_dialect. A CAPABILITY
+// refusal (wraps model.ErrUnsupportedCapability), not a surprise: the
+// writer is built on the Plus form, and MEASURED probes of gsm7252ps and
+// gs110emx found no <input name="hash"> anywhere in their write pages (see
+// DialectHasCSRFHash, endpoints.go). Saying so by type is what lets the
+// facade, the capability table (capabilities/support_http.go's
+// csrfHTTPWrites gate) and the caller agree -- and what stops a bare
+// "unexpected page" from reading like a transient fault. Called BEFORE any
+// CSRF-scraping write is attempted, so nothing is sent when it refuses.
+func requireCSRFDialect(spec *HTTPModelSpec, modelKey, op string) error {
+	if !DialectHasCSRFHash(spec.HTMLDialect) {
+		return fmt.Errorf("model %q web UI carries no CSRF 'hash' token, which the HTTP %s writer requires: %w", modelKey, op, model.ErrUnsupportedCapability)
+	}
+	return nil
+}
+
 // pvidLookupMap builds a port->vlan lookup from pairs, for set_pvid's
 // verify step.
 func pvidLookupMap(pairs []model.Pvid) map[int]int {
@@ -264,6 +295,14 @@ type Writer struct {
 	spec           *HTTPModelSpec
 	model          *model.SwitchModel
 	protectedPorts map[int]bool
+
+	// clock/sleep are the injectable time seam goaheadPoERearm's poll loop
+	// uses (see WithClock below); they default to time.Now/
+	// defaultGoAheadSleep and are otherwise unused by every other Writer
+	// method -- no other GoAhead write, and no non-GoAhead write on any
+	// dialect, polls at all.
+	clock func() time.Time
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
 // WriterOption configures optional Writer construction parameters (only
@@ -293,11 +332,59 @@ func NewWriter(session Session, m *model.SwitchModel, opts ...WriterOption) (*Wr
 	if err != nil {
 		return nil, err
 	}
-	w := &Writer{session: session, spec: spec, model: m, protectedPorts: make(map[int]bool)}
+	w := &Writer{
+		session:        session,
+		spec:           spec,
+		model:          m,
+		protectedPorts: make(map[int]bool),
+		clock:          time.Now,
+		sleep:          defaultGoAheadSleep,
+	}
 	for _, opt := range opts {
 		opt(w)
 	}
 	return w, nil
+}
+
+// defaultGoAheadSleep is the production Sleep implementation goaheadPoERearm
+// uses: it waits for d (a no-op if d <= 0) unless ctx is cancelled first, in
+// which case it returns ctx.Err() -- mirrors snmp package's defaultSleep
+// (writer_cycle.go) exactly, letting a caller's context cancellation abort a
+// stuck poll loop.
+func defaultGoAheadSleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// WithClock overrides the Writer's time source and poll-sleep function --
+// the injectable clock/sleep seam goaheadPoERearm's poll loop uses,
+// mirroring snmp.WithClock (snmp/writer_cycle.go): tests inject a fake
+// now/sleep pair to drive the whole state machine deterministically with
+// zero real wall-clock delay. Either argument may be nil to leave that seam
+// at its default (time.Now / defaultGoAheadSleep).
+func WithClock(now func() time.Time, sleep func(ctx context.Context, d time.Duration) error) WriterOption {
+	return func(w *Writer) {
+		if now != nil {
+			w.clock = now
+		}
+		if sleep != nil {
+			w.sleep = sleep
+		}
+	}
 }
 
 // guard refuses port when it is protected and force is false, mirroring
@@ -335,10 +422,20 @@ func (w *Writer) poeAdmin(ctx context.Context, port int) (bool, error) {
 }
 
 // SetPoE sets port's PoE admin state, mirroring Python HttpWriter.set_poe
-// (http_write.py:515-535). FASTPATH models drive the XUI grid
+// (http_write.py:515-535, plus the GoAhead branch added by pin b26eb1f /
+// commit f8a890f). The XML-API check comes BEFORE requiring poe_config_path:
+// that UI has no per-op write page at all (one wcd endpoint, the body
+// selects the operation, spec.PoEConfigPath == "" for gs728tpp) so demanding
+// it would refuse a write that works. FASTPATH models drive the XUI grid
 // (xuiPoEAdmin, the gsm7252ps fix's landing site); every other model drives
 // the Plus-CGI PoEPortConfig.cgi form.
 func (w *Writer) SetPoE(ctx context.Context, port int, on, force bool) error {
+	if isGoAheadDialect(w.spec) {
+		if err := w.guard(port, force); err != nil {
+			return err
+		}
+		return w.goaheadPoEAdmin(ctx, port, on)
+	}
 	path, err := requirePath(w.model.Key, w.spec.PoEConfigPath, "web PoE config")
 	if err != nil {
 		return err
@@ -423,9 +520,16 @@ func (w *Writer) xuiPoEAdmin(ctx context.Context, path string, port int, on bool
 }
 
 // CyclePoE power-cycles port's PD, mirroring Python HttpWriter.cycle_poe
-// (http_write.py:572-592). No timeouts parameter -- see this file's
-// package doc comment.
+// (http_write.py:572-592, plus the GoAhead branch added by pin b26eb1f /
+// commit f8a890f). No timeouts parameter -- see this file's package doc
+// comment.
 func (w *Writer) CyclePoE(ctx context.Context, port int, force bool) error {
+	if isGoAheadDialect(w.spec) {
+		if err := w.guard(port, force); err != nil {
+			return err
+		}
+		return w.goaheadPoERearm(ctx, port)
+	}
 	path, err := requirePath(w.model.Key, w.spec.PoEConfigPath, "web PoE config")
 	if err != nil {
 		return err
@@ -454,8 +558,20 @@ func (w *Writer) CyclePoE(ctx context.Context, port int, force bool) error {
 // write-only "Port Reset" mechanism CyclePoE uses; on the Plus-class CGI UI
 // it is the identical PoEPortConfig.cgi reset form -- a Plus switch has no
 // separate "clear fault" action, the fault clears when detection re-runs.
+//
+// GoAhead branch added by pin b26eb1f / commit f8a890f: this UI has no
+// separate clear-fault action either, so it drives the SAME off/on re-arm
+// CyclePoE does (goaheadPoERearm) -- Python's _goahead_poe_rearm is
+// literally shared by both callers, not just conceptually similar.
+//
 // No timeouts parameter -- see this file's package doc comment.
 func (w *Writer) ClearPoEFault(ctx context.Context, port int, force bool) error {
+	if isGoAheadDialect(w.spec) {
+		if err := w.guard(port, force); err != nil {
+			return err
+		}
+		return w.goaheadPoERearm(ctx, port)
+	}
 	path, err := requirePath(w.model.Key, w.spec.PoEConfigPath, "web PoE config")
 	if err != nil {
 		return err
@@ -509,6 +625,143 @@ func (w *Writer) xuiPoEReset(ctx context.Context, path string, port int) error {
 		return err
 	}
 	return raiseOnFastpathErrFlag(applied, fmt.Sprintf("PoE reset of port %d", port))
+}
+
+// --- GoAhead XML API (GS728TPP) PoE -- pin b26eb1f / commit f8a890f ------
+
+// goaheadPoEOnTimeout/goaheadPoEPollInterval are goaheadPoERearm's
+// injectable-by-default poll deadlines, mirroring Python's
+// PoeCycleTimeouts() default (snmp_write.py: off_timeout=30/on_timeout=60/
+// poll_interval=2, matching snmp.DefaultPoeCycleTimeouts) -- only
+// on_timeout/poll_interval are used here since, unlike SnmpWriter._poe_
+// rearm, _goahead_poe_rearm has no separate "poll until off" phase: each
+// admin write is already synchronously verified by goaheadPoEAdmin before
+// the next one is sent (an ordinary GET/POST/GET, not a poll loop), so only
+// the FINAL detect-recovery wait needs a deadline.
+const (
+	goaheadPoEOnTimeout    = 60 * time.Second
+	goaheadPoEPollInterval = 2 * time.Second
+)
+
+// goaheadPoEAdmin sets port's PoE admin state via PoEPSEInterfaceList and
+// verifies the readback, mirroring Python HttpWriter._goahead_poe_admin
+// (http_write.py, pin b26eb1f). The single-write primitive SetPoE's GoAhead
+// branch uses directly, and goaheadPoERearm below drives TWICE (off, then
+// on) for CyclePoE/ClearPoEFault.
+func (w *Writer) goaheadPoEAdmin(ctx context.Context, port int, on bool) error {
+	before, err := w.poeAdmin(ctx, port)
+	if err != nil {
+		return err
+	}
+	body := poeAdminBody(portInterfaceName(port), on)
+	if err := w.goaheadWrite(ctx, body, fmt.Sprintf("PoE port %d admin -> %v", port, on)); err != nil {
+		return err
+	}
+	after, err := w.poeAdmin(ctx, port)
+	if err != nil {
+		return err
+	}
+	if after != on {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("PoE port %d did not read back as on=%v", port, on),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// goaheadPoEStatus returns port's current model.PoEStatus off the GoAhead
+// PoE page, or nil if that port is absent from the parsed rows, mirroring
+// Python HttpWriter._poe_status.
+func (w *Writer) goaheadPoEStatus(ctx context.Context, port int) (*model.PoEStatus, error) {
+	path, err := requirePath(w.model.Key, w.spec.PoEStatusPath, "PoE status")
+	if err != nil {
+		return nil, err
+	}
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := parsePoE(w.spec, html)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		if rows[i].Port == port {
+			return &rows[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// goaheadPoECycleComplete reports whether a power-cycled port has finished
+// coming back, mirroring Python models.poe_cycle_complete EXACTLY: what
+// counts as "back" depends on what the port was doing before the cycle --
+// a port that was delivering power must be delivering again; a port that
+// was not (nothing attached) merely has to be re-detecting (SEARCHING is
+// enough), since a port with no powered device can never reach DELIVERING.
+// Shared by CyclePoE and ClearPoEFault via goaheadPoERearm below (Python's
+// _goahead_poe_rearm is the SAME function for both, unlike SnmpWriter,
+// which keeps two distinct recovery predicates -- see snmp/writer_cycle.go's
+// poeRecovered doc comment for that asymmetry, which this dialect does not
+// share).
+func goaheadPoECycleComplete(before, now *model.PoEStatus) bool {
+	if now == nil {
+		return false
+	}
+	if before != nil && before.Delivering() {
+		return now.Delivering()
+	}
+	return now.Detect == model.PoEDetectDelivering || now.Detect == model.PoEDetectSearching
+}
+
+// goaheadPoERearm power-cycles port's PD by driving its admin state off
+// then on, mirroring Python HttpWriter._goahead_poe_rearm (http_write.py,
+// pin b26eb1f / commit f8a890f) -- CyclePoE and ClearPoEFault's shared
+// GoAhead mechanism (this file's package doc comment explains why this is
+// the ONE GoAhead write that genuinely polls). This UI publishes NO PoE
+// reset control -- Behaviour/UnitsPoe.js has no reset/cycle/reboot action
+// and the page's only buttons are Refresh, Cancel and Apply -- so a power
+// cycle is an admin re-arm of the same field: the mechanism snmp.Writer
+// already uses on agents with no reset column (see snmp/writer_cycle.go's
+// poeRearm).
+//
+// Two SEPARATE writes (each already verified by goaheadPoEAdmin), then a
+// poll for the port to come back using goaheadPoECycleComplete, checked
+// BEFORE ever sleeping so an already-recovered port returns on the very
+// first check with zero sleeps.
+func (w *Writer) goaheadPoERearm(ctx context.Context, port int) error {
+	before, err := w.goaheadPoEStatus(ctx, port)
+	if err != nil {
+		return err
+	}
+	if err := w.goaheadPoEAdmin(ctx, port, false); err != nil {
+		return err
+	}
+	if err := w.goaheadPoEAdmin(ctx, port, true); err != nil {
+		return err
+	}
+	deadline := w.clock().Add(goaheadPoEOnTimeout)
+	for {
+		status, err := w.goaheadPoEStatus(ctx, port)
+		if err != nil {
+			return err
+		}
+		if goaheadPoECycleComplete(before, status) {
+			return nil
+		}
+		if !w.clock().Before(deadline) {
+			return &model.WriteVerificationError{
+				Msg:    fmt.Sprintf("PoE port %d did not come back after the power cycle within %gs", port, goaheadPoEOnTimeout.Seconds()),
+				Before: before,
+				After:  status,
+			}
+		}
+		if err := w.sleep(ctx, goaheadPoEPollInterval); err != nil {
+			return err
+		}
+	}
 }
 
 // requireVlanExists refuses a PVID pointing at a VLAN this switch does not
@@ -582,13 +835,16 @@ func (w *Writer) requireVlanExists(ctx context.Context, vlan int) error {
 }
 
 // SetPVID sets port's PVID, mirroring Python HttpWriter.set_pvid
-// (http_write.py:651-664, updated by commit 98fb935). See this file's
-// package doc comment for why this always uses the STANDARD-dialect
+// (http_write.py:651-664, updated by commit 98fb935, plus the GoAhead
+// branch added by pin b26eb1f / commit f8a890f). See this file's package
+// doc comment for why the non-GoAhead path always uses the STANDARD-dialect
 // ParsePVIDs verify, even on a FASTPATH/GS110EMX model -- a faithful port
 // of a Python source quirk, not a Go-side choice. requireVlanExists above
 // is NOT that quirk: it is the new GAP-1 precondition, dispatched
 // correctly for every dialect (see its own doc comment for why it differs
-// from Python's literal two-way branch).
+// from Python's literal two-way branch), and runs BEFORE the GoAhead branch
+// too -- Python calls _require_vlan_exists unconditionally, ahead of its
+// own _is_xml_api_dialect check.
 func (w *Writer) SetPVID(ctx context.Context, port, vlan int, force bool) error {
 	if err := w.guard(port, force); err != nil {
 		return err
@@ -599,6 +855,9 @@ func (w *Writer) SetPVID(ctx context.Context, port, vlan int, force bool) error 
 	}
 	if err := w.requireVlanExists(ctx, vlan); err != nil {
 		return err
+	}
+	if isGoAheadDialect(w.spec) {
+		return w.setGoAheadPVID(ctx, path, port, vlan)
 	}
 	page, err := w.session.GetPage(ctx, path)
 	if err != nil {
@@ -634,17 +893,73 @@ func (w *Writer) SetPVID(ctx context.Context, port, vlan int, force bool) error 
 	return nil
 }
 
+// goaheadPVIDs fetches path and parses it as GoAhead (port, pvid) pairs,
+// mirroring Python's inline `dict(parse.parse_goahead_pvids(...))` calls in
+// HttpWriter.set_pvid's XML-API branch.
+func (w *Writer) goaheadPVIDs(ctx context.Context, path string) ([]model.Pvid, error) {
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGoAheadPVIDs(html)
+}
+
+// setGoAheadPVID sets port's PVID via VLANInterfaceList and verifies the
+// readback using the DIALECT-AWARE ParseGoAheadPVIDs (not the plain
+// STANDARD-dialect ParsePVIDs the rest of SetPVID uses -- see this file's
+// package doc comment on that source quirk, which this branch is NOT
+// subject to: Python's set_pvid uses parse.parse_goahead_pvids here
+// specifically). Mirrors Python HttpWriter.set_pvid's XML-API branch
+// (http_write.py, pin b26eb1f / commit f8a890f) exactly.
+func (w *Writer) setGoAheadPVID(ctx context.Context, path string, port, vlan int) error {
+	beforePairs, err := w.goaheadPVIDs(ctx, path)
+	if err != nil {
+		return err
+	}
+	before := pvidLookupMap(beforePairs)
+	body := pvidBody(portInterfaceName(port), vlan)
+	if err := w.goaheadWrite(ctx, body, fmt.Sprintf("PVID for port %d -> %d", port, vlan)); err != nil {
+		return err
+	}
+	afterPairs, err := w.goaheadPVIDs(ctx, path)
+	if err != nil {
+		return err
+	}
+	after := pvidLookupMap(afterPairs)
+	got, ok := after[port]
+	if !ok || got != vlan {
+		var gotAny, beforeAny any
+		if ok {
+			gotAny = got
+		}
+		if v, ok2 := before[port]; ok2 {
+			beforeAny = v
+		}
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("PVID for port %d did not read back as %d", port, vlan),
+			Before: beforeAny,
+			After:  gotAny,
+		}
+	}
+	return nil
+}
+
 // SetVlanMembership sets port's membership mode within vlanID, mirroring
-// Python HttpWriter.set_vlan_membership (http_write.py:666-691). FASTPATH
-// models route through setFastpathMembership (the vlan_port_cfg_rw.html
-// configured-view write); every other model uses the classic Plus-CGI
-// 8021qMembe.cgi 3-step read/apply/verify.
+// Python HttpWriter.set_vlan_membership (http_write.py:666-691, plus the
+// GoAhead branch added by pin b26eb1f / commit f8a890f). FASTPATH models
+// route through setFastpathMembership (the vlan_port_cfg_rw.html
+// configured-view write); the GoAhead dialect routes through
+// setGoAheadMembership (VLANMembershipList); every other model uses the
+// classic Plus-CGI 8021qMembe.cgi 3-step read/apply/verify.
 func (w *Writer) SetVlanMembership(ctx context.Context, vlanID, port int, mode model.VlanMode, force bool) error {
 	if err := w.guard(port, force); err != nil {
 		return err
 	}
 	if isFastpathDialect(w.spec) {
 		return w.setFastpathMembership(ctx, vlanID, port, mode)
+	}
+	if isGoAheadDialect(w.spec) {
+		return w.setGoAheadMembership(ctx, vlanID, port, mode)
 	}
 	path, err := requirePath(w.model.Key, w.spec.VlanMembershipPath, "VLAN membership")
 	if err != nil {
@@ -685,6 +1000,67 @@ func (w *Writer) SetVlanMembership(ctx context.Context, vlanID, port int, mode m
 			Msg:    fmt.Sprintf("VLAN %d port %d did not read back as %s", vlanID, port, mode),
 			Before: before,
 			After:  after[port],
+		}
+	}
+	return nil
+}
+
+// --- GoAhead XML API (GS728TPP) VLAN -- pin b26eb1f / commit f8a890f -----
+
+// goaheadMembership fetches path (the SAME per-port PVID/JoinVLANList page
+// GetVLANs itself derives membership from -- see requireVlanExists's own
+// doc comment on always reusing GetVLANs' dialect-aware parsers) and parses
+// it into {vlan: tagged/untagged port sets}, mirroring Python
+// HttpWriter._goahead_membership: verification cannot pass against a
+// different projection than the one callers see.
+func (w *Writer) goaheadMembership(ctx context.Context, path string) (map[int]GoAheadMembership, error) {
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGoAheadPortVlanMembership(html)
+}
+
+// goaheadModeOf returns port's model.VlanMode within vlan per membership,
+// mirroring Python HttpWriter._goahead_mode_of.
+func goaheadModeOf(membership map[int]GoAheadMembership, vlan, port int) model.VlanMode {
+	m := membership[vlan]
+	if intSliceContains(m.Untagged, port) {
+		return model.VlanUntagged
+	}
+	if intSliceContains(m.Tagged, port) {
+		return model.VlanTagged
+	}
+	return model.VlanExcluded
+}
+
+// setGoAheadMembership sets port's membership mode within vlan via
+// VLANMembershipList, mirroring Python HttpWriter._set_goahead_membership
+// (http_write.py, pin b26eb1f / commit f8a890f) exactly.
+func (w *Writer) setGoAheadMembership(ctx context.Context, vlan, port int, mode model.VlanMode) error {
+	path, err := requirePath(w.model.Key, w.spec.PvidPath, "port VLAN membership")
+	if err != nil {
+		return err
+	}
+	before, err := w.goaheadMembership(ctx, path)
+	if err != nil {
+		return err
+	}
+	beforeMode := goaheadModeOf(before, vlan, port)
+	body := vlanMembershipBody(vlan, portInterfaceName(port), mode)
+	if err := w.goaheadWrite(ctx, body, fmt.Sprintf("VLAN %d membership for port %d -> %s", vlan, port, mode)); err != nil {
+		return err
+	}
+	after, err := w.goaheadMembership(ctx, path)
+	if err != nil {
+		return err
+	}
+	afterMode := goaheadModeOf(after, vlan, port)
+	if afterMode != mode {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("VLAN %d port %d did not read back as %s", vlan, port, mode),
+			Before: beforeMode,
+			After:  afterMode,
 		}
 	}
 	return nil
@@ -773,9 +1149,21 @@ func (w *Writer) readFastpathMembership(ctx context.Context, vlan int, getPath, 
 }
 
 // CreateVlan creates vlanID, mirroring Python HttpWriter.create_vlan
-// (http_write.py:751-762). name is accepted-but-unused: the web UI's
-// 8021qCf.cgi form has no VLAN-name field (GROUNDED).
+// (http_write.py:751-762, plus the GoAhead branch added by pin b26eb1f /
+// commit f8a890f). On the GoAhead dialect, name IS used (VLANList carries
+// VLANName); on every other dialect name stays accepted-but-unused: the
+// Plus web UI's 8021qCf.cgi form has no VLAN-name field (GROUNDED). The
+// XML-API dialect check comes BEFORE requireCSRFDialect (GAP-5): its writer
+// posts an XML body and never scrapes a token, so gs728tpp never reaches
+// that gate -- matching Python's `if _is_xml_api_dialect: ...; return` ahead
+// of `_require_csrf_dialect(...)`.
 func (w *Writer) CreateVlan(ctx context.Context, vlanID int, name string) error {
+	if isGoAheadDialect(w.spec) {
+		return w.goaheadCreateVlan(ctx, vlanID, name)
+	}
+	if err := requireCSRFDialect(w.spec, w.model.Key, "create_vlan"); err != nil {
+		return err
+	}
 	_ = name
 	path, err := requirePath(w.model.Key, w.spec.VlanConfigPath, "VLAN config")
 	if err != nil {
@@ -811,11 +1199,19 @@ func (w *Writer) CreateVlan(ctx context.Context, vlanID int, name string) error 
 }
 
 // DeleteVlan deletes vlanID, mirroring Python HttpWriter.delete_vlan
-// (http_write.py:764-781). force is accepted-but-unused: VLAN delete
-// disruptiveness is guarded per-member elsewhere, matching the BackendWriter
-// signature (see write_dispatch.go).
+// (http_write.py:764-781, plus the GoAhead branch added by pin b26eb1f /
+// commit f8a890f). force is accepted-but-unused on every dialect: VLAN
+// delete disruptiveness is guarded per-member elsewhere, matching the
+// BackendWriter signature (see write_dispatch.go). See CreateVlan's doc
+// comment for why the XML-API check precedes requireCSRFDialect (GAP-5).
 func (w *Writer) DeleteVlan(ctx context.Context, vlanID int, force bool) error {
 	_ = force
+	if isGoAheadDialect(w.spec) {
+		return w.goaheadDeleteVlan(ctx, vlanID)
+	}
+	if err := requireCSRFDialect(w.spec, w.model.Key, "delete_vlan"); err != nil {
+		return err
+	}
 	path, err := requirePath(w.model.Key, w.spec.VlanConfigPath, "VLAN config")
 	if err != nil {
 		return err
@@ -847,6 +1243,82 @@ func (w *Writer) DeleteVlan(ctx context.Context, vlanID int, force bool) error {
 		return &model.WriteVerificationError{
 			Msg:    fmt.Sprintf("VLAN %d was not deleted", vlanID),
 			Before: nil,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// --- GoAhead XML API (GS728TPP) VLAN create/delete -- pin b26eb1f / commit
+// f8a890f ---
+
+// goaheadVlanIDs returns every VLAN id this switch's VLANList currently
+// reports, sorted, mirroring Python HttpWriter._goahead_vlan_ids (which
+// returns an unordered set -- Go's port sorts it purely so the
+// WriteVerificationError's before/after fields render deterministically).
+func (w *Writer) goaheadVlanIDs(ctx context.Context) ([]int, error) {
+	path, err := requirePath(w.model.Key, w.spec.VlanConfigPath, "VLAN config")
+	if err != nil {
+		return nil, err
+	}
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	names, err := ParseGoAheadVlanNames(html)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int, 0, len(names))
+	for id := range names {
+		out = append(out, id)
+	}
+	sort.Ints(out)
+	return out, nil
+}
+
+// goaheadCreateVlan creates vlan with name via VLANList and verifies it now
+// exists, mirroring Python HttpWriter._goahead_create_vlan exactly.
+func (w *Writer) goaheadCreateVlan(ctx context.Context, vlan int, name string) error {
+	before, err := w.goaheadVlanIDs(ctx)
+	if err != nil {
+		return err
+	}
+	if err := w.goaheadWrite(ctx, vlanCreateBody(vlan, name), fmt.Sprintf("create VLAN %d", vlan)); err != nil {
+		return err
+	}
+	after, err := w.goaheadVlanIDs(ctx)
+	if err != nil {
+		return err
+	}
+	if !intSliceContains(after, vlan) {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("VLAN %d was not created", vlan),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// goaheadDeleteVlan deletes vlan via VLANList and verifies it is gone,
+// mirroring Python HttpWriter._goahead_delete_vlan exactly.
+func (w *Writer) goaheadDeleteVlan(ctx context.Context, vlan int) error {
+	before, err := w.goaheadVlanIDs(ctx)
+	if err != nil {
+		return err
+	}
+	if err := w.goaheadWrite(ctx, vlanDeleteBody(vlan), fmt.Sprintf("delete VLAN %d", vlan)); err != nil {
+		return err
+	}
+	after, err := w.goaheadVlanIDs(ctx)
+	if err != nil {
+		return err
+	}
+	if intSliceContains(after, vlan) {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("VLAN %d was not deleted", vlan),
+			Before: before,
 			After:  after,
 		}
 	}
@@ -898,15 +1370,27 @@ func (w *Writer) Reboot(ctx context.Context, force bool) error {
 }
 
 // SetPortEnabled sets port's admin mode, mirroring Python
-// HttpWriter.set_port_enabled (http_write.py:797-844). GS110EMX routes to
+// HttpWriter.set_port_enabled (http_write.py:797-844, plus the GoAhead
+// branch added by pin b26eb1f / commit f8a890f). GS110EMX routes to
 // setGS110EMXPortEnabled (a genuinely different mechanism, its own
-// port_settings.html Physical Mode POST); every other managed model drives
-// the shared FASTPATH XUI grid (portsConfiguration.html). Plus-class models
-// (gs305ep/gs105pe) have port_config_path == "" at this pin and so raise
-// via requirePath -- no Plus-class implementation exists yet, honestly.
+// port_settings.html Physical Mode POST); the GoAhead dialect routes to
+// setGoAheadPortEnabled (Standard802_3List, the SAME object
+// SetPortDescription/SetPortSpeed already write, using dashboard_path
+// rather than port_config_path since this UI has no per-op write page);
+// every other managed model drives the shared FASTPATH XUI grid
+// (portsConfiguration.html). Plus-class models (gs305ep/gs105pe) have
+// port_config_path == "" at this pin and so raise via requirePath -- no
+// Plus-class implementation exists yet, honestly.
 func (w *Writer) SetPortEnabled(ctx context.Context, port int, enabled, force bool) error {
 	if err := w.guard(port, force); err != nil {
 		return err
+	}
+	if isGoAheadDialect(w.spec) {
+		path, err := requirePath(w.model.Key, w.spec.DashboardPath, "the ports page")
+		if err != nil {
+			return err
+		}
+		return w.setGoAheadPortEnabled(ctx, path, port, enabled)
 	}
 	path, err := requirePath(w.model.Key, w.spec.PortConfigPath, "the port-configuration page")
 	if err != nil {
@@ -955,6 +1439,46 @@ func (w *Writer) SetPortEnabled(ctx context.Context, port int, enabled, force bo
 	if after != xuiEnabled(enabled) {
 		return &model.WriteVerificationError{
 			Msg:    fmt.Sprintf("port %d admin mode did not read back as %q on %s", port, xuiEnabled(enabled), path),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// setGoAheadPortEnabled sets port's admin state through the GoAhead ports
+// page's Standard802_3List (the SAME object/page SetPortDescription/
+// SetPortSpeed already write), mirroring Python
+// HttpWriter._set_goahead_port_enabled (http_write.py, pin b26eb1f / commit
+// f8a890f) exactly: path is read back from the SAME page get_ports uses,
+// while the write itself goes to the single wcd endpoint like every other
+// GoAhead write.
+func (w *Writer) setGoAheadPortEnabled(ctx context.Context, path string, port int, enabled bool) error {
+	beforeRow, err := w.goaheadPortRow(ctx, path, port)
+	if err != nil {
+		return err
+	}
+	var before any
+	if beforeRow != nil {
+		before = beforeRow.AdminEnabled
+	}
+	body := portConfigBody(portInterfaceName(port), port, &enabled, nil)
+	if err := w.goaheadWrite(ctx, body, fmt.Sprintf("port %d admin -> %v", port, enabled)); err != nil {
+		return err
+	}
+	afterRow, err := w.goaheadPortRow(ctx, path, port)
+	if err != nil {
+		return err
+	}
+	var after any
+	got := false
+	if afterRow != nil {
+		after = afterRow.AdminEnabled
+		got = afterRow.AdminEnabled
+	}
+	if afterRow == nil || got != enabled {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("port %d did not read back as enabled=%v", port, enabled),
 			Before: before,
 			After:  after,
 		}
@@ -1114,7 +1638,7 @@ func (w *Writer) SetPortDescription(ctx context.Context, port int, description s
 	if beforeRow != nil {
 		before = beforeRow.Description
 	}
-	body := portConfigBody(portInterfaceName(port), port, description)
+	body := portConfigBody(portInterfaceName(port), port, nil, &description)
 	if err := w.goaheadWrite(ctx, body, fmt.Sprintf("port %d description", port)); err != nil {
 		return err
 	}

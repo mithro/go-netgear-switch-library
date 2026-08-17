@@ -1290,3 +1290,35 @@ func TestGS110EMXSetHostnameAcceptsMaxLengthName(t *testing.T) {
 		t.Fatalf("SetHostname(20 chars): %v", err)
 	}
 }
+
+// --- CreateVlan/DeleteVlan CSRF-dialect gate (GAP-5, requireCSRFDialect) ---
+//
+// gsm7252ps (HTMLDialectXEFastpath) is one of the two dialects
+// webui.DialectHasCSRFHash MEASURED to carry no <input name="hash"> on any
+// write page. Before requireCSRFDialect, CreateVlan/DeleteVlan against this
+// dialect reached requireCSRF only after fetching the page, raising a bare
+// errUnexpectedPage (model.ErrHTTPUnexpectedPage) -- an unexpected-page
+// error, not a capability refusal. Now they must refuse by TYPE
+// (model.ErrUnsupportedCapability), matching Python's
+// HttpWriter.create_vlan/delete_vlan calling _require_csrf_dialect first,
+// and BEFORE touching the session at all.
+
+func TestCreateVlanRefusesCSRFLessDialect(t *testing.T) {
+	sess := newXUIFakeSession(map[string]string{})
+	w := mustNewWriter(t, sess, "gsm7252ps")
+	err := w.CreateVlan(context.Background(), 10, "irrelevant")
+	wantUnsupported(t, err, "CreateVlan(gsm7252ps)")
+	if len(sess.posts) != 0 {
+		t.Errorf("posts = %v, want none sent -- refused before any session I/O", sess.posts)
+	}
+}
+
+func TestDeleteVlanRefusesCSRFLessDialect(t *testing.T) {
+	sess := newXUIFakeSession(map[string]string{})
+	w := mustNewWriter(t, sess, "gsm7252ps")
+	err := w.DeleteVlan(context.Background(), 10, false)
+	wantUnsupported(t, err, "DeleteVlan(gsm7252ps)")
+	if len(sess.posts) != 0 {
+		t.Errorf("posts = %v, want none sent -- refused before any session I/O", sess.posts)
+	}
+}

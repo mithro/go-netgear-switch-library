@@ -135,14 +135,15 @@ const (
 // Exported so the capabilities oracle's HTTP derivation
 // (capabilities/support_http.go) can gate the writers that scrape this
 // token (today: CreateVlan/DeleteVlan) on the SAME measured fact, one
-// definition rather than a re-derived guess. NOT YET consulted by
-// webui.Writer.CreateVlan/DeleteVlan themselves -- they discover the same
-// fact indirectly (and less legibly, via a generic "no CSRF token on page"
-// HttpUnexpectedPageError rather than a named capability refusal) when
-// requireCSRF finds no hash field on a dialect this predicate already knows
-// lacks one. Wiring those two writers to check this predicate up front,
-// the way Python's HttpWriter.create_vlan/delete_vlan now do, is tracked
-// follow-up work, not done by this change.
+// definition rather than a re-derived guess. Also consulted directly by
+// webui.Writer.CreateVlan/DeleteVlan themselves via requireCSRFDialect
+// (writer.go): a dialect this predicate already knows lacks the token is
+// refused BEFORE any CSRF-scraping write is attempted, wrapping
+// model.ErrUnsupportedCapability -- mirroring Python's
+// HttpWriter.create_vlan/delete_vlan calling _require_csrf_dialect ahead of
+// _csrf, rather than letting requireCSRF discover the same fact indirectly
+// (and less legibly, via a generic "no CSRF token on page"
+// HttpUnexpectedPageError) after the page has already been fetched.
 func DialectHasCSRFHash(dialect HTMLDialect) bool {
 	return dialect == HTMLDialectStandard || dialect == HTMLDialectGS105PE
 }

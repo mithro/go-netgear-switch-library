@@ -338,8 +338,10 @@ func (f *HTTPFace) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if f.spec.HTMLDialect == webui.HTMLDialectGoAheadXML {
-		// The only GoAhead write wired is the SSL-cert import (a raw XML POST
-		// to <session>/wcd); goaheadPost 404s anything else.
+		// Every GoAhead write is a raw XML POST to <session>/wcd, dispatched
+		// by applyGoAheadWrite on the object name inside the body (SSL-cert
+		// import, port/PoE/VLAN/PVID writes); goaheadPost 404s any other
+		// path.
 		f.goaheadPost(w, r)
 		return
 	}
@@ -638,15 +640,12 @@ func goaheadApplyCertImport(state *State, xmlBody string) string {
 // goaheadStandard802_3Entry is one Standard802_3List/Entry the GoAhead ports
 // page posts, mirroring the subset of fields Python web_gs728tpp.apply_write
 // reads off each entry: interfaceName (identifies the port), adminState
-// (present on this codebase's writers is deliberately NOT set -- no
-// SetPortEnabled write over the GoAhead dialect exists yet -- but is still
-// decoded here since it travels in the SAME wire section and a future
-// writer would otherwise silently no-op against this fake), and the
+// (SetPortEnabled's write, pin b26eb1f / commit f8a890f), and the
 // description/speed-duplex triad SetPortDescription/SetPortSpeed post.
-// InterfaceDescription is a pointer so an ABSENT element (a speed-only
-// write) is distinguishable from a PRESENT-but-empty one (a description
-// write clearing the label) -- mirroring Python's `desc is not None` check
-// against ElementTree's findtext.
+// InterfaceDescription is a pointer so an ABSENT element (an admin- or
+// speed-only write) is distinguishable from a PRESENT-but-empty one (a
+// description write clearing the label) -- mirroring Python's `desc is not
+// None` check against ElementTree's findtext.
 type goaheadStandard802_3Entry struct {
 	InterfaceName               string  `xml:"interfaceName"`
 	AdminState                  string  `xml:"adminState"`
@@ -725,10 +724,83 @@ func applyGoAheadStandard802_3List(state *State, entries []goaheadStandard802_3E
 	}
 }
 
-// goaheadWriteXML captures the "POST wcd" DeviceConfiguration objects this
-// Go codebase's writers can post -- Standard802_3List (SetPortDescription/
-// SetPortSpeed) and DeviceBasicInfo (SetHostname) -- mirroring the shape
-// Python web_gs728tpp.apply_write's per-tag dispatch loop reads.
+// goaheadVLANEntry is one VLANList/VLAN element a create/rename or delete
+// write posts, mirroring Python web_gs728tpp.apply_write's "VLANList"
+// branch. VLANName is only meaningful on a "set" (create/rename) write.
+type goaheadVLANEntry struct {
+	VLANID   string `xml:"VLANID"`
+	VLANName string `xml:"VLANName"`
+}
+
+// goaheadVLANListXML is the VLANList write body's decode shape --
+// vlanCreateBody/vlanDeleteBody (webui/goahead_write.go) each post exactly
+// one <VLAN>, but the shape allows more, mirroring Python's `for vlan_el in
+// section.findall("VLAN")`.
+type goaheadVLANListXML struct {
+	Action string             `xml:"action,attr"`
+	VLANs  []goaheadVLANEntry `xml:"VLAN"`
+}
+
+// goaheadVLANMember is one VLANMember element a VLANMembershipList write
+// posts, mirroring Python web_gs728tpp.apply_write's "VLANMembershipList"
+// branch. TaggingMode is only present on a "set" write (EXCLUDED is a
+// "delete" carrying no taggingMode at all -- see vlanMembershipBody's own
+// doc comment, webui/goahead_write.go).
+type goaheadVLANMember struct {
+	InterfaceName string `xml:"interfaceName"`
+	TaggingMode   string `xml:"taggingMode"`
+}
+
+// goaheadMembershipVLAN is one VLANMembershipList/VLAN element, carrying
+// the VLAN identity plus its (usually single) posted member.
+type goaheadMembershipVLAN struct {
+	VLANID  string              `xml:"VLANID"`
+	Members []goaheadVLANMember `xml:"MembershipList>VLANMember"`
+}
+
+// goaheadVLANMembershipListXML is the VLANMembershipList write body's
+// decode shape.
+type goaheadVLANMembershipListXML struct {
+	Action string                  `xml:"action,attr"`
+	VLANs  []goaheadMembershipVLAN `xml:"VLAN"`
+}
+
+// goaheadPVIDInterface is one VLANInterfaceList/Interface element a PVID
+// write posts, mirroring Python web_gs728tpp.apply_write's
+// "VLANInterfaceList" branch.
+type goaheadPVIDInterface struct {
+	InterfaceName string `xml:"interfaceName"`
+	PVID          string `xml:"PVID"`
+}
+
+// goaheadVLANInterfaceListXML is the VLANInterfaceList write body's decode
+// shape (SetPVID's pvidBody, webui/goahead_write.go).
+type goaheadVLANInterfaceListXML struct {
+	Interfaces []goaheadPVIDInterface `xml:"Interface"`
+}
+
+// goaheadPoEInterface is one PoEPSEInterfaceList/Interface element a PoE
+// admin write posts, mirroring Python web_gs728tpp.apply_write's
+// "PoEPSEInterfaceList" branch.
+type goaheadPoEInterface struct {
+	InterfaceName string `xml:"interfaceName"`
+	AdminEnable   string `xml:"adminEnable"`
+}
+
+// goaheadPoEPSEInterfaceListXML is the PoEPSEInterfaceList write body's
+// decode shape (SetPoE/CyclePoE/ClearPoEFault's poeAdminBody,
+// webui/goahead_write.go).
+type goaheadPoEPSEInterfaceListXML struct {
+	Interfaces []goaheadPoEInterface `xml:"Interface"`
+}
+
+// goaheadWriteXML captures every "POST wcd" DeviceConfiguration object this
+// Go codebase's writers can post, mirroring the shape Python
+// web_gs728tpp.apply_write's per-tag dispatch loop reads:
+// Standard802_3List (SetPortDescription/SetPortSpeed/SetPortEnabled),
+// DeviceBasicInfo (SetHostname), VLANList (CreateVlan/DeleteVlan),
+// VLANMembershipList (SetVlanMembership), VLANInterfaceList (SetPVID) and
+// PoEPSEInterfaceList (SetPoE/CyclePoE/ClearPoEFault).
 // SSLCryptoCertificateImportList is detected and handled separately
 // (applyGoAheadWrite, below): its own decode shape (goaheadCertImportXML)
 // predates this struct and is unrelated to Standard802_3List's fields.
@@ -739,13 +811,7 @@ func applyGoAheadStandard802_3List(state *State, entries []goaheadStandard802_3E
 // struct shape rather than goaheadStandard802_3Entry's. Other captures
 // every OTHER top-level child's tag name, purely for an honest "no handler
 // for X" refusal message -- mirroring Python's `[s.tag for s in root]`
-// diagnostic -- when none of the objects above is present: this Go port
-// does not (yet) wire VLANList/VLANMembershipList/VLANInterfaceList/
-// PoEPSEInterfaceList the way the real firmware (and the pinned Python
-// fake) does, since no writer in this codebase posts them over the GoAhead
-// dialect at this pin (webui.Writer's SetPVID/CreateVlan/DeleteVlan/SetPoE
-// do not branch on HTMLDialectGoAheadXML) -- wiring their fake handling
-// without a real caller would be untested surface, so an unrecognized
+// diagnostic -- when none of the objects above is present: an unrecognized
 // object fails loudly here rather than silently succeeding.
 type goaheadWriteXML struct {
 	Standard802_3List *struct {
@@ -754,9 +820,139 @@ type goaheadWriteXML struct {
 	DeviceBasicInfo *struct {
 		DeviceName *string `xml:"deviceName"`
 	} `xml:"DeviceBasicInfo"`
-	Other []struct {
+	VLANList            *goaheadVLANListXML            `xml:"VLANList"`
+	VLANMembershipList  *goaheadVLANMembershipListXML  `xml:"VLANMembershipList"`
+	VLANInterfaceList   *goaheadVLANInterfaceListXML   `xml:"VLANInterfaceList"`
+	PoEPSEInterfaceList *goaheadPoEPSEInterfaceListXML `xml:"PoEPSEInterfaceList"`
+	Other               []struct {
 		XMLName xml.Name
 	} `xml:",any"`
+}
+
+// applyGoAheadVLANList mutates state from a VLANList write's <VLAN>
+// entries -- create/rename ("set") or delete -- mirroring Python
+// web_gs728tpp.apply_write's "VLANList" branch. Returns ok=false on a bad
+// (non-digit) VLANID so the caller can surface the SAME non-zero statusCode
+// Python's fake does, rather than silently skipping it.
+func applyGoAheadVLANList(state *State, action string, vlans []goaheadVLANEntry) (badVLANID string, ok bool) {
+	for _, v := range vlans {
+		vidText := strings.TrimSpace(v.VLANID)
+		if vidText == "" || !isAllDigits(vidText) {
+			return vidText, false
+		}
+		vid, err := strconv.Atoi(vidText)
+		if err != nil {
+			return vidText, false
+		}
+		if action == "delete" {
+			delete(state.Vlans, vid)
+			continue
+		}
+		name := strings.TrimSpace(v.VLANName)
+		if sim, exists := state.Vlans[vid]; exists {
+			sim.Name = name
+		} else {
+			state.Vlans[vid] = &VlanSim{Name: name}
+		}
+	}
+	return "", true
+}
+
+// applyGoAheadVLANMembership mutates one VLAN's per-port membership from a
+// VLANMembershipList write's <VLAN><MembershipList><VLANMember> entries,
+// mirroring Python web_gs728tpp.apply_write's "VLANMembershipList" branch.
+// A referenced VLAN that does not exist is refused (ok=false, matching
+// Python's early "no such VLAN" statusCode), never silently skipped. A
+// member whose interfaceName is not a physical port ("g<digits>") is a
+// silent skip, mirroring Python's `if port is None: continue`.
+func applyGoAheadVLANMembership(state *State, action string, vlans []goaheadMembershipVLAN) (missingVLAN int, ok bool) {
+	for _, v := range vlans {
+		vid, _ := strconv.Atoi(strings.TrimSpace(v.VLANID))
+		vsim, exists := state.Vlans[vid]
+		if !exists {
+			return vid, false
+		}
+		for _, m := range v.Members {
+			port, portOK := goaheadIfacePort(m.InterfaceName)
+			if !portOK {
+				continue
+			}
+			if action == "delete" {
+				delete(vsim.Member, port)
+				delete(vsim.Untagged, port)
+				continue
+			}
+			if vsim.Member == nil {
+				vsim.Member = map[int]bool{}
+			}
+			vsim.Member[port] = true
+			if strings.TrimSpace(m.TaggingMode) == "1" {
+				if vsim.Untagged == nil {
+					vsim.Untagged = map[int]bool{}
+				}
+				vsim.Untagged[port] = true
+			} else {
+				delete(vsim.Untagged, port)
+			}
+		}
+	}
+	return 0, true
+}
+
+// applyGoAheadPVIDs mutates each Interface's PVID from a VLANInterfaceList
+// write, mirroring Python web_gs728tpp.apply_write's "VLANInterfaceList"
+// branch. An interface name that isn't a physical port, or a non-numeric
+// PVID, is a silent skip, mirroring Python's `if port is not None and
+// pvid.isdigit()`.
+func applyGoAheadPVIDs(state *State, interfaces []goaheadPVIDInterface) {
+	for _, iface := range interfaces {
+		port, ok := goaheadIfacePort(iface.InterfaceName)
+		if !ok {
+			continue
+		}
+		pvidText := strings.TrimSpace(iface.PVID)
+		if pvidText == "" || !isAllDigits(pvidText) {
+			continue
+		}
+		pvid, err := strconv.Atoi(pvidText)
+		if err != nil {
+			continue
+		}
+		state.Pvids[port] = pvid
+	}
+}
+
+// applyGoAheadPoE mutates each Interface's PoE admin state (and its
+// coherent detect status) from a PoEPSEInterfaceList write, mirroring
+// Python web_gs728tpp.apply_write's "PoEPSEInterfaceList" branch: admin off
+// settles to detect DISABLED(1); admin on with nothing attached resumes
+// SEARCHING(2) -- the same coherence rule this file's applyPoE uses for the
+// Plus-CGI dialect, just with different wire admin codes (1/2 here vs
+// ADMIN_MODE's "1"/"0" there). An interface name that isn't a physical PoE
+// port, or an adminEnable outside {1,2}, is a silent skip, mirroring
+// Python's `if port is None or port not in state.poe or admin not in
+// ("1", "2"): continue`.
+func applyGoAheadPoE(state *State, interfaces []goaheadPoEInterface) {
+	for _, iface := range interfaces {
+		port, ok := goaheadIfacePort(iface.InterfaceName)
+		if !ok {
+			continue
+		}
+		sim, exists := state.Poe[port]
+		if !exists {
+			continue
+		}
+		admin := strings.TrimSpace(iface.AdminEnable)
+		if admin != "1" && admin != "2" {
+			continue
+		}
+		sim.Admin = admin == "1"
+		if admin == "1" {
+			sim.Detect = 2
+		} else {
+			sim.Detect = 1
+		}
+	}
 }
 
 // applyGoAheadWrite applies one "POST wcd" write body and returns the wcd
@@ -777,6 +973,26 @@ func applyGoAheadWrite(state *State, xmlBody string) string {
 	var doc goaheadWriteXML
 	if err := xml.Unmarshal([]byte(xmlBody), &doc); err != nil {
 		return goaheadStatusResponse(1, fmt.Sprintf("malformed XML: %v", err))
+	}
+	if doc.VLANList != nil {
+		if bad, ok := applyGoAheadVLANList(state, doc.VLANList.Action, doc.VLANList.VLANs); !ok {
+			return goaheadStatusResponse(2, fmt.Sprintf("bad VLANID %q", bad))
+		}
+		return goaheadStatusResponse(0, "")
+	}
+	if doc.VLANMembershipList != nil {
+		if missing, ok := applyGoAheadVLANMembership(state, doc.VLANMembershipList.Action, doc.VLANMembershipList.VLANs); !ok {
+			return goaheadStatusResponse(2, fmt.Sprintf("no such VLAN %d", missing))
+		}
+		return goaheadStatusResponse(0, "")
+	}
+	if doc.VLANInterfaceList != nil {
+		applyGoAheadPVIDs(state, doc.VLANInterfaceList.Interfaces)
+		return goaheadStatusResponse(0, "")
+	}
+	if doc.PoEPSEInterfaceList != nil {
+		applyGoAheadPoE(state, doc.PoEPSEInterfaceList.Interfaces)
+		return goaheadStatusResponse(0, "")
 	}
 	if doc.Standard802_3List != nil {
 		applyGoAheadStandard802_3List(state, doc.Standard802_3List.Entries)

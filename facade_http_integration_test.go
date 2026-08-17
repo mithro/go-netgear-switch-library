@@ -603,10 +603,13 @@ func TestFacadeHTTPIntegration_GSM7252PSVlanMembershipRoundTrip(t *testing.T) {
 // proves box sensors are non-vacuous vs SeedGS728TPP(), that get_stats
 // honestly raises (this model's web UI has NO per-port statistics page at
 // all -- StatsPath is nil in its HTTPModelSpec), that SetVlanMembership
-// ALSO honestly raises (no separate VLAN-membership POST page -- membership
-// is read-only-derived from the PVID page's inline list), and that
-// UploadCertificate reaches the GoAhead XML-API cert-upload flow (a
-// GROUNDED write independent of any read-side gate).
+// reaches the GoAhead XML-API's VLANMembershipList write and verifies (GS728TPP
+// GoAhead write-completion slice, pin b26eb1f / commit f8a890f: there is no
+// separate Plus-CGI VLAN-membership POST page on this dialect -- the wcd
+// endpoint IS the write mechanism, membership is still read-derived from
+// the PVID page's inline JoinVLANList), and that UploadCertificate reaches
+// the GoAhead XML-API cert-upload flow (a GROUNDED write independent of any
+// read-side gate).
 func TestFacadeHTTPIntegration_GS728TPPReadsAndUnsupportedStatsAndCertUpload(t *testing.T) {
 	vsw := startVirtualSwitch(t, "gs728tpp")
 	sw := httpFacadeFor(t, vsw, "gs728tpp")
@@ -686,9 +689,19 @@ func TestFacadeHTTPIntegration_GS728TPPReadsAndUnsupportedStatsAndCertUpload(t *
 		t.Errorf("GetStats() error = %q, want it to name the requested backend http", statsErr.Error())
 	}
 
-	writeErr := sw.SetVlanMembership(ctx, 5, 1, netgearswitch.VlanTagged, httpWrite(false))
-	if !errors.Is(writeErr, netgearswitch.ErrUnsupportedCapability) {
-		t.Errorf("SetVlanMembership() error = %v, want wrapping ErrUnsupportedCapability (gs728tpp has no VLAN-membership POST page)", writeErr)
+	// Port 2's PVID is 1 in the seed and it is not untagged in VLAN 5 (only
+	// ports 3/5/12/23 are), so untagging it into VLAN 5 is a real,
+	// observable transition -- not a same-state no-op.
+	if err := sw.SetVlanMembership(ctx, 5, 2, netgearswitch.VlanUntagged, httpWrite(false)); err != nil {
+		t.Fatalf("SetVlanMembership() error = %v, want nil (GoAhead dialect writes VLANMembershipList)", err)
+	}
+	vlans, err := sw.GetVLANs(ctx, overHTTP())
+	if err != nil {
+		t.Fatalf("GetVLANs() error = %v", err)
+	}
+	vlan5 := findVlan(t, vlans, 5)
+	if !containsInt(vlan5.UntaggedPorts, 2) {
+		t.Errorf("vlan 5 UntaggedPorts = %v, want to contain 2 after SetVlanMembership", vlan5.UntaggedPorts)
 	}
 
 	// Cert upload: a GROUNDED, independent-of-reads_verified write flow
