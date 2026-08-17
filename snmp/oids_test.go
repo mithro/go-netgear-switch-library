@@ -18,6 +18,7 @@ func TestOIDConstants(t *testing.T) {
 	}{
 		{"SysDescr", snmp.SysDescr, "1.3.6.1.2.1.1.1.0"},
 		{"SysObjectID", snmp.SysObjectID, "1.3.6.1.2.1.1.2.0"},
+		{"SysName", snmp.SysName, "1.3.6.1.2.1.1.5.0"},
 		{"IfType", snmp.IfType, "1.3.6.1.2.1.2.2.1.3"},
 		{"IfAdminStatus", snmp.IfAdminStatus, "1.3.6.1.2.1.2.2.1.7"},
 		{"IfOperStatus", snmp.IfOperStatus, "1.3.6.1.2.1.2.2.1.8"},
@@ -30,6 +31,9 @@ func TestOIDConstants(t *testing.T) {
 		{"IfHCOutUcast", snmp.IfHCOutUcast, "1.3.6.1.2.1.31.1.1.1.11"},
 		{"IfHighSpeed", snmp.IfHighSpeed, "1.3.6.1.2.1.31.1.1.1.15"},
 		{"IfAlias", snmp.IfAlias, "1.3.6.1.2.1.31.1.1.1.18"},
+		{"Dot3StatsDuplexStatus", snmp.Dot3StatsDuplexStatus, "1.3.6.1.2.1.10.7.2.1.19"},
+		{"Dot3PauseAdminMode", snmp.Dot3PauseAdminMode, "1.3.6.1.2.1.10.7.10.1.1"},
+		{"Dot3PauseOperMode", snmp.Dot3PauseOperMode, "1.3.6.1.2.1.10.7.10.1.2"},
 		{"Dot1dBaseBridgeAddress", snmp.Dot1dBaseBridgeAddress, "1.3.6.1.2.1.17.1.1"},
 		{"Dot1dBasePortIfIndex", snmp.Dot1dBasePortIfIndex, "1.3.6.1.2.1.17.1.4.1.2"},
 		{"Dot1qTpFdbPort", snmp.Dot1qTpFdbPort, "1.3.6.1.2.1.17.7.1.2.2.1.2"},
@@ -118,6 +122,12 @@ func TestGetVendorOidsGSM7252PS(t *testing.T) {
 		BoxPSUPower:                "1.3.6.1.4.1.4526.10.43.1.8.1.5",
 		BoxTemp:                    "1.3.6.1.4.1.4526.10.43.1.15.1.3",
 		DHCPModeUnverified:         "1.3.6.1.4.1.4526.10.99.1",
+		SyslogAdminMode:            "1.3.6.1.4.1.4526.10.14.1.4.1.0",
+		SyslogLocalPort:            "1.3.6.1.4.1.4526.10.14.1.4.3.0",
+		SyslogHostAddr:             "1.3.6.1.4.1.4526.10.14.1.4.5.1.3",
+		SyslogHostPort:             "1.3.6.1.4.1.4526.10.14.1.4.5.1.4",
+		SyslogHostSeverity:         "1.3.6.1.4.1.4526.10.14.1.4.5.1.5",
+		SyslogHostStatus:           "1.3.6.1.4.1.4526.10.14.1.4.5.1.7",
 		MgmtWriteAddrUnverified:    "1.3.6.1.4.1.4526.10.98.1",
 		MgmtWriteNetmaskUnverified: "1.3.6.1.4.1.4526.10.98.2",
 		MgmtWriteGatewayUnverified: "1.3.6.1.4.1.4526.10.98.3",
@@ -143,6 +153,12 @@ func TestGetVendorOidsGSM7228PS(t *testing.T) {
 	}
 	if vo.PoEPowerMw != "1.3.6.1.4.1.4526.11.15.1.1.1.2" {
 		t.Errorf("PoEPowerMw = %q, want %q", vo.PoEPowerMw, "1.3.6.1.4.1.4526.11.15.1.1.1.2")
+	}
+	// The syslog column layout under <base>.14 is shared by BOTH vendor
+	// families (4526.10 FASTPATH and 4526.11 S3300) -- see VendorOids's
+	// SyslogHostStatus doc comment.
+	if vo.SyslogHostAddr != "1.3.6.1.4.1.4526.11.14.1.4.5.1.3" {
+		t.Errorf("SyslogHostAddr = %q, want %q", vo.SyslogHostAddr, "1.3.6.1.4.1.4526.11.14.1.4.5.1.3")
 	}
 }
 
