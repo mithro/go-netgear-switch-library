@@ -286,6 +286,41 @@ func SeedGSM7252PS() *State {
 
 	s.Mgmt = mgmt
 
+	// MEASURED 2026-08-03 on 10.1.5.22's own userManagement.html. The
+	// wording is that PAGE's, not the CLI's -- the same switch's
+	// `show users` calls admin "Read/Write" (see CLIAccessMode below).
+	// Ported field-for-field from Python's seed_gsm7252ps (seed.py:1259).
+	//
+	// CLIAccessMode is PRINCIPLE-5 territory (see UserSim's own doc
+	// comment): Python's own virtual fake has no `show users` CLI
+	// renderer to port from at pin b26eb1f, so these two values are
+	// transcribed from the live-verified table in Python commit 4619e3c
+	// ("feat(cli): read the switch's local user accounts") rather than
+	// from a Python fake seed or a captured fixture file.
+	s.Users = []UserSim{
+		{Name: "admin", HTTPAccessMode: "Super User", CLIAccessMode: "Read/Write"},
+		{Name: "guest", HTTPAccessMode: "Read Only", CLIAccessMode: "Read Only"},
+	}
+
+	// MEASURED 2026-08-03 on 10.1.5.22, HTTP pages and `show ip http` /
+	// `show ip ssh` / `show telnetcon` agreeing. Telnet really is OFF here,
+	// independently confirmed by TCP 23 being refused. Neither this
+	// switch's http nor its ssh page prints a port, so both are nil --
+	// NOT defaulted to 80/22, which would be inventing a field. Ported
+	// field-for-field from Python's seed_gsm7252ps (seed.py:1265).
+	//
+	// CLIPort is PRINCIPLE-5 territory the same way UserSim.CLIAccessMode
+	// is above: transcribed from Python commit 2c7ddff's live-verified
+	// table ("feat(cli): read which management services are enabled"),
+	// "gsm7252ps  http=on:None  https=on:443  telnet=off  ssh=on:None" --
+	// not from a Python fake seed or a captured fixture file.
+	s.Services = map[string]ServiceSim{
+		"http":   {Enabled: true},
+		"https":  {Enabled: true, Port: model.Ptr(443), CLIPort: model.Ptr(443)},
+		"ssh":    {Enabled: true},
+		"telnet": {Enabled: false},
+	}
+
 	s.ModelName = "GSM7252PS"
 
 	s.Serial = "2BW20A47000CC"
@@ -650,6 +685,52 @@ func SeedM4300_24X() *State {
 	s.Lldp = lldp
 
 	s.Mgmt = mgmt
+
+	// MEASURED 2026-08-03 on 10.1.5.13's own userManagement.html -- the
+	// SAME two words the gsm7252ps page uses, even though this switch's
+	// `show users` says "Privilege-15" where that one says "Read/Write"
+	// (see CLIAccessMode below). The web UI is the consistent face; the
+	// CLI is not. Ported field-for-field from Python's seed_m4300_24x
+	// (seed.py:2466).
+	//
+	// CLIAccessMode is PRINCIPLE-5 territory -- see SeedGSM7252PS's
+	// matching comment and UserSim's own doc comment for why (Python has
+	// no CLI `show users` renderer to port from at pin b26eb1f). Values
+	// transcribed from Python commit 4619e3c's live-verified table.
+	//
+	// admin's SNMPv3Access/SNMPv3Auth/SNMPv3Encryption ("Read
+	// Only"/"MD5"/"None") are the ONE measured SNMPv3 row anywhere in the
+	// pinned Python source -- parse_users' own docstring transcript
+	// (protocols/cli/parse.py:779-782, pin b26eb1f) IS this switch's
+	// admin row (its access_mode "Privilege-15" only matches m4300-24x,
+	// never gsm7252ps's "Read/Write"). guest's SNMPv3 columns stay ""
+	// (unmeasured) rather than guessed.
+	s.Users = []UserSim{
+		{
+			Name: "admin", HTTPAccessMode: "Super User", CLIAccessMode: "Privilege-15",
+			SNMPv3Access: "Read Only", SNMPv3Auth: "MD5", SNMPv3Encryption: "None",
+		},
+		{Name: "guest", HTTPAccessMode: "Read Only", CLIAccessMode: "Privilege-1"},
+	}
+
+	// MEASURED 2026-08-03 on 10.1.5.13, HTTP pages and CLI agreeing on
+	// every state and every port the pages print. Unlike the gsm7252ps
+	// this switch's http/https/ssh pages DO print their ports; its telnet
+	// page still does not (the CLI reports 23, the page has no such
+	// field), so telnet's HTTP Port stays nil here -- the mock must not
+	// print what the device does not. Ported field-for-field from
+	// Python's seed_m4300_24x (seed.py:2473).
+	//
+	// CLIPort is PRINCIPLE-5 territory -- see SeedGSM7252PS's matching
+	// comment. Values transcribed from Python commit 2c7ddff's
+	// live-verified table, "m4300-24x  http=on:80  https=on:443
+	// telnet=on:23  ssh=on:22".
+	s.Services = map[string]ServiceSim{
+		"http":   {Enabled: true, Port: model.Ptr(80), CLIPort: model.Ptr(80)},
+		"https":  {Enabled: true, Port: model.Ptr(443), CLIPort: model.Ptr(443)},
+		"ssh":    {Enabled: true, Port: model.Ptr(22), CLIPort: model.Ptr(22)},
+		"telnet": {Enabled: true, CLIPort: model.Ptr(23)},
+	}
 
 	s.NsdpMac = [6]byte{0x8c, 0x3b, 0xad, 0x6b, 0xbb, 0xe0}
 

@@ -217,6 +217,83 @@ type MgmtSim struct {
 	Mode    string
 }
 
+// UserSim is one local login account, as the switch's own pages/CLI word
+// it, mirroring Python's UserSim dataclass (state.py:212-230) plus one
+// field Python's fake does not yet have.
+//
+// HTTPAccessMode is stored VERBATIM rather than derived from a privilege
+// flag, because the same account is worded DIFFERENTLY depending on which
+// face is asked -- measured on 10.1.5.22 and 10.1.5.13, where admin reads
+// "Super User" on userManagement.html but "Read/Write" and "Privilege-15"
+// respectively through each switch's own `show users`. A mock that stored
+// one level and rendered it per face would be inventing the wording;
+// storing what each page really emits means the reader's own word-to-
+// privilege mapping is what gets exercised.
+//
+// CLIAccessMode extends beyond the pinned Python source (pin b26eb1f):
+// Python's own state.py docstring for this type says "The CLI face has no
+// `show users` yet. When it gains one it needs its own field here, NOT this
+// one: the two faces genuinely disagree" -- i.e. Python has never built the
+// CLI `show users` virtual-fake renderer this slice's task explicitly
+// requires, so there is no existing Go-side Python field to port for it.
+// The VALUES below are still measured, not invented: Python commit 4619e3c
+// ("feat(cli): read the switch's local user accounts") records the
+// live-verified table this field's seed values are transcribed from --
+//
+//	m4300-24x  admin=Privilege-15  guest=Privilege-1
+//	gsm7252ps  admin=Read/Write    guest=Read Only
+//
+// -- but that commit message is prose, not a checked-in fixture file or a
+// Python fake seed, so per this project's principle 5 this is flagged
+// explicitly here rather than silently claimed as "ported from Python's
+// fake" the way HTTPAccessMode is.
+type UserSim struct {
+	Name           string
+	HTTPAccessMode string
+	CLIAccessMode  string
+	// SNMPv3Access/SNMPv3Auth/SNMPv3Encryption are the three SNMPv3 columns
+	// `show users` also carries. "" (the default, for every row but one --
+	// see SeedM4300_24X) means unmeasured, rendered as a blank cell rather
+	// than a guess: only ONE row anywhere in the pinned Python source has a
+	// measured value here (parse_users' own docstring transcript, which is
+	// m4300-24x's admin row).
+	SNMPv3Access     string
+	SNMPv3Auth       string
+	SNMPv3Encryption string
+}
+
+// ServiceSim is one management service's admin state, as its own config
+// page / CLI show command reports it, mirroring Python's ServiceSim
+// dataclass (state.py:233-245) plus one field Python's fake does not yet
+// have.
+//
+// Port is nil where the HTTP config page carries NO port field -- which is
+// a real per-page difference, not a gap in the mock: the m4300 SSH page
+// publishes v_1_10_1="22" while the gsm7252ps SSH page has no such
+// coordinate at all (measured 2026-08-03). Seeding 22 there would make the
+// fake claim a field the device does not print.
+//
+// CLIPort extends beyond the pinned Python source, for the same reason
+// UserSim.CLIAccessMode does: Python's virtual CLI face has no `show ip
+// http`/`show telnetcon`/`show ip ssh` renderer at this pin, only
+// HTTP-page ServiceSim values. The port VALUES here are still measured,
+// via Python commit 2c7ddff ("feat(cli): read which management services
+// are enabled")'s live-verified table --
+//
+//	m4300-24x  http=on:80    https=on:443  telnet=on:23   ssh=on:22
+//	gsm7252ps  http=on:None  https=on:443  telnet=off     ssh=on:None
+//
+// -- prose in a commit message, not a fixture file; flagged per principle 5
+// the same way CLIAccessMode is. Enabled state is NOT duplicated per face:
+// every measured case has the CLI and HTTP page agreeing on admin state
+// ("HTTP<->CLI agree exactly" / "agreeing on every state"), so ServiceSim
+// carries one Enabled field for both.
+type ServiceSim struct {
+	Enabled bool
+	Port    *int
+	CLIPort *int
+}
+
 // ScpCopy is one (source_url, dest) pair of an SCP cert-deploy copy
 // command, part of ScpCertDeploySim.
 type ScpCopy struct {
@@ -286,6 +363,15 @@ type State struct {
 	BridgePorts      map[int]int
 	Lldp             []LldpSim
 	Mgmt             MgmtSim
+
+	// Users/Services back GetUsers/GetServices, mirroring Python's
+	// VirtualSwitchState.users: list[UserSim] = field(default_factory=list)
+	// / .services: dict[str, ServiceSim] = field(default_factory=dict)
+	// (state.py:525/529). Populated only by SeedGSM7252PS/SeedM4300_24X --
+	// see those functions' own doc comments for exactly why not the other
+	// managed-model seeds. Services is keyed "http"/"https"/"ssh"/"telnet".
+	Users    []UserSim
+	Services map[string]ServiceSim
 
 	ModelName    string
 	Serial       string
@@ -384,6 +470,8 @@ func NewState(modelKey string) *State {
 			Gateway: "0.0.0.0",
 			Mode:    "dhcp",
 		},
+		Users:                     []UserSim{},
+		Services:                  map[string]ServiceSim{},
 		NsdpPassword:              "password",
 		NsdpMac:                   [6]byte{0x28, 0xc6, 0x8e, 0x00, 0x00, 0x01},
 		NsdpPortMirroringSources:  map[int]bool{},
@@ -425,6 +513,8 @@ func (s *State) Snapshot() *State {
 		BridgePorts:               cloneIntIntMap(s.BridgePorts),
 		Lldp:                      cloneLldpSlice(s.Lldp),
 		Mgmt:                      s.Mgmt,
+		Users:                     cloneUsersSlice(s.Users),
+		Services:                  cloneServicesMap(s.Services),
 		ModelName:                 s.ModelName,
 		Serial:                    s.Serial,
 		Firmware:                  s.Firmware,
@@ -554,6 +644,34 @@ func cloneLldpSlice(in []LldpSim) []LldpSim {
 	}
 	out := make([]LldpSim, len(in))
 	copy(out, in)
+	return out
+}
+
+// cloneUsersSlice copies in element-by-element: UserSim carries only plain
+// strings, so a shallow slice copy is already a deep copy.
+func cloneUsersSlice(in []UserSim) []UserSim {
+	if in == nil {
+		return nil
+	}
+	out := make([]UserSim, len(in))
+	copy(out, in)
+	return out
+}
+
+// cloneServicesMap deep-copies in, including each ServiceSim's Port/CLIPort
+// pointers -- a shallow map copy would leave the clone's *int fields
+// aliasing the original's, which Restore's whole-struct assignment (see its
+// own doc comment) requires NOT to happen.
+func cloneServicesMap(in map[string]ServiceSim) map[string]ServiceSim {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]ServiceSim, len(in))
+	for k, v := range in {
+		v.Port = cloneIntPtr(v.Port)
+		v.CLIPort = cloneIntPtr(v.CLIPort)
+		out[k] = v
+	}
 	return out
 }
 

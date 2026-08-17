@@ -663,6 +663,10 @@ func (f *fakeVLANReader) GetSensors(context.Context) ([]model.Sensor, error)    
 func (f *fakeVLANReader) GetMgmtIP(context.Context) (model.MgmtIPConfig, error) {
 	panic("not used")
 }
+func (f *fakeVLANReader) GetUsers(context.Context) ([]model.SwitchUser, error) { panic("not used") }
+func (f *fakeVLANReader) GetServices(context.Context) ([]model.ServiceStatus, error) {
+	panic("not used")
+}
 
 func TestDeleteVlan_ProtectedMemberBlocksWithoutForce(t *testing.T) {
 	clearBackendRegistry(t)

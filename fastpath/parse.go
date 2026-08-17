@@ -998,3 +998,122 @@ func parseInterfaceCounters(text string, port int) model.PortStats {
 		TxErrors:  get(counterTxErrorsLabel),
 	}
 }
+
+// ---------------------------------------------------------------------
+// show users / show ip http / show telnetcon / show ip ssh -- local login
+// accounts and management-service state. Ported field-for-field from the
+// pinned python-netgear-switch-library @ b26eb1f, src/netgear_switch/
+// protocols/cli/parse.py's parse_users (parse.py:772-809) and
+// parse_services (parse.py:707-764).
+//
+// PRINCIPLE-5 NOTE: unlike every other entity parser in this file, these two
+// have NO captured device-transcript FIXTURE FILE on the Python side (no
+// tests/fixtures/cli/*users*.txt or *_ip_http*.txt exists at this pin) --
+// only an inline docstring transcript in parse_users's own doc comment plus
+// the live-verified value tables recorded in the Python commit messages that
+// introduced these two ops (4619e3c "feat(cli): read the switch's local user
+// accounts", 2c7ddff "feat(cli): read which management services are
+// enabled"). The parser LOGIC below is still a faithful field-for-field
+// port; the fixture-test data used to exercise it (parse_test.go) is
+// labelled per the same caveat rather than claimed as a captured device
+// capture.
+// ---------------------------------------------------------------------
+
+// enabledText reports whether text is one of FASTPATH's two spellings of
+// "on", mirroring Python _enabled (parse.py:702-704): "FASTPATH spells this
+// two ways: 'Enabled' and 'Enable'." "yes" is also accepted, mirroring
+// Python's exact set literal, even though no FASTPATH command measured so
+// far actually emits it.
+func enabledText(text string) bool {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "enabled", "enable", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+// parseUsers parses "show users" into the switch's local login accounts,
+// mirroring Python parse_users (parse.py:772-809) EXACTLY. Sliced by the
+// ruler rather than split on whitespace: an access mode legitimately
+// contains a space ("Read Only", "Read/Write"), and a naive split would
+// tear it in half. The ACCESS-MODE VOCABULARY differs by firmware -- see
+// model.PrivilegedAccessModes -- so the raw text is preserved on
+// SwitchUser.AccessMode and only the normalised Privileged flag interprets
+// it. A row with a blank first cell (the account-count summary line some
+// firmware images print below the table) is skipped, never fabricated into
+// a nameless account.
+func parseUsers(text string) []model.SwitchUser {
+	var out []model.SwitchUser
+	for _, cells := range iterTableRows(text, "") {
+		if len(cells) == 0 || strings.TrimSpace(cells[0]) == "" {
+			continue
+		}
+		padded := append(append([]string{}, cells...), "", "", "", "")
+		name := strings.TrimSpace(padded[0])
+		access := strings.TrimSpace(padded[1])
+		snmpAccess := strings.TrimSpace(padded[2])
+		snmpAuth := strings.TrimSpace(padded[3])
+		snmpEnc := strings.TrimSpace(padded[4])
+		u := model.SwitchUser{
+			Name:       name,
+			AccessMode: access,
+			Privileged: model.PrivilegedAccess(access),
+		}
+		if snmpAccess != "" {
+			u.SNMPv3Access = model.Ptr(snmpAccess)
+		}
+		if snmpAuth != "" {
+			u.SNMPv3Auth = model.Ptr(snmpAuth)
+		}
+		if snmpEnc != "" {
+			u.SNMPv3Encryption = model.Ptr(snmpEnc)
+		}
+		out = append(out, u)
+	}
+	return out
+}
+
+// parseServices parses the three commands FASTPATH splits management-
+// service state across into the four model.ServiceStatus values, mirroring
+// Python parse_services (parse.py:707-764) EXACTLY, including its return
+// ORDER (http, https, telnet, ssh -- NOT the webui package's http/https/
+// ssh/telnet order; the two backends genuinely disagree here, and this Go
+// port preserves that rather than "fixing" it, per the pinned Python
+// source's own literal return-list order).
+//
+// httpText ("show ip http") carries BOTH the plain and secure web servers.
+// telnetText ("show telnetcon" -- NOT "show telnet", which reports the
+// switch as an outbound telnet CLIENT) reports the INBOUND server. sshText
+// ("show ip ssh") writes its labels WITH a trailing colon before the dotted
+// leader ("Administrative Mode: ......... Enabled"), unlike every other
+// FASTPATH scalar command -- labelledValues's regex captures the colon as
+// part of the label, so it is stripped explicitly here before lookup.
+func parseServices(httpText, telnetText, sshText string) []model.ServiceStatus {
+	httpFields := labelledValues(httpText)
+	telnetFields := labelledValues(telnetText)
+	sshRaw := labelledValues(sshText)
+	sshFields := make(map[string]string, len(sshRaw))
+	for k, v := range sshRaw {
+		sshFields[strings.TrimSpace(strings.TrimSuffix(k, ":"))] = v
+	}
+	return []model.ServiceStatus{
+		{Name: "http", Enabled: enabledText(httpFields["HTTP Mode (Unsecure)"]), Port: parseIntPtr(httpFields["HTTP Port"])},
+		{Name: "https", Enabled: enabledText(httpFields["HTTP Mode (Secure)"]), Port: parseIntPtr(httpFields["Secure Port"])},
+		{Name: "telnet", Enabled: enabledText(telnetFields["Telnet Server Admin Mode"]), Port: parseIntPtr(telnetFields["Telnet Server Port"])},
+		{Name: "ssh", Enabled: enabledText(sshFields["Administrative Mode"]), Port: parseIntPtr(sshFields["SSH Port"])},
+	}
+}
+
+// parseIntPtr returns a pointer to the integer value of text, or nil when
+// text is empty/unparseable, mirroring Python's `_int(...)` returning None
+// for a label the firmware never printed -- e.g. the gsm7252ps prints no
+// "SSH Port" line at all, so that port is honestly nil rather than assumed
+// to be 22.
+func parseIntPtr(text string) *int {
+	v, ok := parseInt(text)
+	if !ok {
+		return nil
+	}
+	return model.Ptr(v)
+}

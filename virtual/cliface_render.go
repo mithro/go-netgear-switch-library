@@ -536,3 +536,140 @@ func (f *CliFace) renderInterfaceCounters(port int) string {
 		cliDotted("Time Since Counters Last Cleared", "1 day 0 hr 0 min 0 sec"),
 	}, "\n")
 }
+
+// --- show users / show ip http / show telnetcon / show ip ssh ------------
+//
+// PRINCIPLE-5 NOTE: Python's virtual CLI face has NO renderer for any of
+// these four commands at pin b26eb1f -- UserSim's own doc comment says so
+// explicitly ("The CLI face has no `show users` yet"), and cli_fastpath.py
+// has no render_users/render_services function to port. The shapes below
+// are grounded in parse_users'/parse_services' own docstring transcripts
+// (protocols/cli/parse.py, pin b26eb1f) rather than in an existing Python
+// fake renderer -- see fastpath/parse.go's matching principle-5 note for
+// the parser side of the same gap.
+
+// cliDottedColon renders one "Label: .......... value" dotted-leader line,
+// the format `show ip ssh` alone uses among every FASTPATH scalar command:
+// a trailing colon BEFORE the dots (measured: "Administrative Mode:
+// .......... Enabled"). Every other cliDotted call in this file omits the
+// colon; see fastpath/parse.go's parseServices doc comment for why
+// `show ip ssh` needs the split.
+func cliDottedColon(label, value string) string {
+	return cliDotted(label+":", value)
+}
+
+// cliUsersTable renders headers1/headers2/rows as FASTPATH's `show users`
+// fixed-width table shape: TWO header lines (the real device wraps "User
+// Name"/"SNMPv3 Access Mode"/etc. over two rows) above the ruler, mirroring
+// the transcript in parse_users' own doc comment (parse.py:779-782, pin
+// b26eb1f). A dedicated helper rather than a second cliTable overload: this
+// is the only FASTPATH table this package renders with more than one
+// header line.
+func cliUsersTable(headers1, headers2 []string, widths []int, rows [][]string) string {
+	ljust := func(s string, w int) string {
+		if len(s) >= w {
+			return s
+		}
+		return s + strings.Repeat(" ", w-len(s))
+	}
+	line := func(cells []string) string {
+		parts := make([]string, len(widths))
+		for i, w := range widths {
+			cell := ""
+			if i < len(cells) {
+				cell = cells[i]
+			}
+			parts[i] = ljust(cell, w)
+		}
+		return strings.Join(parts, " ")
+	}
+	lines := []string{line(headers1), line(headers2)}
+	dashes := make([]string, len(widths))
+	for i, w := range widths {
+		dashes[i] = strings.Repeat("-", w)
+	}
+	lines = append(lines, strings.Join(dashes, " "))
+	for _, row := range rows {
+		lines = append(lines, line(row))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderUsers renders "show users" from f.state.Users -- see the package
+// PRINCIPLE-5 note above. Column widths (24/12/11/14/10) are transcribed
+// from parse_users' own docstring transcript, which is the only measured
+// column-width evidence available at this pin. Most rows' SNMPv3 columns
+// render blank (UserSim.SNMPv3Access/Auth/Encryption default to ""): only
+// ONE row anywhere in the pinned Python source has a measured SNMPv3
+// value (m4300-24x's admin row -- see SeedM4300_24X).
+func (f *CliFace) renderUsers() string {
+	headers1 := []string{"User", "", "SNMPv3", "SNMPv3", "SNMPv3"}
+	headers2 := []string{"User Name", "Access Mode", "Access Mode", "Authentication", "Encryption"}
+	widths := []int{24, 12, 11, 14, 10}
+	var rows [][]string
+	for _, u := range f.state.Users {
+		rows = append(rows, []string{u.Name, u.CLIAccessMode, u.SNMPv3Access, u.SNMPv3Auth, u.SNMPv3Encryption})
+	}
+	return cliUsersTable(headers1, headers2, widths, rows)
+}
+
+// cliServicePort renders one optional port line, omitted entirely (not
+// printed blank) when sim.CLIPort is nil -- mirroring the measured absence
+// of an "SSH Port"/"Telnet Server Port" line on a firmware image that
+// genuinely does not print one (see ServiceSim.CLIPort's doc comment).
+func cliServicePort(dotted func(label, value string) string, label string, sim ServiceSim) string {
+	if sim.CLIPort == nil {
+		return ""
+	}
+	return "\n" + dotted(label, strconv.Itoa(*sim.CLIPort))
+}
+
+// renderHTTPService renders "show ip http", which carries BOTH the plain
+// and secure web servers in one command, mirroring the transcript in
+// parse_services' own doc comment ("HTTP Mode (Unsecure)"/"HTTP Port"/
+// "HTTP Mode (Secure)"/"Secure Port").
+func (f *CliFace) renderHTTPService() string {
+	http := f.state.Services["http"]
+	https := f.state.Services["https"]
+	return cliDotted("HTTP Mode (Unsecure)", enableWord(http.Enabled)) +
+		cliServicePort(cliDotted, "HTTP Port", http) +
+		"\n" + cliDotted("HTTP Mode (Secure)", enableWord(https.Enabled)) +
+		cliServicePort(cliDotted, "Secure Port", https)
+}
+
+// enableWord is FASTPATH's long-form Enabled/Disabled spelling, used by
+// `show ip http` and `show ip ssh` (see enabledText's doc comment for the
+// two spellings this package's parser accepts back).
+func enableWord(on bool) string {
+	if on {
+		return "Enabled"
+	}
+	return "Disabled"
+}
+
+// enableWordShort is FASTPATH's short-form Enable/Disable spelling, used by
+// `show telnetcon`'s "Telnet Server Admin Mode" line (measured verbatim in
+// parse_services' own doc comment).
+func enableWordShort(on bool) string {
+	if on {
+		return "Enable"
+	}
+	return "Disable"
+}
+
+// renderTelnetService renders "show telnetcon" -- NOT "show telnet" -- the
+// INBOUND telnet server, mirroring parse_services' own doc comment.
+func (f *CliFace) renderTelnetService() string {
+	telnet := f.state.Services["telnet"]
+	return cliDotted("Telnet Server Admin Mode", enableWordShort(telnet.Enabled)) +
+		cliServicePort(cliDotted, "Telnet Server Port", telnet)
+}
+
+// renderSSHService renders "show ip ssh", whose labels carry a trailing
+// colon before the dotted leader -- unlike every other FASTPATH scalar
+// command (see cliDottedColon).
+func (f *CliFace) renderSSHService() string {
+	ssh := f.state.Services["ssh"]
+	return cliDottedColon("Administrative Mode", enableWord(ssh.Enabled)) +
+		cliServicePort(cliDottedColon, "SSH Port", ssh)
+}

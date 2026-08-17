@@ -9,10 +9,11 @@
 //
 // Parallel to snmp/reader.go, nsdp/reader.go and webui/reader.go: maps
 // FASTPATH's parsed CLI output onto the SAME shared model types so a caller
-// sees one uniform shape regardless of backend. Reader's nine Get* methods
-// (GetPorts/GetStats/GetVLANs/GetPVIDs/GetLLDP/GetMACs/GetPoE/GetSensors/
-// GetMgmtIP) satisfy the root package's BackendReader interface verbatim --
-// see dispatch.go there. Identify is the tenth read op (dossier §3.10) --
+// sees one uniform shape regardless of backend. Reader's eleven Get*
+// methods (GetPorts/GetStats/GetVLANs/GetPVIDs/GetLLDP/GetMACs/GetPoE/
+// GetSensors/GetMgmtIP/GetUsers/GetServices) satisfy the root package's
+// BackendReader interface verbatim -- see dispatch.go there. Identify is a
+// further read op (dossier §3.10) --
 // like Switch.Identify (switch.go) and snmp.ReadSystemInfo, it is NOT part
 // of BackendReader (model detection is inherently backend-specific
 // plumbing a future fastpath backend wiring, out of this task's scope,
@@ -208,6 +209,39 @@ func (r *Reader) GetMgmtIP(ctx context.Context) (model.MgmtIPConfig, error) {
 		return model.MgmtIPConfig{}, err
 	}
 	return parseMgmtIP(text), nil
+}
+
+// GetUsers reads the switch's local login accounts, mirroring Python
+// `CliReader.get_users` (cli_read.py:122-129). One command: UsersCmd ("show
+// users"). The access-mode wording differs between firmware images, so
+// model.SwitchUser.AccessMode keeps the raw text and Privileged carries the
+// normalised reading -- see parseUsers.
+func (r *Reader) GetUsers(ctx context.Context) ([]model.SwitchUser, error) {
+	text, err := r.session.Run(ctx, r.spec.UsersCmd)
+	if err != nil {
+		return nil, err
+	}
+	return parseUsers(text), nil
+}
+
+// GetServices reads which management services are enabled and on which
+// ports, mirroring Python `CliReader.get_services` (cli_read.py:109-120).
+// Three commands, because the switch splits it that way -- and the telnet
+// one is TelnetServiceCmd ("show telnetcon"), NOT "show telnet".
+func (r *Reader) GetServices(ctx context.Context) ([]model.ServiceStatus, error) {
+	httpText, err := r.session.Run(ctx, r.spec.HTTPServiceCmd)
+	if err != nil {
+		return nil, err
+	}
+	telnetText, err := r.session.Run(ctx, r.spec.TelnetServiceCmd)
+	if err != nil {
+		return nil, err
+	}
+	sshText, err := r.session.Run(ctx, r.spec.SSHServiceCmd)
+	if err != nil {
+		return nil, err
+	}
+	return parseServices(httpText, telnetText, sshText), nil
 }
 
 // Identify detects a switch's model from "show version" output, mirroring

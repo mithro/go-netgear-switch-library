@@ -308,6 +308,50 @@ func TestCliFaceReadRoundTripGSM7252PS(t *testing.T) {
 		}
 	})
 
+	t.Run("GetUsers", func(t *testing.T) {
+		users, err := reader.GetUsers(ctx)
+		if err != nil {
+			t.Fatalf("GetUsers: %v", err)
+		}
+		if len(users) != 2 || users[0].Name != "admin" || users[1].Name != "guest" {
+			t.Fatalf("GetUsers = %+v, want [admin, guest]", users)
+		}
+		// CLI wording differs from the web UI's -- see UserSim's doc
+		// comment (seed.go's SeedGSM7252PS: admin=Read/Write, guest=Read
+		// Only, transcribed from Python commit 4619e3c).
+		if users[0].AccessMode != "Read/Write" || users[0].Privileged == nil || !*users[0].Privileged {
+			t.Errorf("admin = %+v, want AccessMode=Read/Write, Privileged=true", users[0])
+		}
+		if users[1].AccessMode != "Read Only" || users[1].Privileged == nil || *users[1].Privileged {
+			t.Errorf("guest = %+v, want AccessMode=Read Only, Privileged=false", users[1])
+		}
+	})
+
+	t.Run("GetServices", func(t *testing.T) {
+		services, err := reader.GetServices(ctx)
+		if err != nil {
+			t.Fatalf("GetServices: %v", err)
+		}
+		byName := make(map[string]model.ServiceStatus, len(services))
+		for _, s := range services {
+			byName[s.Name] = s
+		}
+		// Seeded in seed.go's SeedGSM7252PS, transcribed from Python
+		// commit 2c7ddff: http=on:None https=on:443 telnet=off ssh=on:None.
+		if !byName["http"].Enabled || byName["http"].Port != nil {
+			t.Errorf("http = %+v, want enabled=true, port=nil", byName["http"])
+		}
+		if !byName["https"].Enabled || byName["https"].Port == nil || *byName["https"].Port != 443 {
+			t.Errorf("https = %+v, want enabled=true, port=443", byName["https"])
+		}
+		if !byName["ssh"].Enabled || byName["ssh"].Port != nil {
+			t.Errorf("ssh = %+v, want enabled=true, port=nil", byName["ssh"])
+		}
+		if byName["telnet"].Enabled || byName["telnet"].Port != nil {
+			t.Errorf("telnet = %+v, want enabled=false, port=nil", byName["telnet"])
+		}
+	})
+
 	t.Run("Identify", func(t *testing.T) {
 		id, err := reader.Identify(ctx)
 		if err != nil {
@@ -364,6 +408,58 @@ func TestCliFaceReadRoundTripM430024X(t *testing.T) {
 		_, err := reader.GetPoE(ctx)
 		if !errors.Is(err, model.ErrUnsupportedCapability) {
 			t.Fatalf("GetPoE error = %v, want ErrUnsupportedCapability (m4300-24x has PoEPortCount 0)", err)
+		}
+	})
+
+	t.Run("GetUsers", func(t *testing.T) {
+		users, err := reader.GetUsers(ctx)
+		if err != nil {
+			t.Fatalf("GetUsers: %v", err)
+		}
+		if len(users) != 2 || users[0].Name != "admin" || users[1].Name != "guest" {
+			t.Fatalf("GetUsers = %+v, want [admin, guest]", users)
+		}
+		// Seeded in seed.go's SeedM4300_24X, transcribed from Python
+		// commit 4619e3c: admin=Privilege-15, guest=Privilege-1 -- the
+		// SAME switch parse_users' own docstring transcript captured, so
+		// admin's SNMPv3 columns are also measured (Read Only/MD5/None).
+		if users[0].AccessMode != "Privilege-15" || users[0].Privileged == nil || !*users[0].Privileged {
+			t.Errorf("admin = %+v, want AccessMode=Privilege-15, Privileged=true", users[0])
+		}
+		if users[0].SNMPv3Access == nil || *users[0].SNMPv3Access != "Read Only" {
+			t.Errorf("admin.SNMPv3Access = %v, want \"Read Only\"", users[0].SNMPv3Access)
+		}
+		if users[0].SNMPv3Auth == nil || *users[0].SNMPv3Auth != "MD5" {
+			t.Errorf("admin.SNMPv3Auth = %v, want \"MD5\"", users[0].SNMPv3Auth)
+		}
+		if users[1].AccessMode != "Privilege-1" || users[1].Privileged == nil || *users[1].Privileged {
+			t.Errorf("guest = %+v, want AccessMode=Privilege-1, Privileged=false", users[1])
+		}
+	})
+
+	t.Run("GetServices", func(t *testing.T) {
+		services, err := reader.GetServices(ctx)
+		if err != nil {
+			t.Fatalf("GetServices: %v", err)
+		}
+		byName := make(map[string]model.ServiceStatus, len(services))
+		for _, s := range services {
+			byName[s.Name] = s
+		}
+		// Seeded in seed.go's SeedM4300_24X, transcribed from Python
+		// commit 2c7ddff: http=on:80 https=on:443 telnet=on:23 ssh=on:22
+		// -- every service enabled, every port printed, unlike gsm7252ps.
+		if !byName["http"].Enabled || byName["http"].Port == nil || *byName["http"].Port != 80 {
+			t.Errorf("http = %+v, want enabled=true, port=80", byName["http"])
+		}
+		if !byName["https"].Enabled || byName["https"].Port == nil || *byName["https"].Port != 443 {
+			t.Errorf("https = %+v, want enabled=true, port=443", byName["https"])
+		}
+		if !byName["telnet"].Enabled || byName["telnet"].Port == nil || *byName["telnet"].Port != 23 {
+			t.Errorf("telnet = %+v, want enabled=true, port=23 (the CLI reports it even though the web page doesn't)", byName["telnet"])
+		}
+		if !byName["ssh"].Enabled || byName["ssh"].Port == nil || *byName["ssh"].Port != 22 {
+			t.Errorf("ssh = %+v, want enabled=true, port=22", byName["ssh"])
 		}
 	})
 

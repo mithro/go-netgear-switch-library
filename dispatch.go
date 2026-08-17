@@ -33,11 +33,17 @@ import (
 
 // BackendReader is the read-op surface dispatch calls, mirroring the union
 // Python's _AnyReader spans (SnmpReader | NsdpReader | HttpReader |
-// CliReader): every registered backend's reader must implement all nine
+// CliReader): every registered backend's reader must implement all eleven
 // methods, and an op it cannot serve returns an error wrapping
 // model.ErrUnsupportedCapability rather than a panic or a fabricated zero
 // value. snmp.Reader (see snmp/reader.go) already satisfies this interface
 // verbatim -- no adapter shim is needed for the SNMP backend.
+//
+// GetUsers/GetServices were added after the original nine (slice
+// "GetUsers + GetServices reads"): mirroring Python sync_api.py's
+// get_users/get_services, both are served over the FASTPATH CLI and the
+// managed-model web UI only -- SNMP and NSDP refuse both BY NAME (see
+// snmp/reader.go and nsdp/reader.go), never fabricating an empty list.
 type BackendReader interface {
 	GetPorts(ctx context.Context) ([]model.PortStatus, error)
 	GetStats(ctx context.Context) ([]model.PortStats, error)
@@ -48,6 +54,8 @@ type BackendReader interface {
 	GetPoE(ctx context.Context) ([]model.PoEStatus, error)
 	GetSensors(ctx context.Context) ([]model.Sensor, error)
 	GetMgmtIP(ctx context.Context) (model.MgmtIPConfig, error)
+	GetUsers(ctx context.Context) ([]model.SwitchUser, error)
+	GetServices(ctx context.Context) ([]model.ServiceStatus, error)
 }
 
 // BackendBuilder constructs the BackendReader for one backend, given the
