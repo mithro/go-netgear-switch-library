@@ -884,6 +884,88 @@ func TestHTTPFaceGS110EMXWriterSetPVIDHasNoCSRFHash(t *testing.T) {
 	}
 }
 
+// TestHTTPFaceGS728TPPWriterSetPVIDRefusesNonexistentVlan exercises
+// webui.Writer.requireVlanExists' isGoAheadDialect branch (writer.go) end-
+// to-end -- GAP-1 fix parity with Python commit 98fb935 -- which no other
+// test drove: SetPVID against a GS728TPP must refuse a PVID pointing at a
+// VLAN the switch does not have, BEFORE reaching the CSRF/PostForm write
+// this model's SetPVID otherwise shares with every other dialect (see
+// writer.go's package doc comment on that shared-but-imperfect verify
+// path), so this exercises the precondition without depending on that
+// separate, already-documented gap.
+func TestHTTPFaceGS728TPPWriterSetPVIDRefusesNonexistentVlan(t *testing.T) {
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	wantUnchanged := st.Pvids[2]
+	const nonexistentVlan = 4007 // not among gs728tpp's seeded VLANs (1,2,3,5,6,7,10,20,31,41,90,99)
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+
+	err = writer.SetPVID(context.Background(), 2, nonexistentVlan, false)
+	if err == nil {
+		t.Fatal("SetPVID() against gs728tpp with a nonexistent VLAN error = nil, want a refusal")
+	}
+	if !errors.Is(err, model.ErrHTTPUnexpectedPage) {
+		t.Errorf("SetPVID() error = %v, want errors.Is(..., model.ErrHTTPUnexpectedPage)", err)
+	}
+	if !strings.Contains(err.Error(), "4007") {
+		t.Errorf("SetPVID() error = %q, want it to mention the nonexistent VLAN 4007", err.Error())
+	}
+	if st.Pvids[2] != wantUnchanged {
+		t.Errorf("state.Pvids[2] after a refused SetPVID = %d, want unchanged %d", st.Pvids[2], wantUnchanged)
+	}
+}
+
+// TestHTTPFaceGSM7252PSWriterSetPVIDRefusesNonexistentVlan exercises
+// webui.Writer.requireVlanExists' isFastpathDialect branch (writer.go)
+// end-to-end -- GAP-1 fix parity with Python commit 98fb935 -- which no
+// other test drove: SetPVID against a managed FASTPATH model must refuse a
+// PVID pointing at a VLAN the switch does not have, before any write.
+func TestHTTPFaceGSM7252PSWriterSetPVIDRefusesNonexistentVlan(t *testing.T) {
+	st := SeedGSM7252PS()
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	wantUnchanged := st.Pvids[1]
+	const nonexistentVlan = 4007 // not among gsm7252ps's seeded VLANs
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+
+	err = writer.SetPVID(context.Background(), 1, nonexistentVlan, false)
+	if err == nil {
+		t.Fatal("SetPVID() against gsm7252ps with a nonexistent VLAN error = nil, want a refusal")
+	}
+	if !errors.Is(err, model.ErrHTTPUnexpectedPage) {
+		t.Errorf("SetPVID() error = %v, want errors.Is(..., model.ErrHTTPUnexpectedPage)", err)
+	}
+	if !strings.Contains(err.Error(), "4007") {
+		t.Errorf("SetPVID() error = %q, want it to mention the nonexistent VLAN 4007", err.Error())
+	}
+	if st.Pvids[1] != wantUnchanged {
+		t.Errorf("state.Pvids[1] after a refused SetPVID = %d, want unchanged %d", st.Pvids[1], wantUnchanged)
+	}
+}
+
 // -- Wired dialect (GS105PE) end-to-end (Task 9) --------------------------
 //
 // Mirrors the Python pinned reference's test_http_and_nsdp_reads_agree

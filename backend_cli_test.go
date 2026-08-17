@@ -503,6 +503,23 @@ func TestUploadCertificateSCP_NoCLIBackendErrors(t *testing.T) {
 	}
 }
 
+func TestUploadCertificateSCP_CancelledContextErrorsBeforeAnySessionWork(t *testing.T) {
+	// UploadCertificateSCP's own ctx.Err() check (backend_cli.go) must fire
+	// before it ever resolves a CLI session -- no other existing test drives
+	// a cancelled context through this path.
+	fake := &recordingCLISession{}
+	sw := newCLISwitch(t, "m4300-24x", WithCLIClient(fake))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := sw.UploadCertificateSCP(ctx, "user@host", "pw", "/staging", false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("UploadCertificateSCP() with a cancelled context: error = %v, want wrapping context.Canceled", err)
+	}
+	if fake.commandCount() != 0 {
+		t.Fatalf("UploadCertificateSCP() with a cancelled context issued %d commands, want 0 (must fail before any session I/O)", fake.commandCount())
+	}
+}
+
 func TestUploadCertificateSCP_KnownMechanismDifferenceGSM7228PS(t *testing.T) {
 	// gsm7228ps has a CLI backend (telnet) but no known copy-scp cert
 	// profile -- its cert upload is the separate HTTP-multipart mechanism

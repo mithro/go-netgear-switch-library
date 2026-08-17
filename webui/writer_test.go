@@ -346,6 +346,116 @@ func TestSetPVIDRefusesAVlanThatDoesNotExist(t *testing.T) {
 	}
 }
 
+// TestSetPVIDRefusesNonexistentVlanOnGoAheadDialect exercises
+// requireVlanExists' isGoAheadDialect branch (writer.go) directly against
+// REAL captured gs728tpp fixture data (webui/testdata/http/
+// gs728tpp_vlans.xml, the same page reader_goahead_test.go's gs728tppPages
+// serves) -- GAP-1 fix parity with Python commit 98fb935. No other
+// webui-package test drove this branch: TestSetPVIDRefusesAVlanThatDoesNotExist
+// above only exercises the default (Plus-CGI) branch. SetPVID must refuse
+// before reaching the CSRF/PostForm write this model's SetPVID otherwise
+// shares with every other dialect (see this file's package doc comment on
+// that shared-but-imperfect verify path).
+func TestSetPVIDRefusesNonexistentVlanOnGoAheadDialect(t *testing.T) {
+	w := mustNewWriter(t, newFakeSession(gs728tppPages(t)), "gs728tpp")
+	const nonexistentVlan = 999999
+	err := w.SetPVID(context.Background(), 2, nonexistentVlan, false)
+	if err == nil {
+		t.Fatal("SetPVID() with a nonexistent VLAN error = nil, want a refusal")
+	}
+	if !errors.Is(err, model.ErrHTTPUnexpectedPage) {
+		t.Errorf("SetPVID() error = %v, want errors.Is(..., model.ErrHTTPUnexpectedPage)", err)
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(nonexistentVlan)) {
+		t.Errorf("SetPVID() error = %q, want it to mention the nonexistent VLAN %d", err.Error(), nonexistentVlan)
+	}
+}
+
+// TestSetPVIDRefusesNonexistentVlanOnFastpathDialect exercises
+// requireVlanExists' isFastpathDialect branch (writer.go) directly against
+// REAL captured gsm7252ps fixture data (webui/testdata/http/
+// gsm7252ps_vlanStatus.html) -- GAP-1 fix parity with Python commit
+// 98fb935. No other webui-package test drove this branch.
+func TestSetPVIDRefusesNonexistentVlanOnFastpathDialect(t *testing.T) {
+	w := mustNewWriter(t, newFakeSession(gsm7252psPages(t)), "gsm7252ps")
+	const nonexistentVlan = 999999
+	err := w.SetPVID(context.Background(), 1, nonexistentVlan, false)
+	if err == nil {
+		t.Fatal("SetPVID() with a nonexistent VLAN error = nil, want a refusal")
+	}
+	if !errors.Is(err, model.ErrHTTPUnexpectedPage) {
+		t.Errorf("SetPVID() error = %v, want errors.Is(..., model.ErrHTTPUnexpectedPage)", err)
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(nonexistentVlan)) {
+		t.Errorf("SetPVID() error = %q, want it to mention the nonexistent VLAN %d", err.Error(), nonexistentVlan)
+	}
+}
+
+// erroringVlanConfigSession wraps writerFakeSession to fail GetPage for one
+// specific path (the target's VlanConfigPath), for
+// TestSetPVIDPropagatesVlanConfigPageTransportError below: requireVlanExists'
+// own GetPage error-propagation branch (writer.go), which no other test
+// drove -- every other requireVlanExists test either succeeds fetching the
+// page or fails on VLAN-existence, never on the fetch itself.
+type erroringVlanConfigSession struct {
+	*writerFakeSession
+	errPath string
+	err     error
+}
+
+func (s *erroringVlanConfigSession) GetPage(ctx context.Context, path string) (string, error) {
+	if path == s.errPath {
+		return "", s.err
+	}
+	return s.writerFakeSession.GetPage(ctx, path)
+}
+
+func TestSetPVIDPropagatesVlanConfigPageTransportError(t *testing.T) {
+	boom := errors.New("boom: transport down")
+	sess := &erroringVlanConfigSession{writerFakeSession: newWriterFakeSession(true), errPath: "/8021qCf.cgi", err: boom}
+	w := mustNewWriter(t, sess, "gs305ep")
+	err := w.SetPVID(context.Background(), 3, 20, false)
+	if !errors.Is(err, boom) {
+		t.Fatalf("SetPVID() error = %v, want it to wrap the raw transport error fetching VlanConfigPath", err)
+	}
+}
+
+// overriddenPageSession wraps writerFakeSession to serve a fixed body for
+// one specific path regardless of state, for
+// TestSetPVIDPropagatesVlanConfigPageParseError below: requireVlanExists'
+// own default-dialect parse-error branch (ParseVLANIDs via parseVlanIDs,
+// writer.go), which no other test drove -- TestSetPVIDRefusesAVlanThatDoesNotExist
+// only exercises a WELL-FORMED page whose parse succeeds and simply lacks
+// the target VLAN, a different branch from a page that fails to parse at all.
+type overriddenPageSession struct {
+	*writerFakeSession
+	overridePath string
+	overrideBody string
+}
+
+func (s *overriddenPageSession) GetPage(ctx context.Context, path string) (string, error) {
+	if path == s.overridePath {
+		return s.overrideBody, nil
+	}
+	return s.writerFakeSession.GetPage(ctx, path)
+}
+
+func TestSetPVIDPropagatesVlanConfigPageParseError(t *testing.T) {
+	sess := &overriddenPageSession{
+		writerFakeSession: newWriterFakeSession(true),
+		overridePath:      "/8021qCf.cgi",
+		overrideBody:      "<html>not a VLAN config page at all</html>",
+	}
+	w := mustNewWriter(t, sess, "gs305ep")
+	err := w.SetPVID(context.Background(), 3, 20, false)
+	if !errors.Is(err, model.ErrHTTPUnexpectedPage) {
+		t.Fatalf("SetPVID() error = %v, want errors.Is(..., model.ErrHTTPUnexpectedPage) (malformed VlanConfigPath page)", err)
+	}
+	if !strings.Contains(err.Error(), "vlanck") {
+		t.Errorf("SetPVID() error = %q, want it to mention the malformed-page reason (vlanckN checkbox)", err.Error())
+	}
+}
+
 func TestSetVlanMembershipVerifies(t *testing.T) {
 	sess := newWriterFakeSession(true)
 	w := mustNewWriter(t, sess, "gs305ep")

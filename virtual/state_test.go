@@ -681,3 +681,14 @@ func TestSnapshotAndRestorePreserveNoStaticRow(t *testing.T) {
 		t.Error("Restore dropped VLAN 1's NoStaticRow: got false, want true")
 	}
 }
+
+// TestCloneVlansMapNilInNilOut proves cloneVlansMap's nil-passthrough
+// contract directly: every other clone*Map/clone*Slice helper in this file
+// shares the same "nil in, nil out" rule (see e.g. TestSnapshotNilFieldsStayNil),
+// but State.Vlans is always a non-nil map from NewState onward, so no
+// Snapshot()-level test ever drives a nil map through this specific helper.
+func TestCloneVlansMapNilInNilOut(t *testing.T) {
+	if got := cloneVlansMap(nil); got != nil {
+		t.Errorf("cloneVlansMap(nil) = %v, want nil", got)
+	}
+}

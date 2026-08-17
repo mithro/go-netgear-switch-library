@@ -322,6 +322,57 @@ func TestParseVlansRaisesOnMalformedCurrentTableIndex(t *testing.T) {
 	}
 }
 
+// TestCurrentVlanBitmapMapAcceptsStringValueDirectly verifies a string-typed
+// dot1qVlanCurrentTable bitmap row decodes identically to the same bytes as
+// a []byte row (as some SNMP transports surface OCTET STRING values),
+// mirroring vlanBitmapMap's own string-acceptance test
+// (TestParseVlansBitmapAcceptsStringValueDirectly) for the current table.
+func TestCurrentVlanBitmapMapAcceptsStringValueDirectly(t *testing.T) {
+	rows := []Row{NewStrRow(Dot1qVlanCurrentEgress+".0.5", string([]byte{0b11000000}))}
+	got, err := currentVlanBitmapMap(rows, Dot1qVlanCurrentEgress)
+	if err != nil {
+		t.Fatalf("currentVlanBitmapMap: %v", err)
+	}
+	if diff := cmp.Diff([]int{1, 2}, DecodePortBitmap(got[5])); diff != "" {
+		t.Errorf("decoded mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestCurrentVlanBitmapMapSkipsRowsUnderADifferentBaseOID verifies a row
+// whose OID does not start with baseOID+"." is skipped outright, never
+// treated as drift -- mirrors vlanBitmapMap's own out-of-column tolerance,
+// exercised here because a real walk of the base OID root can include
+// rows from a sibling column sharing a numeric prefix.
+func TestCurrentVlanBitmapMapSkipsRowsUnderADifferentBaseOID(t *testing.T) {
+	rows := []Row{
+		NewBytesRow(Dot1qVlanStaticEgress+".0.5", []byte{0b11000000}), // a different column entirely
+	}
+	got, err := currentVlanBitmapMap(rows, Dot1qVlanCurrentEgress)
+	if err != nil {
+		t.Fatalf("currentVlanBitmapMap: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("currentVlanBitmapMap = %v, want empty (a row under a different column must be skipped)", got)
+	}
+}
+
+// TestCurrentVlanBitmapMapRaisesOnMalformedBitmapType verifies a
+// dot1qVlanCurrentTable row present under the base OID but whose value is
+// neither []byte nor string (a wrong SNMP type on the wire, e.g. an int64)
+// raises, naming the offending OID -- mirrors vlanBitmapMap's own
+// malformed-type check (TestParseVlansRaisesOnMalformedBitmapType) for the
+// current table.
+func TestCurrentVlanBitmapMapRaisesOnMalformedBitmapType(t *testing.T) {
+	rows := []Row{NewIntRow(Dot1qVlanCurrentEgress+".0.5", 42)}
+	_, err := currentVlanBitmapMap(rows, Dot1qVlanCurrentEgress)
+	if !errors.Is(err, model.ErrSNMP) {
+		t.Fatalf("currentVlanBitmapMap error = %v, want wrap of model.ErrSNMP", err)
+	}
+	if !strings.Contains(err.Error(), "malformed VLAN port bitmap type") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "malformed VLAN port bitmap type")
+	}
+}
+
 func TestParsePvidsSortedPortVlanPairs(t *testing.T) {
 	rows := []Row{
 		NewIntRow(Dot1qPvid+".2", 90),
