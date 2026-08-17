@@ -442,6 +442,10 @@ func TestWriter_UnsupportedWritesRaise(t *testing.T) {
 		w := newTestWriter(t, newFakeNsdpWriteClient(true))
 		requireUnsupported(t, w.SetFlowControl(ctx, 1, true, false))
 	})
+	t.Run("SetSyslogEnabled", func(t *testing.T) {
+		w := newTestWriter(t, newFakeNsdpWriteClient(true))
+		requireUnsupported(t, w.SetSyslogEnabled(ctx, true, false))
+	})
 }
 
 // --- SetPortDescription (0xB000 PORT_NAME) -- UN-HARDWARE-VERIFIED, see

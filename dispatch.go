@@ -52,6 +52,16 @@ import (
 // the dialects whose page carries the field (GS110EMX, GS105PE, and the
 // GS728TPP's GoAhead DeviceBasicInfo/deviceName section); every other web-UI
 // dialect refuses by name rather than fabricating "".
+//
+// GetSyslog was added next (slice "GetSyslog read + SetSyslogEnabled"):
+// mirroring Python sync_api.py's get_syslog, served over SNMP (the vendor
+// `.14` logging subtree) and the FASTPATH CLI (`show logging` + `show
+// logging hosts`), which agree field-for-field on live hardware. gs728tpp is
+// refused over SNMP by name (no Netgear vendor OID subtree, so the logging
+// columns are unreadable) and NSDP is refused entirely (an exhaustive live
+// tag sweep found no logging surface); the managed-model web UI serves it
+// from the syslog configuration page, every other web-UI dialect refusing by
+// name.
 type BackendReader interface {
 	GetPorts(ctx context.Context) ([]model.PortStatus, error)
 	GetStats(ctx context.Context) ([]model.PortStats, error)
@@ -65,6 +75,7 @@ type BackendReader interface {
 	GetUsers(ctx context.Context) ([]model.SwitchUser, error)
 	GetServices(ctx context.Context) ([]model.ServiceStatus, error)
 	GetHostname(ctx context.Context) (string, error)
+	GetSyslog(ctx context.Context) (model.SyslogConfig, error)
 }
 
 // BackendBuilder constructs the BackendReader for one backend, given the

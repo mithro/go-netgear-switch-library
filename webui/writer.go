@@ -1229,6 +1229,18 @@ func (w *Writer) SetFlowControl(_ context.Context, _ int, _ bool, _ bool) error 
 	return fmt.Errorf("model %q: this web UI's ports page reports flow control but carries no control to change it: %w", w.model.Key, model.ErrUnsupportedCapability)
 }
 
+// SetSyslogEnabled always returns an error wrapping
+// model.ErrUnsupportedCapability: this backend does not serve a
+// remote-logging toggle. Mirrors Python HttpWriter.set_syslog_enabled.
+//
+// Refused by name rather than returned empty: an empty answer here would be
+// indistinguishable from a switch that genuinely has none. Every parameter
+// is accepted-but-unused, purely so this method's signature matches the
+// shared BackendWriter surface (see the root package's write_dispatch.go).
+func (w *Writer) SetSyslogEnabled(_ context.Context, _ bool, _ bool) error {
+	return fmt.Errorf("model %q: this backend does not expose a remote-logging toggle: %w", w.model.Key, model.ErrUnsupportedCapability)
+}
+
 // emxNameMax is the GS110EMX sysInfo name box's maxlength="20"; its own
 // checkValidName() additionally rejects anything outside printable ASCII.
 // Both read off the live page (10.1.5.27, 2026-08-05), mirroring Python

@@ -1840,3 +1840,96 @@ func ParseServicePage(htmlStr, service string) (model.ServiceStatus, error) {
 		Port:    intCellPtr(portText),
 	}, nil
 }
+
+// ---------------------------------------------------------------------------
+// syslogConfiguration.html -> remote-logging configuration
+// ---------------------------------------------------------------------------
+
+// The syslogConfiguration.html coordinates, transcribed from a LIVE fetch on
+// all four managed switches (2026-08-03): gsm7252ps 10.1.5.22, gsm7228ps/
+// S3300 10.1.5.11, m4300-24x 10.1.5.13 and m4300-16x 10.1.5.20. Each label
+// below is that page's own visible header/field caption for the same
+// coordinate.
+//
+// The two families' pages are NOT identical -- the M4300s are Cheetah,
+// adding a trailing "<!-- baselogCfg_LogSyslogAdminStatus -->" comment per
+// cell plus two scalars the GSMs lack -- but the COORDINATES they share are
+// the same on all four, which is why xeScalarRE/ParseXERows (both dialect-
+// agnostic: neither requires or excludes a trailing comment) serve both
+// rather than a per-dialect pair.
+const (
+	xuiSyslogAdminStatus = "1_1_1" // "Admin Status"    -> Enable/Disable
+	xuiSyslogLocalPort   = "1_2_1" // "Local UDP Port"   -> 514
+	// xuiSyslogHostAddress/Port/Severity are public because the (unbuilt)
+	// writer would address the same cells. The column map is the page's own
+	// xeData, read off the served M4300 page 2026-08-05 -- note the
+	// field-name HTML comments TRAIL their cell, so reading them as leading
+	// labels shifts every column by one:
+	//   2_1_1 Host Address (string)      2_1_5 row-status, WRITE-ONLY, hidden
+	//   2_1_2 Status, row-status, READ-ONLY  2_1_6 Host Index (uint, hidden)
+	//   2_1_3 Port (uint)                 2_1_7 IP Address Type (enum)
+	//   2_1_4 Severity Filter (enum)
+	XUISyslogHostAddress  = "2_1_1"
+	xuiSyslogHostStatus   = "2_1_2"
+	XUISyslogHostPort     = "2_1_3"
+	XUISyslogHostSeverity = "2_1_4"
+	// XUISyslogHostIndex is the host row's OWN table index (hidden), the
+	// handle a row-status write addresses. Public for the same reason as
+	// XUISyslogHostAddress above.
+	XUISyslogHostIndex = "2_1_6"
+)
+
+// ParseXUISyslog parses syslogConfiguration.html into model.SyslogConfig,
+// mirroring Python parse_xui_syslog (parse.py:1848-1894) EXACTLY.
+//
+// The collector rows are ordinary XUI table rows, so ParseXERows groups
+// them; the admin status and local port are page-level scalars, read by
+// coordinate above. A row whose address is absent is skipped rather than
+// defaulted -- the blank g_2_1_* template row carries no instance prefix
+// and never reaches here in the first place.
+//
+// Returns an error wrapping model.ErrHTTPUnexpectedPage if the admin-status
+// scalar is missing: that is the one field every version of this page has,
+// so its absence means the fetch landed somewhere else (a login redirect, a
+// 404 body) and an enabled=false answer would be a fabrication.
+func ParseXUISyslog(htmlStr string) (model.SyslogConfig, error) {
+	scalars := parseXEScalars(htmlStr)
+	admin, ok := scalars[xuiSyslogAdminStatus]
+	if !ok {
+		return model.SyslogConfig{}, errUnexpectedPage(
+			"syslogConfiguration.html: no Admin Status field (NAME=v_%s) on page", xuiSyslogAdminStatus)
+	}
+	localPort, _ := parseIntCell(scalars[xuiSyslogLocalPort])
+
+	var servers []model.SyslogServer
+	for _, row := range ParseXERows(htmlStr) {
+		host := strings.TrimSpace(row[XUISyslogHostAddress])
+		if host == "" {
+			continue
+		}
+		port, _ := parseIntCell(row[XUISyslogHostPort])
+		// The web UI prints the severity WORD ("Info") where SNMP reports
+		// the number (6); model.SyslogSeverity is the shared, measured map
+		// and returns an error on a word no device here has printed.
+		severity, err := model.SyslogSeverity(row[XUISyslogHostSeverity])
+		if err != nil {
+			return model.SyslogConfig{}, err
+		}
+		var index *int
+		if v, ok := parseIntCell(row[XUISyslogHostIndex]); ok {
+			index = model.Ptr(v)
+		}
+		servers = append(servers, model.SyslogServer{
+			Index:    index,
+			Host:     host,
+			Port:     port,
+			Severity: severity,
+			Active:   strings.EqualFold(strings.TrimSpace(row[xuiSyslogHostStatus]), "active"),
+		})
+	}
+	return model.SyslogConfig{
+		Enabled:   strings.EqualFold(strings.TrimSpace(admin), "enable"),
+		LocalPort: localPort,
+		Servers:   servers,
+	}, nil
+}

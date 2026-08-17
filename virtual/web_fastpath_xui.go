@@ -488,3 +488,136 @@ func RenderFormServicePage(state *State, path, service string) string {
 		"<INPUT TYPE=\"hidden\" NAME=\"err_flag\" VALUE=\"0\">\n" +
 		"</FORM>\n</BODY>\n</HTML>\n"
 }
+
+// --- syslogConfiguration.html --------------------------------------------
+//
+// One page shape for every managed model. LIVE-CAPTURED 2026-08-03 from all
+// four (gsm7252ps 10.1.5.22, gsm7228ps 10.1.5.11, m4300-24x 10.1.5.13,
+// m4300-16x 10.1.5.20): the two families differ only in extras -- the
+// M4300s add Cheetah "<!-- baselogCfg_* -->" comments and two scalars the
+// GSMs lack -- while every coordinate webui.ParseXUISyslog reads is
+// identical, which is why one renderer serves all four.
+//
+// The blank g_2_1_* TEMPLATE row is rendered ON PURPOSE. Real firmware
+// emits it above the data rows, its fields named v_g_2_1_N with NO instance
+// prefix, and a parser that mistook it for a collector would report a
+// phantom row with an empty host. Leaving it out of the mock would make
+// that bug untestable.
+
+// syslogHeaders is syslogConfiguration.html's per-collector-row column
+// header set, mirroring Python web_fastpath_xui._SYSLOG_HEADERS. Order
+// matters (see fastpathButton's doc comment for why this package always
+// uses an ordered slice, not a map, for rendered HTML).
+var syslogHeaders = []xeHeaderCol{
+	{"2_1_7", "IP Address Type"},
+	{"2_1_1", "Host Address"},
+	{"2_1_2", "Status"},
+	{"2_1_3", "Port"},
+	{"2_1_4", "Severity Filter"},
+}
+
+// syslogTemplateCols is the template row's cells, in the SAME order the
+// live page renders them ("2_1_6", then syslogHeaders in order), mirroring
+// Python's `("2_1_6", *_SYSLOG_HEADERS)`.
+var syslogTemplateCols = []string{"2_1_6", "2_1_7", "2_1_1", "2_1_2", "2_1_3", "2_1_4"}
+
+// syslogSeverityWords is the severity WORD the web UI prints for each
+// standard number -- the inverse of model.SyslogSeverityNames, Title-cased
+// as the pages render it ("Info" on all four switches, where SNMP's column
+// reads 6). Written out rather than derived, so the mock is an INDEPENDENT
+// source: a renderer that inverted the reader's own table could only ever
+// agree with it. Mirrors Python web_fastpath_xui._SYSLOG_SEVERITY_WORDS.
+var syslogSeverityWords = map[int]string{
+	0: "Emergency",
+	1: "Alert",
+	2: "Critical",
+	3: "Error",
+	4: "Warning",
+	5: "Notice",
+	6: "Info",
+	7: "Debug",
+}
+
+// fastpathXUICell renders one data cell of an XUI row grid, shaped as the
+// live syslogConfiguration.html/userManagement.html pages emit it,
+// mirroring Python web_fastpath_xui._xui_cell. text=false renders the
+// value into the hidden input only, not as visible cell text -- what the
+// real pages do for their action/index columns and for the Severity Filter
+// cell.
+func fastpathXUICell(inst, xid, value string, text bool) string {
+	shown := ""
+	if text {
+		shown = value
+	}
+	return fmt.Sprintf(
+		"<TD class=\"def alt0\" p=\"1.0.10\" id=%s><INPUT xid=%s TYPE=hidden NAME=%s.v_%s VALUE=\"%s\">%s</TD>\n",
+		xid, xid, inst, xid, value, shown)
+}
+
+// RenderXUISyslog renders syslogConfiguration.html from state.Syslog,
+// mirroring Python web_fastpath_xui.render_syslog. Counters (Messages
+// Received/Relayed/Ignored) are rendered as the live pages do but are NOT
+// part of model.SyslogConfig; they exist so the page the mock serves has
+// the same field set as the real one.
+func RenderXUISyslog(state *State, path string) string {
+	sim := state.Syslog
+	adminWord := "Disable"
+	if sim.AdminMode == 1 {
+		adminWord = "Enable"
+	}
+
+	var body strings.Builder
+	body.WriteString(fastpathLabelled("1_1_1", "Admin Status", adminWord))
+	body.WriteString(fastpathLabelled("1_2_1", "Local UDP Port", strconv.Itoa(sim.LocalPort)))
+	body.WriteString(fastpathLabelled("1_3_1", "Messages Received", "9583"))
+	body.WriteString(fastpathLabelled("1_5_1", "Messages Relayed", "15"))
+	body.WriteString(fastpathLabelled("1_4_1", "Messages Ignored", "0"))
+	body.WriteString("<TR>\n")
+	body.WriteString(xeHeader(syslogHeaders))
+	body.WriteString("</TR>\n")
+	// The template row: instance-less field names, so it is not a data row.
+	body.WriteString("<TR id=g_2_1>\n")
+	for _, xid := range syslogTemplateCols {
+		fmt.Fprintf(&body, "<TD><INPUT xid=g_%s TYPE=hidden NAME=v_g_%s VALUE=\"\"></TD>\n", xid, xid)
+	}
+	// VALUE="" -- the real page renders every template cell empty. "Add" is
+	// the element LABEL, not the input's value, and a mock that pre-filled
+	// it would let a writer that forgot to set the row-status pass.
+	body.WriteString("<TD style=\"display:none\"><INPUT xid=g_2_1_5 TYPE=hidden NAME=v_g_2_1_5 VALUE=\"\"></TD>\n")
+	body.WriteString("</TR>\n")
+
+	count := len(sim.Collectors)
+	for row0, c := range sim.Collectors {
+		inst := fastpathInstance(row0, count)
+		status := ""
+		if c.Status == 1 {
+			status = "Active"
+		}
+		// The REAL row shape: <TR p="..."> plus the row's own gecb
+		// checkbox. It used to be a bare <TR>, which webui.ParseXUIListPage
+		// skips entirely -- so the page read fine through ParseXERows
+		// while offering the WRITER no rows at all to address.
+		fmt.Fprintf(&body, "<TR p=\"%s0\" id=2_1>\n"+
+			"<td class=\"def alt0 geRight\"><INPUT id=\"2_1_null\" type=\"checkbox\" name=\"%s.gecb_2_1\" xgc ></td>\n",
+			inst, inst)
+		body.WriteString(fastpathXUICell(inst, "2_1_6", strconv.Itoa(c.Index), false))
+		body.WriteString(fastpathXUICell(inst, "2_1_7", "IPv4", true))
+		body.WriteString(fastpathXUICell(inst, "2_1_1", c.Host, true))
+		body.WriteString(fastpathXUICell(inst, "2_1_2", status, true))
+		body.WriteString(fastpathXUICell(inst, "2_1_3", strconv.Itoa(c.Port), true))
+		body.WriteString(fastpathXUICell(inst, "2_1_4", syslogSeverityWords[c.Severity], false))
+		// Empty, as the live row is: 2_1_5 is WRITE-only, so the page
+		// renders no value in it (2_1_2 is the readable "Active" mirror).
+		body.WriteString(fastpathXUICell(inst, "2_1_5", "", false))
+		body.WriteString("</TR>\n")
+	}
+
+	return fastpathPage(path, body.String(),
+		[]fastpathButton{
+			{XID: "4_1_1", Label: "Add"},
+			{XID: "4_3_1", Label: "Delete"},
+			{XID: "4_4_1", Label: "Cancel"},
+			{XID: "4_2_1", Label: "Apply"},
+		},
+		"", "NetGear - Syslog Configuration")
+}

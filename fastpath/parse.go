@@ -1064,6 +1064,108 @@ func parseMgmtIP(text string) model.MgmtIPConfig {
 	}
 }
 
+// colonFields parses "Label   : value" lines, which `show logging` uses,
+// mirroring Python parse._colon_fields.
+//
+// Distinct from labelledValues above: that reads the dotted-leader form
+// ("Label........ value") which `show hosts`/`show network` use. The
+// logging command uses a colon instead, so it needs its own reader.
+func colonFields(text string) map[string]string {
+	out := make(map[string]string)
+	for _, line := range splitLines(text) {
+		idx := strings.Index(line, ":")
+		if idx < 0 {
+			continue
+		}
+		label := strings.TrimSpace(line[:idx])
+		if label != "" {
+			out[label] = strings.TrimSpace(line[idx+1:])
+		}
+	}
+	return out
+}
+
+// parseSyslog parses "show logging" + "show logging hosts" into
+// model.SyslogConfig, mirroring Python parse.parse_syslog
+// (protocols/cli/parse.py:835-899) EXACTLY.
+//
+// Captured 2026-08-02 from m4300-24x (10.1.5.13), m4300-16x (10.1.5.20) and
+// gsm7252ps (10.1.5.22):
+//
+//	Syslog Logging                      : enabled
+//	Logging Client Local Port           : 514
+//
+//	Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#
+//	----- ------------------------ ---------- ------ --------- ----- ----- -----
+//	1     10.1.5.1                 info       514    Active    udp
+//
+// THE HOST TABLE'S COLUMN SET DIFFERS BY FIRMWARE: the M4300s emit eight
+// columns (through Cert#), gsm7252ps only the first five. Both are parsed by
+// taking the first five whitespace-separated fields and ignoring anything
+// after Status, so neither shape can shift a value into the wrong field.
+// Deliberately NOT ruler-based (unlike every other table this package
+// parses, iterTableRows): the real output splits cleanly on whitespace
+// here, and the host address column can never legitimately contain a
+// space -- mirroring Python's own `line.split()`, not `_ruler_spans`.
+//
+// Raises (wraps ErrCliCommandRejected) if loggingText is not a logging
+// block at all. This used to return SyslogConfig{Enabled: false, ...} for
+// ANY unparseable input -- so a switch answering "Command not found" was
+// reported as "remote logging is off, no collectors, source port 0". That
+// is a confident wrong answer to a question that was never answered, and a
+// fabricated 0 besides.
+func parseSyslog(loggingText, hostsText string) (model.SyslogConfig, error) {
+	fields := colonFields(loggingText)
+	enabledText, hasEnabled := fields["Syslog Logging"]
+	portText, hasPort := fields["Logging Client Local Port"]
+	if !hasEnabled || !hasPort {
+		return model.SyslogConfig{}, fmt.Errorf(
+			"%w: `show logging` did not return a logging block (no 'Syslog Logging'/'Logging Client Local Port' line); the device said: %s",
+			ErrCliCommandRejected, truncateWords(loggingText, 200))
+	}
+	enabled := strings.EqualFold(strings.TrimSpace(enabledText), "enabled")
+	localPort, ok := parseInt(portText)
+	if !ok {
+		return model.SyslogConfig{}, fmt.Errorf("%w: `show logging` reported a non-numeric local port %q",
+			ErrCliCommandRejected, strings.TrimSpace(portText))
+	}
+
+	var servers []model.SyslogServer
+	for _, line := range splitLines(hostsText) {
+		cells := strings.Fields(line)
+		// A data row starts with the integer index; the header and the
+		// dashed rule under it do not, which is what filters them out.
+		if len(cells) < 5 {
+			continue
+		}
+		index, ok := parseInt(cells[0])
+		if !ok {
+			continue
+		}
+		host, severityWord, portCellText, statusText := cells[1], cells[2], cells[3], cells[4]
+		port, _ := parseInt(portCellText) // non-numeric -> 0, never fabricated otherwise
+		severity, err := model.SyslogSeverity(severityWord)
+		if err != nil {
+			return model.SyslogConfig{}, err
+		}
+		idx := index
+		servers = append(servers, model.SyslogServer{
+			Host:     host,
+			Port:     port,
+			Severity: severity,
+			Active:   strings.EqualFold(statusText, "active"),
+			// The table's OWN Index, kept rather than discarded: it is the
+			// handle `logging host remove <index>` addresses, and it is
+			// SPARSE. Measured on m4300-24x 10.1.5.13 (2026-08-05), where
+			// the rows were Index 1 and Index 3 with nothing at 2 -- so a
+			// remover using the row's POSITION would have addressed the
+			// wrong row (and did, until this was found).
+			Index: &idx,
+		})
+	}
+	return model.SyslogConfig{Enabled: enabled, LocalPort: localPort, Servers: servers}, nil
+}
+
 // parseHostname parses "show hosts" into the switch's host name, mirroring
 // Python parse.parse_hostname EXACTLY. The command reports far more than the
 // name -- DNS servers, the domain list, resolver retry counts, the static

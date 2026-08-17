@@ -344,6 +344,69 @@ func (w *Writer) SetHostname(ctx context.Context, name string, _ bool) error {
 	return nil
 }
 
+// SetSyslogEnabled turns remote syslog on or off, mirroring Python
+// SnmpWriter.set_syslog_enabled (snmp_write.py:916-954).
+//
+// Writes the vendor logging admin-mode column (<base>.14.1.4.1.0), whose
+// enum is 1=enabled, 2=disabled -- established from captured CLI rather
+// than assumed, see oids.VendorOids.SyslogAdminMode.
+//
+// WRITABILITY MEASURED 2026-08-02 by SETting each switch the value it
+// already held, which cannot change device state but still distinguishes a
+// writable column from a read-only one: m4300-24x (10.1.5.13), gsm7252ps
+// (10.1.5.22) and gsm7228ps (10.1.5.11) all accepted it.
+//
+// VENDOR column, so a model with no Netgear subtree (gs728tpp) cannot serve
+// this -- refused by name, mirroring GetSyslog's own gate.
+//
+// Deliberately narrower than GetSyslog. Adding or removing a COLLECTOR means
+// creating a row in the host table, which needs a row-status write that has
+// not been driven against hardware; offering it here on the strength of the
+// read alone would be the inference this project refuses.
+//
+// Not force-gated: toggling log delivery cannot strand a switch and is
+// reversible by writing the old value back. force is accepted-but-unused,
+// purely so this method's signature matches every other writer.
+func (w *Writer) SetSyslogEnabled(ctx context.Context, enabled bool, _ bool) error {
+	if !HasVendorOids(w.model) {
+		return fmt.Errorf(
+			"model %q registers no Netgear vendor OID subtree, and the logging columns are vendor-only: %w",
+			w.model.Key, model.ErrUnsupportedCapability,
+		)
+	}
+	vendor, err := GetVendorOids(w.model)
+	if err != nil {
+		return err
+	}
+	before, err := w.reader.GetSyslog(ctx)
+	if err != nil {
+		return err
+	}
+	value := 2
+	if enabled {
+		value = 1
+	}
+	vb, err := NewSetVarbind(vendor.SyslogAdminMode, value, "i")
+	if err != nil {
+		return err
+	}
+	if err := w.client.SetMany(ctx, []SetVarbind{vb}); err != nil {
+		return err
+	}
+	after, err := w.reader.GetSyslog(ctx)
+	if err != nil {
+		return err
+	}
+	if after.Enabled != enabled {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("syslog enabled is %v after writing %v", after.Enabled, enabled),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
 // SetPortSpeed always returns an error wrapping
 // model.ErrUnsupportedCapability: this backend cannot configure a port's
 // speed. Mirrors Python's SnmpWriter.set_port_speed.

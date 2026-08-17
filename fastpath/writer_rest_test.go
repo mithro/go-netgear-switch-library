@@ -575,6 +575,156 @@ func TestWriterSetHostnameVerificationFailureRaises(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// SetSyslogEnabled -- NOT force-gated, `logging syslog`/`no logging syslog`
+// ---------------------------------------------------------------------
+
+func TestWriterSetSyslogEnabledWritesAndVerifies(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	spec := mustCLISpec(t, m)
+	disabled := "Syslog Logging                      : disabled\n" +
+		"Logging Client Local Port           : 514"
+	enabled := "Syslog Logging                      : enabled\n" +
+		"Logging Client Local Port           : 514"
+	emptyHosts := "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----"
+
+	sess := newQueuedSession(
+		ok(disabled), ok(emptyHosts), // before := GetSyslog()
+		ok(""),                      // enter: configure
+		ok(""),                      // logging syslog
+		ok(""),                      // unwind: exit
+		ok(enabled), ok(emptyHosts), // after := GetSyslog()
+	)
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.SetSyslogEnabled(context.Background(), true, false); err != nil {
+		t.Fatalf("SetSyslogEnabled: %v", err)
+	}
+	wantCmds := []string{
+		spec.LoggingCmd, spec.LoggingHostsCmd,
+		spec.ConfigureCmd, spec.LoggingSyslog(true), spec.ExitCmd,
+		spec.LoggingCmd, spec.LoggingHostsCmd,
+	}
+	assertCommands(t, sess, wantCmds)
+}
+
+// TestWriterSetSyslogEnabledDisableSendsNoLoggingSyslog proves disabling
+// sends the NEGATED command ("no logging syslog"), not the positive form.
+func TestWriterSetSyslogEnabledDisableSendsNoLoggingSyslog(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	spec := mustCLISpec(t, m)
+	enabled := "Syslog Logging                      : enabled\n" +
+		"Logging Client Local Port           : 514"
+	disabled := "Syslog Logging                      : disabled\n" +
+		"Logging Client Local Port           : 514"
+	emptyHosts := "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----"
+
+	sess := newQueuedSession(
+		ok(enabled), ok(emptyHosts),
+		ok(""), ok(""), ok(""),
+		ok(disabled), ok(emptyHosts),
+	)
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.SetSyslogEnabled(context.Background(), false, false); err != nil {
+		t.Fatalf("SetSyslogEnabled: %v", err)
+	}
+	if spec.LoggingSyslog(false) != "no logging syslog" {
+		t.Fatalf("LoggingSyslog(false) = %q, want %q", spec.LoggingSyslog(false), "no logging syslog")
+	}
+	wantCmds := []string{
+		spec.LoggingCmd, spec.LoggingHostsCmd,
+		spec.ConfigureCmd, "no logging syslog", spec.ExitCmd,
+		spec.LoggingCmd, spec.LoggingHostsCmd,
+	}
+	assertCommands(t, sess, wantCmds)
+}
+
+// TestWriterSetSyslogEnabledNotForceGated proves force=false succeeds --
+// toggling log delivery cannot strand the switch.
+func TestWriterSetSyslogEnabledNotForceGated(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	disabled := "Syslog Logging                      : disabled\n" +
+		"Logging Client Local Port           : 514"
+	enabled := "Syslog Logging                      : enabled\n" +
+		"Logging Client Local Port           : 514"
+	emptyHosts := "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----"
+	sess := newQueuedSession(
+		ok(disabled), ok(emptyHosts),
+		ok(""), ok(""), ok(""),
+		ok(enabled), ok(emptyHosts),
+	)
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.SetSyslogEnabled(context.Background(), true, false); err != nil {
+		t.Fatalf("SetSyslogEnabled(force=false) = %v, want success (not force-gated)", err)
+	}
+}
+
+func TestWriterSetSyslogEnabledVerificationFailureRaises(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	stuck := "Syslog Logging                      : disabled\n" +
+		"Logging Client Local Port           : 514"
+	emptyHosts := "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----"
+	// Device ignores the write: every read (before AND after) answers the
+	// same fixture.
+	sess := newQueuedSession(
+		ok(stuck), ok(emptyHosts),
+		ok(""), ok(""), ok(""),
+		ok(stuck), ok(emptyHosts),
+	)
+	w := mustNewWriter(t, sess, m)
+
+	err := w.SetSyslogEnabled(context.Background(), true, false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("SetSyslogEnabled error = %v, want *model.WriteVerificationError", err)
+	}
+	if verr.Before != false || verr.After != false {
+		t.Errorf("verification error before/after = %v/%v, want false/false", verr.Before, verr.After)
+	}
+}
+
+// TestWriterSetSyslogEnabledPropagatesErrorFromBeforeRead proves a session
+// failure on the very first (before-read) command short-circuits the write
+// before any config-mode command is ever issued.
+func TestWriterSetSyslogEnabledPropagatesErrorFromBeforeRead(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	wantErr := errors.New("boom")
+	sess := newQueuedSession(queuedStep{err: wantErr})
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.SetSyslogEnabled(context.Background(), true, false); !errors.Is(err, wantErr) {
+		t.Errorf("SetSyslogEnabled() error = %v, want wrapping %v", err, wantErr)
+	}
+}
+
+// TestWriterSetSyslogEnabledPropagatesErrorFromAfterRead proves a session
+// failure on the RE-READ (after the config command already went out)
+// propagates as-is, never swallowed into a fabricated verification result.
+func TestWriterSetSyslogEnabledPropagatesErrorFromAfterRead(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	disabled := "Syslog Logging                      : disabled\n" +
+		"Logging Client Local Port           : 514"
+	emptyHosts := "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----"
+	wantErr := errors.New("boom")
+	sess := newQueuedSession(
+		ok(disabled), ok(emptyHosts),
+		ok(""), ok(""), ok(""),
+		queuedStep{err: wantErr},
+	)
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.SetSyslogEnabled(context.Background(), true, false); !errors.Is(err, wantErr) {
+		t.Errorf("SetSyslogEnabled() error = %v, want wrapping %v", err, wantErr)
+	}
+}
+
+// ---------------------------------------------------------------------
 // SetMgmtIP (dossier §4.8) -- unconditional force + first-mismatch verify
 // ---------------------------------------------------------------------
 

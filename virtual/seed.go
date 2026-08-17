@@ -346,6 +346,15 @@ func SeedGSM7252PS() *State {
 	// and UNescaped ifName lists (the only one of the four like that).
 	s.VlanMembershipPage = &VlanMembershipPageSim{Slots: 116, LagSlot: 3, Grid: "gif"}
 
+	// MEASURED 2026-08-02 on 10.1.5.22: identical to the m4300 pair --
+	// enabled, port 514, one collector 10.1.5.1 info(6) 514 Active. Ported
+	// field-for-field from Python's seed_gsm7252ps (seed.py:1251).
+	s.Syslog = SyslogSim{
+		AdminMode:  1,
+		LocalPort:  514,
+		Collectors: []SyslogCollectorSim{{Host: "10.1.5.1", Port: 514, Severity: 6, Status: 1, Index: 1}},
+	}
+
 	return s
 }
 
@@ -569,6 +578,23 @@ func SeedGSM7228PS() *State {
 	// grid, HTML-escaped ifName lists, no trailing comma and no CSRFToken.
 	s.VlanMembershipPage = &VlanMembershipPageSim{Slots: 78, LagSlot: 3, Grid: "png", Escape: true}
 
+	// MEASURED 2026-08-02 on 10.1.5.11: the vendor admin-mode column reads
+	// 2 (disabled) and the host table is EMPTY -- this switch has no
+	// collector configured, which is why GetSyslog returns none.
+	//
+	// DELIBERATELY KEPT even though the live switch has since moved on (a
+	// re-read on 2026-08-03 over SNMP, HTTP and the CLI all returned
+	// enabled + one collector). The switch's own buffered log dates the
+	// change -- an operator reconfiguring a production device between two
+	// reads, NOT the reader drifting from the hardware. This row is also
+	// the fleet's only "logging configured nowhere" case, so re-seeding it
+	// to match the others would delete the coverage that a genuinely empty
+	// host table reads as empty. Ported field-for-field from Python's
+	// seed_gsm7228ps (seed.py:1849) -- explicit even though it equals
+	// SyslogSim's own NewState default, to keep this measurement pinned
+	// rather than silently implicit.
+	s.Syslog = SyslogSim{AdminMode: 2, LocalPort: 514}
+
 	return s
 }
 
@@ -770,6 +796,16 @@ func SeedM4300_24X() *State {
 		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
 	})
 
+	// MEASURED 2026-08-02 on 10.1.5.13: `show logging` reports "Syslog
+	// Logging : enabled" and local port 514, and `show logging hosts` one
+	// row 10.1.5.1 / info(6) / 514 / Active. Ported field-for-field from
+	// Python's seed_m4300_24x (seed.py:2457).
+	s.Syslog = SyslogSim{
+		AdminMode:  1,
+		LocalPort:  514,
+		Collectors: []SyslogCollectorSim{{Host: "10.1.5.1", Port: 514, Severity: 6, Status: 1, Index: 1}},
+	}
+
 	return s
 }
 
@@ -920,6 +956,12 @@ func SeedM4300_16X() *State {
 	// VlanMembershipLockedPorts stays empty (this SKU's ports 1-8 carry no
 	// switchport-mode line -- see SeedM4300_24X's doc comment for the
 	// live-proven per-port counter-example this pairs with).
+
+	// s.Syslog stays at NewState's default (AdminMode 2/disabled, LocalPort
+	// 514, no collectors): unlike SeedGSM7252PS/SeedM4300_24X/SeedGSM7228PS,
+	// Python's seed_m4300_16x never sets syslog= at all -- this SKU's
+	// remote-logging state was never separately measured, so this mock
+	// honestly carries the dataclass default rather than inventing one.
 
 	return s
 }

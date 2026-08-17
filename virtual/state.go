@@ -340,6 +340,42 @@ type UserSim struct {
 	SNMPv3Encryption string
 }
 
+// SyslogCollectorSim is one remote syslog collector row, as the vendor host
+// table reports it, mirroring Python's SyslogCollectorSim dataclass
+// (state.py:248-267).
+//
+// Field values are SEEDED from a live switch, never computed: Severity is
+// the standard syslog number the device actually returns (6 for "info" on
+// m4300-24x, cross-checked against its own `show logging hosts`), and
+// Status 1 is what that command prints as "Active".
+type SyslogCollectorSim struct {
+	Host     string
+	Port     int
+	Severity int
+	Status   int
+	// Index is the row's index in the switch's own host table. SPARSE on
+	// real hardware -- m4300-24x 10.1.5.13 held Index 1 and Index 3 with
+	// nothing at 2 (2026-08-05) -- so this is stored rather than derived
+	// from a row's position. A fake that renumbered densely could never
+	// catch a position-for-index bug, which is exactly the bug that got
+	// shipped.
+	Index int
+}
+
+// SyslogSim is the switch's remote-logging state, as the vendor ".14"
+// subtree reports it, mirroring Python's SyslogSim dataclass (state.py:
+// 270-282). AdminMode is the device's own enum (1=enabled, 2=disabled),
+// kept as the raw integer rather than a bool so the mock emits exactly what
+// a real agent emits and the reader's own decoding is what gets exercised.
+// NewState's zero value is AdminMode 2 / LocalPort 514 / no collectors --
+// the Python dataclass default -- not the Go struct zero value; see
+// NewState.
+type SyslogSim struct {
+	AdminMode  int
+	LocalPort  int
+	Collectors []SyslogCollectorSim
+}
+
 // ServiceSim is one management service's admin state, as its own config
 // page / CLI show command reports it, mirroring Python's ServiceSim
 // dataclass (state.py:233-245) plus one field Python's fake does not yet
@@ -451,6 +487,15 @@ type State struct {
 	Users    []UserSim
 	Services map[string]ServiceSim
 
+	// Syslog is remote-logging state, projected under <vendor base>.14 only
+	// for a model with a vendor OID subtree (see OIDMap) -- which is what
+	// makes gs728tpp (no vendor OIDs) correctly unable to answer GetSyslog.
+	// Mirrors Python's VirtualSwitchState.syslog: SyslogSim =
+	// field(default_factory=SyslogSim) (state.py:521); NewState sets it to
+	// that dataclass's own default (AdminMode 2, LocalPort 514, no
+	// collectors), not Go's struct zero value.
+	Syslog SyslogSim
+
 	ModelName    string
 	Serial       string
 	Firmware     string
@@ -550,6 +595,7 @@ func NewState(modelKey string) *State {
 		},
 		Users:                     []UserSim{},
 		Services:                  map[string]ServiceSim{},
+		Syslog:                    SyslogSim{AdminMode: 2, LocalPort: 514},
 		NsdpPassword:              "password",
 		NsdpMac:                   [6]byte{0x28, 0xc6, 0x8e, 0x00, 0x00, 0x01},
 		NsdpPortMirroringSources:  map[int]bool{},
@@ -593,6 +639,7 @@ func (s *State) Snapshot() *State {
 		Mgmt:                      s.Mgmt,
 		Users:                     cloneUsersSlice(s.Users),
 		Services:                  cloneServicesMap(s.Services),
+		Syslog:                    cloneSyslogSim(s.Syslog),
 		ModelName:                 s.ModelName,
 		Serial:                    s.Serial,
 		Firmware:                  s.Firmware,
@@ -750,6 +797,28 @@ func cloneServicesMap(in map[string]ServiceSim) map[string]ServiceSim {
 		v.CLIPort = cloneIntPtr(v.CLIPort)
 		out[k] = v
 	}
+	return out
+}
+
+// cloneSyslogSim deep-copies in, including its Collectors slice -- a
+// shallow struct copy would leave the clone's Collectors aliasing the
+// original's backing array, which Restore's whole-struct assignment (see
+// its own doc comment) requires NOT to happen.
+func cloneSyslogSim(in SyslogSim) SyslogSim {
+	out := in
+	out.Collectors = cloneSyslogCollectorSlice(in.Collectors)
+	return out
+}
+
+// cloneSyslogCollectorSlice copies in element-by-element: SyslogCollectorSim
+// carries only plain fields, so a shallow slice copy is already a deep copy
+// (mirroring cloneUsersSlice's same reasoning).
+func cloneSyslogCollectorSlice(in []SyslogCollectorSim) []SyslogCollectorSim {
+	if in == nil {
+		return nil
+	}
+	out := make([]SyslogCollectorSim, len(in))
+	copy(out, in)
 	return out
 }
 
@@ -1131,6 +1200,12 @@ func (s *State) ApplyWrite(oid string, value any) {
 			}
 			return
 		}
+		// Remote-logging admin mode (1=enabled, 2=not), the column
+		// SetSyslogEnabled writes.
+		if oid == v.SyslogAdminMode {
+			s.Syslog.AdminMode = mustInt(oid, value)
+			return
+		}
 	}
 
 	// 11. Unhandled writable OID: deliberate no-op (verify-after-write
@@ -1184,6 +1259,12 @@ func (s *State) IsWritableOID(oid string) bool {
 		return false
 	}
 	if oid == v.MgmtWriteAddrUnverified || oid == v.MgmtWriteNetmaskUnverified || oid == v.MgmtWriteGatewayUnverified {
+		return true
+	}
+	// Remote-logging admin mode. WRITABLE on real hardware (m4300-24x
+	// 10.1.5.13, gsm7252ps 10.1.5.22, gsm7228ps 10.1.5.11, 2026-08-02, with
+	// the Read/Write community): it is what SetSyslogEnabled writes.
+	if oid == v.SyslogAdminMode {
 		return true
 	}
 	return oid == v.DHCPModeUnverified+".0"

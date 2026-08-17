@@ -650,6 +650,22 @@ func TestSetFlowControlIsUnsupportedOnGs305ep(t *testing.T) {
 	wantUnsupported(t, err, "SetFlowControl")
 }
 
+// TestSetSyslogEnabledIsUnsupportedEverywhere proves HTTP refuses
+// SetSyslogEnabled by name on EVERY dialect -- including the four managed
+// models whose syslog page it can read from -- mirroring Python
+// HttpWriter.set_syslog_enabled, which serves no remote-logging toggle at
+// all.
+func TestSetSyslogEnabledIsUnsupportedEverywhere(t *testing.T) {
+	for _, key := range []string{"gs305ep", "gsm7252ps", "m4300-24x"} {
+		key := key
+		t.Run(key, func(t *testing.T) {
+			w := mustNewWriter(t, newWriterFakeSession(true), key)
+			err := w.SetSyslogEnabled(context.Background(), true, false)
+			wantUnsupported(t, err, "SetSyslogEnabled")
+		})
+	}
+}
+
 // TestSetHostnameIsUnsupportedOnGs305ep proves the STANDARD dialect refuses
 // SetHostname by name -- its identity page carries no host-name field to
 // write, and this is neither the GS110EMX form nor the GoAhead XML API.

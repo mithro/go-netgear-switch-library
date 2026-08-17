@@ -571,6 +571,172 @@ func TestSetHostnameVerificationFailureRaises(t *testing.T) {
 	}
 }
 
+// --- SetSyslogEnabled ----------------------------------------------------
+
+// applySyslogAdminMode mirrors applySysName above, for the vendor
+// admin-mode scalar SetSyslogEnabled writes.
+func applySyslogAdminMode(oid string) scriptedApplyFunc {
+	return func(tables map[string][]Row, vbs []SetVarbind) {
+		for _, vb := range vbs {
+			if vb.OID != oid {
+				continue
+			}
+			tables[oid] = []Row{NewIntRow(oid, int64(vb.Value.(int)))}
+		}
+	}
+}
+
+func TestSetSyslogEnabledWritesAdminModeAndVerifies(t *testing.T) {
+	vo := syslogVendor(t)
+	client := newScriptedWriteClient(map[string][]Row{
+		vo.SyslogAdminMode: {NewIntRow(vo.SyslogAdminMode, 2)},
+		vo.SyslogLocalPort: {NewIntRow(vo.SyslogLocalPort, 514)},
+	}, applySyslogAdminMode(vo.SyslogAdminMode))
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetSyslogEnabled(context.Background(), true, false); err != nil {
+		t.Fatalf("SetSyslogEnabled: %v", err)
+	}
+	want := []SetVarbind{{OID: vo.SyslogAdminMode, Value: 1, TypeLetter: "i"}}
+	if !setVarbindsEqual(client.sets, want) {
+		t.Errorf("sets = %+v, want %+v", client.sets, want)
+	}
+}
+
+// TestSetSyslogEnabledDisableWritesTwo proves disabling writes the enum's
+// OTHER value (2), not a bare boolean encoding.
+func TestSetSyslogEnabledDisableWritesTwo(t *testing.T) {
+	vo := syslogVendor(t)
+	client := newScriptedWriteClient(map[string][]Row{
+		vo.SyslogAdminMode: {NewIntRow(vo.SyslogAdminMode, 1)},
+		vo.SyslogLocalPort: {NewIntRow(vo.SyslogLocalPort, 514)},
+	}, applySyslogAdminMode(vo.SyslogAdminMode))
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetSyslogEnabled(context.Background(), false, false); err != nil {
+		t.Fatalf("SetSyslogEnabled: %v", err)
+	}
+	want := []SetVarbind{{OID: vo.SyslogAdminMode, Value: 2, TypeLetter: "i"}}
+	if !setVarbindsEqual(client.sets, want) {
+		t.Errorf("sets = %+v, want %+v", client.sets, want)
+	}
+}
+
+// TestSetSyslogEnabledNotForceGated proves force=false succeeds -- toggling
+// log delivery cannot strand a switch.
+func TestSetSyslogEnabledNotForceGated(t *testing.T) {
+	vo := syslogVendor(t)
+	client := newScriptedWriteClient(map[string][]Row{
+		vo.SyslogAdminMode: {NewIntRow(vo.SyslogAdminMode, 2)},
+		vo.SyslogLocalPort: {NewIntRow(vo.SyslogLocalPort, 514)},
+	}, applySyslogAdminMode(vo.SyslogAdminMode))
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetSyslogEnabled(context.Background(), true, false); err != nil {
+		t.Fatalf("SetSyslogEnabled(force=false) = %v, want success (not force-gated)", err)
+	}
+}
+
+func TestSetSyslogEnabledVerificationFailureRaises(t *testing.T) {
+	vo := syslogVendor(t)
+	// nil apply: the device ignores the write, so the re-read never moves.
+	client := newScriptedWriteClient(map[string][]Row{
+		vo.SyslogAdminMode: {NewIntRow(vo.SyslogAdminMode, 2)},
+		vo.SyslogLocalPort: {NewIntRow(vo.SyslogLocalPort, 514)},
+	}, nil)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	err = w.SetSyslogEnabled(context.Background(), true, false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("SetSyslogEnabled error = %v, want *model.WriteVerificationError", err)
+	}
+}
+
+// errBeforeSetWriteClient wraps scriptedWriteClient so every Get/Walk
+// BEFORE any SET has been issued fails with failErr -- the write-side twin
+// of failAfterSetWriteClient, used to prove the "before" GetSyslog read's
+// error propagates rather than being swallowed.
+type errBeforeSetWriteClient struct {
+	*scriptedWriteClient
+	failErr error
+}
+
+func (e *errBeforeSetWriteClient) Get(ctx context.Context, oids []string) ([]Row, error) {
+	if len(e.calls) == 0 {
+		return nil, e.failErr
+	}
+	return e.scriptedWriteClient.Get(ctx, oids)
+}
+
+func TestSetSyslogEnabledPropagatesErrorFromBeforeRead(t *testing.T) {
+	vo := syslogVendor(t)
+	wantErr := errors.New("boom")
+	inner := newScriptedWriteClient(map[string][]Row{
+		vo.SyslogAdminMode: {NewIntRow(vo.SyslogAdminMode, 2)},
+		vo.SyslogLocalPort: {NewIntRow(vo.SyslogLocalPort, 514)},
+	}, applySyslogAdminMode(vo.SyslogAdminMode))
+	client := &errBeforeSetWriteClient{scriptedWriteClient: inner, failErr: wantErr}
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetSyslogEnabled(context.Background(), true, false); !errors.Is(err, wantErr) {
+		t.Errorf("SetSyslogEnabled() error = %v, want wrapping %v", err, wantErr)
+	}
+	if len(client.sets) != 0 {
+		t.Errorf("SetSyslogEnabled issued %d SET(s), want none -- the before-read error must fire first", len(client.sets))
+	}
+}
+
+// TestSetSyslogEnabledPropagatesErrorFromAfterRead proves a transport
+// failure on the RE-READ (after the SET already went out) propagates
+// as-is, never swallowed into a fabricated verification result.
+func TestSetSyslogEnabledPropagatesErrorFromAfterRead(t *testing.T) {
+	vo := syslogVendor(t)
+	wantErr := errors.New("boom")
+	client := &failAfterSetWriteClient{
+		fakeWriteClient: newFakeWriteClient(map[string][]Row{
+			vo.SyslogAdminMode: {NewIntRow(vo.SyslogAdminMode, 2)},
+			vo.SyslogLocalPort: {NewIntRow(vo.SyslogLocalPort, 514)},
+		}, true),
+		failErr: wantErr,
+	}
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetSyslogEnabled(context.Background(), true, false); !errors.Is(err, wantErr) {
+		t.Errorf("SetSyslogEnabled() error = %v, want wrapping %v", err, wantErr)
+	}
+}
+
+// TestSetSyslogEnabledRefusesByNameOnNoVendorModel proves gs728tpp (no
+// vendor OID subtree) is refused BY NAME before any SET, mirroring
+// GetSyslog's own gate.
+func TestSetSyslogEnabledRefusesByNameOnNoVendorModel(t *testing.T) {
+	client := newScriptedWriteClient(nil, nil)
+	w, err := NewWriter(client, mustModel(t, "gs728tpp"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	err = w.SetSyslogEnabled(context.Background(), true, false)
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("SetSyslogEnabled error = %v, want wrapping ErrUnsupportedCapability", err)
+	}
+	if len(client.sets) != 0 {
+		t.Errorf("SetSyslogEnabled issued %d SET(s), want none -- refusal must fire before any", len(client.sets))
+	}
+}
+
 func TestSetPortDescriptionProtectedPortBlocksWithoutForce(t *testing.T) {
 	client := newScriptedWriteClient(portTables(1, 1), applyIfAlias)
 	w, err := NewWriter(client, mustModel(t, "gsm7252ps"), WithProtectedPorts(5))

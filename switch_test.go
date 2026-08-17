@@ -38,6 +38,9 @@ func (f *fakeReader) GetMgmtIP(context.Context) (model.MgmtIPConfig, error) {
 func (f *fakeReader) GetUsers(context.Context) ([]model.SwitchUser, error)       { return nil, nil }
 func (f *fakeReader) GetServices(context.Context) ([]model.ServiceStatus, error) { return nil, nil }
 func (f *fakeReader) GetHostname(context.Context) (string, error)                { return "", nil }
+func (f *fakeReader) GetSyslog(context.Context) (model.SyslogConfig, error) {
+	return model.SyslogConfig{}, nil
+}
 
 // withRegisteredBackend registers build for backend for the duration of the
 // calling test, restoring whatever (if anything) was registered before via
@@ -813,6 +816,87 @@ func TestSetPoE_WriteBackendOverrideRunsOverNamedBackend(t *testing.T) {
 		t.Fatalf("NSDP writer received %d SetPoE calls, want 1 (Write.Backend override)", len(nsdpWriter.setPoECalls))
 	}
 	if len(snmpWriter.setPoECalls) != 0 {
+		t.Fatal("SNMP writer must NOT be invoked when Write.Backend explicitly names NSDP")
+	}
+}
+
+// TestGetSyslog_RoutesThroughReaderAndReturnsItsValue proves the facade
+// wrapper dispatches to the resolved BackendReader.GetSyslog and returns
+// its result unchanged.
+func TestGetSyslog_RoutesThroughReaderAndReturnsItsValue(t *testing.T) {
+	clearBackendRegistry(t)
+	want := model.SyslogConfig{
+		Enabled:   true,
+		LocalPort: 514,
+		Servers:   []model.SyslogServer{{Host: "10.1.5.1", Port: 514, Severity: 6, Active: true}},
+	}
+	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
+		return &stubReader{syslog: want}, nil
+	})
+
+	m := fakeModel("fake", model.BackendSNMP)
+	sw, err := New(m, "10.0.0.1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	got, err := sw.GetSyslog(context.Background())
+	if err != nil {
+		t.Fatalf("GetSyslog() error = %v", err)
+	}
+	if got.Enabled != want.Enabled || got.LocalPort != want.LocalPort || len(got.Servers) != len(want.Servers) {
+		t.Errorf("GetSyslog() = %+v, want %+v", got, want)
+	}
+}
+
+// TestGetSyslog_PropagatesReaderError proves a BackendReader.GetSyslog
+// error propagates through the facade unwrapped, mirroring every other
+// GetX facade wrapper's error handling.
+func TestGetSyslog_PropagatesReaderError(t *testing.T) {
+	clearBackendRegistry(t)
+	wantErr := errors.New("boom")
+	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
+		return &stubReader{syslogErr: wantErr}, nil
+	})
+
+	m := fakeModel("fake", model.BackendSNMP)
+	sw, err := New(m, "10.0.0.1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := sw.GetSyslog(context.Background()); !errors.Is(err, wantErr) {
+		t.Errorf("GetSyslog() error = %v, want wrapping %v", err, wantErr)
+	}
+}
+
+// TestSetSyslogEnabled_WriteBackendOverrideRunsOverNamedBackend mirrors
+// TestSetPoE_WriteBackendOverrideRunsOverNamedBackend's shape: Write.Backend
+// routes the call to a non-default backend, and the facade forwards
+// enabled/force unchanged.
+func TestSetSyslogEnabled_WriteBackendOverrideRunsOverNamedBackend(t *testing.T) {
+	clearWriteBackendRegistry(t)
+	snmpWriter := &fakeWriter{}
+	withRegisteredWriteBackend(t, model.BackendSNMP, func(_ *Switch) (BackendWriter, error) {
+		return snmpWriter, nil
+	})
+	nsdpWriter := &fakeWriter{}
+	withRegisteredWriteBackend(t, model.BackendNSDP, func(_ *Switch) (BackendWriter, error) {
+		return nsdpWriter, nil
+	})
+
+	m := fakeModel("fake", model.BackendSNMP, model.BackendNSDP)
+	sw, err := New(m, "10.0.0.1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	nsdp := model.BackendNSDP
+	if err := sw.SetSyslogEnabled(context.Background(), true, Write{Backend: &nsdp}); err != nil {
+		t.Fatalf("SetSyslogEnabled(Write{Backend: NSDP}) error = %v, want nil", err)
+	}
+	if nsdpWriter.setSyslogEnabledCall == nil || !nsdpWriter.setSyslogEnabledCall.enabled {
+		t.Fatalf("NSDP writer setSyslogEnabledCall = %+v, want enabled=true recorded", nsdpWriter.setSyslogEnabledCall)
+	}
+	if snmpWriter.setSyslogEnabledCall != nil {
 		t.Fatal("SNMP writer must NOT be invoked when Write.Backend explicitly names NSDP")
 	}
 }

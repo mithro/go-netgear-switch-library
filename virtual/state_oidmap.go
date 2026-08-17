@@ -286,6 +286,25 @@ func (s *State) OIDMap() map[string]OIDEntry {
 		out[v.DHCPModeUnverified+".0"] = entry("INTEGER", mode)
 	}
 
+	// Remote logging, under <vendor base>.14 -- the same columns the real
+	// agents publish, and ONLY for a model that has a vendor subtree. A
+	// model with none (gs728tpp) must stay unable to answer GetSyslog here
+	// exactly as it is on the wire, rather than this mock inventing a
+	// reply.
+	if v != nil {
+		out[v.SyslogAdminMode] = entry("INTEGER", strconv.Itoa(s.Syslog.AdminMode))
+		out[v.SyslogLocalPort] = entry("Gauge32", strconv.Itoa(s.Syslog.LocalPort))
+		// col.Index, NOT the enumeration position: the real table is
+		// SPARSE (Index 1 and 3 with nothing at 2, measured on m4300-24x
+		// 10.1.5.13) and the OID instance IS that index.
+		for _, col := range s.Syslog.Collectors {
+			out[colKey(v.SyslogHostAddr, col.Index)] = entry("OCTETSTR", col.Host)
+			out[colKey(v.SyslogHostPort, col.Index)] = entry("Gauge32", strconv.Itoa(col.Port))
+			out[colKey(v.SyslogHostSeverity, col.Index)] = entry("INTEGER", strconv.Itoa(col.Severity))
+			out[colKey(v.SyslogHostStatus, col.Index)] = entry("INTEGER", strconv.Itoa(col.Status))
+		}
+	}
+
 	return out
 }
 

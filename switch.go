@@ -799,6 +799,28 @@ func (s *Switch) GetHostname(ctx context.Context, opts ...ReadOption) (string, e
 	return out, err
 }
 
+// GetSyslog reads remote-logging configuration: whether it is on, and its
+// collectors.
+//
+// Served over SNMP and the FASTPATH CLI, which agree field-for-field on live
+// hardware. gs728tpp is refused over SNMP by name: it registers no Netgear
+// vendor subtree, and the logging columns are vendor-only, so an empty
+// result would be indistinguishable from a switch with no collectors
+// configured.
+func (s *Switch) GetSyslog(ctx context.Context, opts ...ReadOption) (model.SyslogConfig, error) {
+	o := resolveReadOptions(opts)
+	var out model.SyslogConfig
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
+		v, err := r.GetSyslog(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
 // GetMgmtIP reads the switch's own management IP configuration.
 func (s *Switch) GetMgmtIP(ctx context.Context, opts ...ReadOption) (model.MgmtIPConfig, error) {
 	o := resolveReadOptions(opts)

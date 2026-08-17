@@ -49,6 +49,8 @@ type stubReader struct {
 	servicesErr error
 	hostname    string
 	hostnameErr error
+	syslog      model.SyslogConfig
+	syslogErr   error
 }
 
 func (s *stubReader) GetPorts(context.Context) ([]model.PortStatus, error) {
@@ -122,6 +124,12 @@ func (s *stubReader) GetHostname(context.Context) (string, error) {
 		return "", s.hostnameErr
 	}
 	return s.hostname, nil
+}
+func (s *stubReader) GetSyslog(context.Context) (model.SyslogConfig, error) {
+	if s.syslogErr != nil {
+		return model.SyslogConfig{}, s.syslogErr
+	}
+	return s.syslog, nil
 }
 
 // wrapUnsupported/wrapCredential build an error that errors.Is-matches the

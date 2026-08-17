@@ -321,6 +321,40 @@ func (r *Reader) GetHostname(ctx context.Context) (string, error) {
 	return ParseHostname(rows)
 }
 
+// GetSyslog reads remote-logging configuration: whether it is on, and where
+// it sends, mirroring Python SnmpReader.get_syslog (snmp_read.py:224-252).
+//
+// VENDOR columns, so a model with no Netgear subtree cannot serve this.
+// gs728tpp is exactly that model -- a walk of 1.3.6.1.4.1.4526 answers
+// noSuchObject -- and it is refused by name rather than returned empty,
+// which would read as "no collectors configured".
+func (r *Reader) GetSyslog(ctx context.Context) (model.SyslogConfig, error) {
+	if !HasVendorOids(r.model) {
+		return model.SyslogConfig{}, fmt.Errorf(
+			"model %q registers no Netgear vendor OID subtree, and the logging columns are vendor-only; an empty result here would be indistinguishable from a switch with no syslog collectors configured: %w",
+			r.model.Key, model.ErrUnsupportedCapability,
+		)
+	}
+	vendor, err := GetVendorOids(r.model)
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+	adminMode, err := r.client.Get(ctx, []string{vendor.SyslogAdminMode})
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+	localPort, err := r.client.Get(ctx, []string{vendor.SyslogLocalPort})
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+	cols, err := walkAll(ctx, r.client, vendor.SyslogHostAddr, vendor.SyslogHostPort, vendor.SyslogHostSeverity, vendor.SyslogHostStatus)
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+	return ParseSyslog(adminMode, localPort, cols[0], cols[1], cols[2], cols[3],
+		vendor.SyslogHostAddr, vendor.SyslogHostPort, vendor.SyslogHostSeverity, vendor.SyslogHostStatus)
+}
+
 // GetUsers always returns an error wrapping model.ErrUnsupportedCapability:
 // this backend does not serve local user accounts, mirroring Python
 // SnmpReader.get_users (snmp_read.py:265-274). Refused BY NAME rather than

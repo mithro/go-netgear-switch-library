@@ -469,6 +469,75 @@ func TestOIDMapMgmtBlockNoVendorOmitsDhcpMode(t *testing.T) {
 	}
 }
 
+// TestOIDMapSyslogBlock proves the admin-mode/local-port scalars and the
+// sparse host table project onto the exact vendor OIDs GetSyslog walks,
+// keyed by the row's OWN Index rather than its slice position.
+func TestOIDMapSyslogBlock(t *testing.T) {
+	st := NewState("gsm7252ps")
+	st.Syslog = SyslogSim{
+		AdminMode: 1,
+		LocalPort: 514,
+		Collectors: []SyslogCollectorSim{
+			{Host: "10.1.5.1", Port: 514, Severity: 6, Status: 1, Index: 1},
+			{Host: "10.1.5.3", Port: 601, Severity: 3, Status: 2, Index: 3},
+		},
+	}
+	mdl, _ := model.GetModel("gsm7252ps")
+	vo, _ := snmp.GetVendorOids(mdl)
+
+	m := st.OIDMap()
+	if got := m[vo.SyslogAdminMode]; got != (OIDEntry{"INTEGER", "1"}) {
+		t.Errorf("syslog admin-mode = %+v, want enabled (1)", got)
+	}
+	if got := m[vo.SyslogLocalPort]; got != (OIDEntry{"Gauge32", "514"}) {
+		t.Errorf("syslog local-port = %+v, want 514", got)
+	}
+	// Row 1.
+	if got := m[fmt.Sprintf("%s.1", vo.SyslogHostAddr)]; got != (OIDEntry{"OCTETSTR", "10.1.5.1"}) {
+		t.Errorf("syslog host addr[1] = %+v, want 10.1.5.1", got)
+	}
+	if got := m[fmt.Sprintf("%s.1", vo.SyslogHostPort)]; got != (OIDEntry{"Gauge32", "514"}) {
+		t.Errorf("syslog host port[1] = %+v, want 514", got)
+	}
+	if got := m[fmt.Sprintf("%s.1", vo.SyslogHostSeverity)]; got != (OIDEntry{"INTEGER", "6"}) {
+		t.Errorf("syslog host severity[1] = %+v, want 6", got)
+	}
+	if got := m[fmt.Sprintf("%s.1", vo.SyslogHostStatus)]; got != (OIDEntry{"INTEGER", "1"}) {
+		t.Errorf("syslog host status[1] = %+v, want 1", got)
+	}
+	// Row 3 -- SPARSE: nothing at index 2, and row 3's own fields must not
+	// have shifted onto index 1 (the position-for-index bug this guards).
+	if got := m[fmt.Sprintf("%s.3", vo.SyslogHostAddr)]; got != (OIDEntry{"OCTETSTR", "10.1.5.3"}) {
+		t.Errorf("syslog host addr[3] = %+v, want 10.1.5.3", got)
+	}
+	if got := m[fmt.Sprintf("%s.3", vo.SyslogHostPort)]; got != (OIDEntry{"Gauge32", "601"}) {
+		t.Errorf("syslog host port[3] = %+v, want 601", got)
+	}
+	if _, ok := m[fmt.Sprintf("%s.2", vo.SyslogHostAddr)]; ok {
+		t.Errorf("syslog host addr[2] present, want no row at the missing index")
+	}
+}
+
+// TestOIDMapSyslogBlockNoVendorOmitsEverything mirrors
+// TestOIDMapMgmtBlockNoVendorOmitsDhcpMode: gs728tpp registers no Netgear
+// vendor OID subtree, so the syslog scalars/table must be entirely absent
+// -- not present-but-empty -- exactly matching what GetSyslog's own refusal
+// gate depends on.
+func TestOIDMapSyslogBlockNoVendorOmitsEverything(t *testing.T) {
+	st := NewState("gs728tpp")
+	st.Syslog = SyslogSim{
+		AdminMode:  1,
+		LocalPort:  514,
+		Collectors: []SyslogCollectorSim{{Host: "10.1.5.1", Port: 514, Severity: 6, Status: 1, Index: 1}},
+	}
+	m := st.OIDMap()
+	for k := range m {
+		if len(k) > len("1.3.6.1.4.1.4526") && k[:len("1.3.6.1.4.1.4526")] == "1.3.6.1.4.1.4526" {
+			t.Errorf("no-vendor model must not project any vendor OID, found %q", k)
+		}
+	}
+}
+
 func TestVlanBitmapWidthFormula(t *testing.T) {
 	for _, key := range []string{"gsm7252ps", "gs728tpp", "m4300-16x", "gs105pe"} {
 		m, err := model.GetModel(key)

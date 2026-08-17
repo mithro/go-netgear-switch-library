@@ -259,6 +259,26 @@ func (r *Reader) GetHostname(ctx context.Context) (string, error) {
 	return parseHostname(text)
 }
 
+// GetSyslog reads remote-logging configuration, from "show logging" +
+// its host table, mirroring Python CliReader.get_syslog (cli_read.py:
+// 131-141).
+//
+// Two commands because the switch splits it that way: the globals live in
+// LoggingCmd ("show logging") and the collectors in LoggingHostsCmd ("show
+// logging hosts"). The host table's column set differs by firmware -- see
+// parseSyslog.
+func (r *Reader) GetSyslog(ctx context.Context) (model.SyslogConfig, error) {
+	loggingText, err := r.session.Run(ctx, r.spec.LoggingCmd)
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+	hostsText, err := r.session.Run(ctx, r.spec.LoggingHostsCmd)
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+	return parseSyslog(loggingText, hostsText)
+}
+
 // Identify detects a switch's model from "show version" output, mirroring
 // Python `CliReader.identify` (dossier §3.10, cli_read.py:106-107). Unlike
 // every other op, this passes the GLOBAL model registry (model.Models()),

@@ -952,6 +952,24 @@ func (r *Reader) GetServices(ctx context.Context) ([]model.ServiceStatus, error)
 	return out, nil
 }
 
+// GetSyslog reads remote-logging configuration from this model's syslog
+// page, mirroring Python HttpReader.get_syslog (http_read.py:748-758).
+//
+// Refuses by name on a model whose UI has no such page located, rather than
+// returning empty: an empty answer would be indistinguishable from a switch
+// that genuinely logs nowhere.
+func (r *Reader) GetSyslog(ctx context.Context) (model.SyslogConfig, error) {
+	path, err := requirePath(r.model.Key, r.spec.SyslogPath, "remote-logging configuration")
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+	html, err := r.session.GetPage(ctx, path)
+	if err != nil {
+		return model.SyslogConfig{}, err
+	}
+	return ParseXUISyslog(html)
+}
+
 // itoa is a tiny local alias so membershipForm doesn't need a second
 // stdlib import purely for one-line int->string conversions.
 func itoa(v int) string { return fmt.Sprintf("%d", v) }
