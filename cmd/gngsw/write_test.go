@@ -299,9 +299,18 @@ func TestWrite_UploadCertificate_MissingRequiredFlags_ExitsUsage(t *testing.T) {
 }
 
 func TestWrite_UploadCertificate_MissingFile_ExitsError(t *testing.T) {
-	code, _, errOut := runCLI([]string{"upload-certificate", "--cert", "/no/such/cert.pem", "--key", "/no/such/key.pem"}, "", nil)
+	// A working switch factory (see this file's own reorder comment on
+	// newUploadCertificateCmd: the switch is resolved BEFORE the cert/key
+	// files are read, mirroring main.py) so this test genuinely reaches
+	// the file-read error path instead of short-circuiting on "no switch
+	// configured".
+	factory := dummySwitchFactory(t, "gsm7252ps")
+	code, _, errOut := runCLI([]string{"upload-certificate", "--cert", "/no/such/cert.pem", "--key", "/no/such/key.pem"}, "", factory)
 	if code != safety.ExitError {
 		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, safety.ExitError, errOut)
+	}
+	if !strings.Contains(errOut, "/no/such/cert.pem") {
+		t.Errorf("stderr = %q, want it to name the missing cert file", errOut)
 	}
 }
 

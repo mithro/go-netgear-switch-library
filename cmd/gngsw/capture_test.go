@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,31 @@ import (
 // `now: Callable[[], datetime] | None` test seam), pinned so
 // captured_at is deterministic across test runs.
 func fixedNow() time.Time { return time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC) }
+
+// TestPyIsoformatUTC pins pyIsoformatUTC against real
+// `datetime.now(UTC).isoformat()` output for both branches (exact-second,
+// and a sub-second reading) -- every want value below was verified against
+// a live `python3 -c 'from datetime import datetime, UTC; print(datetime(
+// ...).isoformat())'` run, not guessed.
+func TestPyIsoformatUTC(t *testing.T) {
+	cases := []struct {
+		name string
+		in   time.Time
+		want string
+	}{
+		{"exact_second_no_fraction", time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC), "2026-08-18T12:00:00+00:00"},
+		{"full_microseconds", time.Date(2026, 8, 18, 12, 0, 0, 123456000, time.UTC), "2026-08-18T12:00:00.123456+00:00"},
+		{"single_microsecond_zero_padded", time.Date(2026, 8, 18, 12, 0, 0, 7000, time.UTC), "2026-08-18T12:00:00.000007+00:00"},
+		{"non_utc_input_converted_first", time.Date(2026, 8, 18, 8, 0, 0, 0, time.FixedZone("EST", -4*3600)), "2026-08-18T12:00:00+00:00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pyIsoformatUTC(tc.in); got != tc.want {
+				t.Errorf("pyIsoformatUTC(%v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestRunCapture_SnapshotOnly(t *testing.T) {
 	vsw := startVirtualSwitch(t, "gsm7252ps")
@@ -43,6 +69,9 @@ func TestRunCapture_SnapshotOnly(t *testing.T) {
 	if len(record.Snapshot.Ports) == 0 {
 		t.Error("record.Snapshot.Ports is empty, want the real virtual switch's port table")
 	}
+	if len(record.Snapshot.Sensors) == 0 {
+		t.Fatal("record.Snapshot.Sensors is empty, want the real virtual switch's sensor readings (needed for the float-parity assertion below)")
+	}
 
 	raw, err := os.ReadFile(outPath)
 	if err != nil {
@@ -58,8 +87,27 @@ func TestRunCapture_SnapshotOnly(t *testing.T) {
 	if decoded["model"] != "gsm7252ps" {
 		t.Errorf("decoded[model] = %v, want \"gsm7252ps\"", decoded["model"])
 	}
-	if decoded["captured_at"] != "2026-08-18T12:00:00Z" {
-		t.Errorf("decoded[captured_at] = %v, want the fixed clock's RFC3339 rendering", decoded["captured_at"])
+	if decoded["captured_at"] != "2026-08-18T12:00:00+00:00" {
+		t.Errorf("decoded[captured_at] = %v, want Python isoformat()'s \"+00:00\" rendering (verified against a live python3)", decoded["captured_at"])
+	}
+
+	// Float parity: at least one sensor's Value is a whole number (e.g. a
+	// healthy fan/PSU status reading of 1); proves runCapture went through
+	// fmtx.ToJSON's pyFloatRepr mirroring (a bare "1" here -- Go's default
+	// float64 encoding -- would mean the fmtx.ToJSON switch silently
+	// regressed back to encoding/json's own float formatting).
+	foundWholeNumber := false
+	for _, s := range record.Snapshot.Sensors {
+		if s.Value == float64(int64(s.Value)) {
+			foundWholeNumber = true
+			want := fmt.Sprintf("%d.0", int64(s.Value))
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("capture output does not contain %q for sensor %q's whole-number value %v -- want pyFloatRepr's trailing \".0\", not Go's default bare-integer float encoding", want, s.Name, s.Value)
+			}
+		}
+	}
+	if !foundWholeNumber {
+		t.Skip("no whole-number sensor value in this seed to assert the \".0\" rendering against")
 	}
 }
 

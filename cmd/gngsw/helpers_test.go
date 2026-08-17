@@ -123,6 +123,25 @@ func nsdpSwitch(t *testing.T, vsw *virtual.VirtualSwitch, modelKey string) *netg
 	return sw
 }
 
+// dummySwitchFactory returns an App.SwitchFactory that always resolves
+// successfully to a bare *netgearswitch.Switch for modelKey (New performs
+// NO I/O -- see switch.go's own doc comment), for tests that need
+// cc.getSwitch() to succeed but never actually dispatch a real op (e.g.
+// proving a LOCAL file-read error is reported before any protocol I/O
+// would even be attempted).
+func dummySwitchFactory(t *testing.T, modelKey string) func(resolve.Params) (*netgearswitch.Switch, error) {
+	t.Helper()
+	m, err := netgearswitch.GetModel(modelKey)
+	if err != nil {
+		t.Fatalf("GetModel(%q) error = %v", modelKey, err)
+	}
+	sw, err := netgearswitch.New(m, "unused.invalid")
+	if err != nil {
+		t.Fatalf("New(%q) error = %v", modelKey, err)
+	}
+	return snmpSwitchFactory(sw)
+}
+
 // snmpSwitchFactory returns an App.SwitchFactory that always returns sw --
 // the "resolve seam bypassed via switch_factory" pattern
 // tests/cli/test_cli_integration.py documents and this package's app.go

@@ -12,7 +12,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	netgearswitch "github.com/mithro/go-netgear-switch-library"
+	"github.com/mithro/go-netgear-switch-library/cmd/internal/fmtx"
 	"github.com/mithro/go-netgear-switch-library/cmd/internal/safety"
 	"github.com/spf13/cobra"
 )
@@ -34,10 +34,14 @@ const captureWalkTimeout = 30 * time.Second
 // see fmtx.ModelRow's own doc comment for why Go struct field declaration
 // order is load-bearing for json.Marshal's key order, not merely
 // cosmetic. Snapshot is netgearswitch.SwitchData (not a pre-rendered
-// string) so the SAME reflective float-repr mirroring fmtx.ToJSON applies
-// to it here too (encodeCaptureRecord below reuses that exact algorithm
-// via fmtx-shaped encoding, so a Sensor.Value of e.g. 3300.0 renders
-// "3300.0" here exactly like it does in `ngsw sensors --json`).
+// string), and the WHOLE record is encoded via fmtx.ToJSON (not a bare
+// json.Marshal/Encoder) so every float64 reachable from it -- today, only
+// Sensor.Value inside Snapshot -- renders through the SAME pyFloatRepr
+// mirroring `ngsw sensors --json` uses (a Sensor.Value of 3300.0 renders
+// "3300.0", never Go's default "3300"), and NaN/Infinity readings encode
+// the same JSON-illegal-but-Python-compatible bare tokens json.dumps
+// emits by default. See runCapture's own doc comment for what capture
+// output is STILL not fully byte-parity with the Python reference.
 type captureRecord struct {
 	Model        string                   `json:"model"`
 	Host         string                   `json:"host"`
@@ -62,7 +66,16 @@ type rawWalkFunc func(ctx context.Context, host, base string) ([]string, error)
 // itself either a recorded response or a recorded, non-fatal failure
 // note). now defaults to time.Now when nil, mirroring Python's `now or
 // (lambda: datetime.now(UTC))` -- both exist so a test can inject a fixed
-// clock.
+// clock. CapturedAt is rendered via pyIsoformatUTC to match Python's
+// `datetime.now(UTC).isoformat()` exactly (a "+00:00" offset suffix, NOT
+// Go's own "Z", and a 6-digit microsecond fraction only when non-zero).
+//
+// The ONE remaining documented non-parity in this file's output: a failed
+// raw walk's recorded "error" text is Go's own "%T: %v" (this codebase's
+// closest analogue of Python's exception typename), not a literal Python
+// exception class name (e.g. "RuntimeError") -- Go has no equivalent
+// concept to port faithfully here, so this is an honest, permanent
+// deviation, not a gap to close (see defaultRawWalk's own doc comment).
 func runCapture(ctx context.Context, sw *netgearswitch.Switch, outPath string, snapshotOnly bool, rawWalk rawWalkFunc, now func() time.Time) (*captureRecord, error) {
 	if now == nil {
 		now = time.Now
@@ -75,7 +88,7 @@ func runCapture(ctx context.Context, sw *netgearswitch.Switch, outPath string, s
 	record := &captureRecord{
 		Model:        sw.Model().Key,
 		Host:         sw.Host(),
-		CapturedAt:   now().UTC().Format(time.RFC3339Nano),
+		CapturedAt:   pyIsoformatUTC(now()),
 		Snapshot:     snap,
 		RawExchanges: []map[string]any{},
 		Notes:        []string{},
@@ -108,37 +121,38 @@ func runCapture(ctx context.Context, sw *netgearswitch.Switch, outPath string, s
 		}
 	}
 
-	data, err := encodeCaptureRecord(record)
+	// fmtx.ToJSON gives capture output the SAME json.dumps(indent=2)-
+	// compatible encoding (no HTML-escaping, pyFloatRepr-mirrored floats,
+	// bare NaN/Infinity tokens) every other `--json` renderer in this
+	// codebase already uses -- see captureRecord's own doc comment.
+	jsonText, err := fmtx.ToJSON(record)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(outPath, data, 0o644); err != nil { //nolint:gosec // capture output is a local dev artifact, not a secret.
+	if err := os.WriteFile(outPath, []byte(jsonText), 0o644); err != nil { //nolint:gosec // capture output is a local dev artifact, not a secret.
 		return nil, fmt.Errorf("cannot write capture output to %s: %w: %w", outPath, err, netgearswitch.ErrConfig)
 	}
 	return record, nil
 }
 
-// encodeCaptureRecord renders record as indented JSON with the SAME
-// encoder settings fmtx.ToJSON uses (SetEscapeHTML(false), 2-space
-// indent, no trailing newline) -- reusing fmtx.ToJSON directly would
-// require exporting captureRecord, so this is a deliberate, minimal
-// duplicate of ToJSON's OWN encoder configuration, not its float-mirroring
-// logic: encoding/json's reflective walk already reaches every float64
-// inside record.Snapshot on its own; only the two encoder options need
-// repeating here. Sensor.Value float formatting is intentionally NOT
-// pyFloat-mirrored here -- see this file's captureRecord doc comment for
-// why that is an accepted, documented gap for this opt-in dev tool (never
-// asserted byte-for-byte; format.py's own capture output is likewise
-// "for reference ... never committed as-is").
-func encodeCaptureRecord(record *captureRecord) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(record); err != nil {
-		return nil, err
+// pyIsoformatUTC renders t the way Python's `datetime.now(UTC).isoformat()`
+// renders a UTC-aware datetime: "YYYY-MM-DDTHH:MM:SS+00:00" when the
+// microsecond component is exactly zero, else
+// "YYYY-MM-DDTHH:MM:SS.ffffff+00:00" with the fraction ALWAYS 6 digits,
+// zero-padded, truncated (never rounded) from t's own sub-second
+// precision -- verified against a live `python3 -c 'from datetime import
+// datetime, UTC; print(datetime(...).isoformat())'` for both branches.
+// Go's time.RFC3339Nano is NOT this format: it renders "Z" for UTC (not
+// "+00:00") and trims trailing zero digits from the fraction instead of
+// fixing it at 6.
+func pyIsoformatUTC(t time.Time) string {
+	t = t.UTC()
+	base := t.Format("2006-01-02T15:04:05")
+	microsecond := t.Nanosecond() / 1000
+	if microsecond == 0 {
+		return base + "+00:00"
 	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+	return fmt.Sprintf("%s.%06d+00:00", base, microsecond)
 }
 
 // defaultRawWalk shells out to net-snmp's snmpbulkwalk for a live

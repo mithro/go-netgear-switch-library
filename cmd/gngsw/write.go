@@ -60,7 +60,18 @@ func (cc *cmdContext) runWrite(wf *writeFlags, description, warning string, acti
 		return cc.libraryError(err)
 	}
 	defer func() { _ = sw.Close() }()
+	return cc.runWriteWithSwitch(sw, wf, description, warning, action)
+}
 
+// runWriteWithSwitch is runWrite's shared tail once sw is already resolved
+// -- pulled out so a command that must interleave local I/O (reading a
+// cert/key/password file) BETWEEN switch resolution and the DoWrite call
+// can do so in main.py's own order: get_switch() FIRST, then the file
+// reads (see newUploadCertificateCmd/newUploadCertificateSCPCmd, the only
+// two callers that need this split; every other write command goes
+// through the single-call runWrite above). The caller owns sw (built via
+// cc.getSwitch()) and is responsible for closing it.
+func (cc *cmdContext) runWriteWithSwitch(sw *netgearswitch.Switch, wf *writeFlags, description, warning string, action func(ctx context.Context, sw *netgearswitch.Switch) error) error {
 	code, err := safety.DoWrite(cc.streams(), safety.WriteRequest{
 		DryRun:      wf.dryRun,
 		AssumeYes:   wf.yes,
@@ -343,6 +354,19 @@ func newUploadCertificateCmd(cc *cmdContext) *cobra.Command {
 	_ = cmd.MarkFlagRequired("key")
 	wf := addWriteFlags(cmd)
 	cmd.RunE = func(_ *cobra.Command, _ []string) error {
+		// Resolve the switch FIRST, then read the local cert/key files --
+		// mirroring main.py's _cmd_upload_certificate exactly (`switch =
+		// get_switch()` precedes the `Path(...).read_text()` calls): a
+		// resolve failure (bad --model, unresolved credential, ...) must
+		// report as SUCH even when the cert/key paths are also wrong,
+		// not be masked by a file-not-found error that happened to run
+		// first only because of this file's own evaluation order.
+		sw, err := cc.getSwitch()
+		if err != nil {
+			return cc.libraryError(err)
+		}
+		defer func() { _ = sw.Close() }()
+
 		certPEM, err := readTextFile(certPath)
 		if err != nil {
 			return cc.fail(safety.ExitError, "%s", err)
@@ -353,7 +377,7 @@ func newUploadCertificateCmd(cc *cmdContext) *cobra.Command {
 		}
 		description := fmt.Sprintf("upload SSL certificate (%s) + key (%s)", certPath, keyPath)
 		warning := "WARNING: uploading a certificate replaces the switch's running certificate and restarts its web server."
-		return cc.runWrite(wf, description, warning, func(ctx context.Context, sw *netgearswitch.Switch) error {
+		return cc.runWriteWithSwitch(sw, wf, description, warning, func(ctx context.Context, sw *netgearswitch.Switch) error {
 			return sw.UploadCertificate(ctx, certPEM, keyPEM, wf.force)
 		})
 	}
@@ -376,6 +400,15 @@ func newUploadCertificateSCPCmd(cc *cmdContext) *cobra.Command {
 	_ = cmd.MarkFlagRequired("scp-password-file")
 	wf := addWriteFlags(cmd)
 	cmd.RunE = func(_ *cobra.Command, _ []string) error {
+		// Resolve the switch FIRST, then read the local password file --
+		// see newUploadCertificateCmd's identical comment; mirrors
+		// main.py's _cmd_upload_certificate_scp exactly.
+		sw, err := cc.getSwitch()
+		if err != nil {
+			return cc.libraryError(err)
+		}
+		defer func() { _ = sw.Close() }()
+
 		raw, err := readTextFile(scpPasswordFile)
 		if err != nil {
 			return cc.fail(safety.ExitError, "%s", err)
@@ -386,7 +419,7 @@ func newUploadCertificateSCPCmd(cc *cmdContext) *cobra.Command {
 		}
 		description := fmt.Sprintf("deploy SSL certificate over SCP from %s%s", scpSource, remoteDir)
 		warning := "WARNING: this replaces the switch's running HTTPS certificate (disables + re-enables the secure web server); stage the PEM on the SCP source first."
-		return cc.runWrite(wf, description, warning, func(ctx context.Context, sw *netgearswitch.Switch) error {
+		return cc.runWriteWithSwitch(sw, wf, description, warning, func(ctx context.Context, sw *netgearswitch.Switch) error {
 			return sw.UploadCertificateSCP(ctx, scpSource, scpPassword, remoteDir, chain)
 		})
 	}

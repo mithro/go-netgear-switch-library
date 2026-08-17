@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -195,6 +197,124 @@ func TestWrite_SyslogAdd_BadSeverity_ExitsUsage(t *testing.T) {
 	}
 }
 
+// --- upload-certificate / upload-certificate-scp: real success + dry-run,
+// each proving the description/warning wiring reaches the exact literal
+// "ok: ..."/"DRY-RUN: ..." STDOUT line every other write command already
+// gets pinned against, against a REAL virtual.VirtualSwitch (never a
+// SwitchFactory-injected fake protocol client for the success path).
+
+// TestWrite_UploadCertificate_Success drives upload-certificate through
+// the REAL resolve.Resolve path (--host host:port, no SwitchFactory
+// bypass) against gsm7228ps's live HTTP face -- webui.Writer.
+// UploadCertificate's S3300 multipart flow accepts any PEM-shaped string
+// without parsing it (see facade_http_integration_test.go's own
+// TestFacadeHTTPIntegration_GSM7228PSReadsNonVacuousSensorsUnsupportedAndCertUpload,
+// whose exact certPEM/keyPEM literals this test reuses).
+func TestWrite_UploadCertificate_Success(t *testing.T) {
+	vsw := startVirtualSwitch(t, "gsm7228ps")
+	host := vsw.Host + ":" + strconv.Itoa(vsw.HTTPPort)
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certPath, []byte("-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(cert) error = %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("-----BEGIN PRIVATE KEY-----\nFAKEKEY\n-----END PRIVATE KEY-----\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(key) error = %v", err)
+	}
+
+	argv := []string{
+		"--host", host, "--model", "gsm7228ps", "--backend", "http", "--http-password", "password",
+		"upload-certificate", "--cert", certPath, "--key", keyPath, "--force", "-y",
+	}
+	code, out, errOut := runCLI(argv, "", nil)
+	if code != safety.ExitOK {
+		t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, errOut)
+	}
+	want := fmt.Sprintf("ok: upload SSL certificate (%s) + key (%s)", certPath, keyPath)
+	if !strings.Contains(out, want) {
+		t.Errorf("stdout = %q, want it to contain %q", out, want)
+	}
+}
+
+func TestWrite_UploadCertificate_DryRun(t *testing.T) {
+	vsw := startVirtualSwitch(t, "gsm7228ps")
+	host := vsw.Host + ":" + strconv.Itoa(vsw.HTTPPort)
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certPath, []byte("cert"), 0o600); err != nil {
+		t.Fatalf("WriteFile(cert) error = %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0o600); err != nil {
+		t.Fatalf("WriteFile(key) error = %v", err)
+	}
+
+	argv := []string{
+		"--host", host, "--model", "gsm7228ps", "--backend", "http", "--http-password", "password",
+		"upload-certificate", "--cert", certPath, "--key", keyPath, "--dry-run",
+	}
+	code, out, errOut := runCLI(argv, "", nil)
+	if code != safety.ExitOK {
+		t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, errOut)
+	}
+	want := fmt.Sprintf("DRY-RUN: would upload SSL certificate (%s) + key (%s) on %s (nothing sent)", certPath, keyPath, host)
+	if !strings.Contains(out, want) {
+		t.Errorf("stdout = %q, want it to contain %q", out, want)
+	}
+}
+
+// TestWrite_UploadCertificateSCP_Success drives upload-certificate-scp
+// against gsm7252ps's in-process CLI session (the same cliBackedSwitch
+// seam TestWrite_FlowControl/TestWrite_Speed_AutoAndForced use): CliFace.
+// RunSCPCopy/RunWriteMemory (virtual/cliface.go) are a full in-process
+// stand-in for the interactive copy-scp/(y/n) handshake and always
+// report success, so this reaches DeployCertificateSCP's entire 5-step
+// command sequence for real.
+func TestWrite_UploadCertificateSCP_Success(t *testing.T) {
+	vsw := startVirtualSwitch(t, "gsm7252ps")
+	factory := snmpSwitchFactory(cliBackedSwitch(t, vsw, "gsm7252ps"))
+	dir := t.TempDir()
+	pwFile := filepath.Join(dir, "pw.txt")
+	if err := os.WriteFile(pwFile, []byte("scppass123\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	argv := []string{"upload-certificate-scp", "--scp-source", "user@stagehost", "--scp-password-file", pwFile, "-y"}
+	code, out, errOut := runCLI(argv, "", factory)
+	if code != safety.ExitOK {
+		t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, errOut)
+	}
+	// remote-dir defaults to "/var/lib/switchcert/staging"; the description
+	// concatenates scp_source and remote_dir with NO separating slash
+	// (fastpath.ScpSourceURL's own documented hazard -- remote_dir already
+	// starts with "/"), reproduced here VERBATIM, not "fixed".
+	want := "ok: deploy SSL certificate over SCP from user@stagehost/var/lib/switchcert/staging"
+	if !strings.Contains(out, want) {
+		t.Errorf("stdout = %q, want it to contain %q", out, want)
+	}
+}
+
+func TestWrite_UploadCertificateSCP_DryRun(t *testing.T) {
+	vsw := startVirtualSwitch(t, "gsm7252ps")
+	factory := snmpSwitchFactory(cliBackedSwitch(t, vsw, "gsm7252ps"))
+	dir := t.TempDir()
+	pwFile := filepath.Join(dir, "pw.txt")
+	if err := os.WriteFile(pwFile, []byte("scppass123\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	argv := []string{"upload-certificate-scp", "--scp-source", "user@stagehost", "--scp-password-file", pwFile, "--dry-run"}
+	code, out, errOut := runCLI(argv, "", factory)
+	if code != safety.ExitOK {
+		t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, errOut)
+	}
+	want := "DRY-RUN: would deploy SSL certificate over SCP from user@stagehost/var/lib/switchcert/staging on"
+	if !strings.Contains(out, want) {
+		t.Errorf("stdout = %q, want it to contain %q", out, want)
+	}
+}
+
 // --- upload-certificate-scp: the "file empty after strip" branch ---------
 
 func TestWrite_UploadCertificateSCP_EmptyPasswordFile_ExitsError(t *testing.T) {
@@ -204,9 +324,14 @@ func TestWrite_UploadCertificateSCP_EmptyPasswordFile_ExitsError(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
+	// A working switch factory -- the switch is resolved BEFORE the
+	// password file is read, mirroring main.py (see write.go's reorder
+	// comment on newUploadCertificateSCPCmd) -- so this test genuinely
+	// reaches the empty-password-file check.
+	factory := dummySwitchFactory(t, "gsm7252ps")
 	code, _, errOut := runCLI([]string{
 		"upload-certificate-scp", "--scp-source", "user@host", "--scp-password-file", pwFile,
-	}, "", nil)
+	}, "", factory)
 	if code != safety.ExitError {
 		t.Fatalf("exit code = %d, want %d", code, safety.ExitError)
 	}
