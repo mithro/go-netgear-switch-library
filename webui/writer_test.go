@@ -62,10 +62,15 @@ func newGS305epState(honourWrites bool) *gs305epState {
 		members[p] = model.VlanUntagged
 	}
 	return &gs305epState{
-		poeOn:        map[int]bool{1: true, 2: false, 3: false, 4: false},
-		pvids:        pvids,
-		vlanMembers:  map[int]map[int]model.VlanMode{1: members},
-		vlanIDs:      map[int]bool{1: true},
+		poeOn:       map[int]bool{1: true, 2: false, 3: false, 4: false},
+		pvids:       pvids,
+		vlanMembers: map[int]map[int]model.VlanMode{1: members},
+		// VLAN 20 exists because the PVID tests target it: SetPVID refuses a
+		// PVID pointing at a VLAN the switch does not have (GAP-1 fix, parity
+		// with Python commit 98fb935's _FakeGs305epState update), so a fake
+		// that listed only VLAN 1 would be modelling a switch on which those
+		// writes genuinely cannot succeed.
+		vlanIDs:      map[int]bool{1: true, 20: true},
 		honourWrites: honourWrites,
 	}
 }
@@ -312,6 +317,33 @@ func TestSetPVIDWriteNotReflectedRaisesVerification(t *testing.T) {
 	w := mustNewWriter(t, sess, "gs305ep")
 	err := w.SetPVID(context.Background(), 3, 20, false)
 	wantVerificationError(t, err, "SetPVID")
+}
+
+// TestSetPVIDRefusesAVlanThatDoesNotExist pins the GAP-1 fix (parity with
+// Python commit 98fb935 / test_set_pvid_refuses_a_vlan_that_does_not_exist
+// in test_http_write.py): a PVID may only point at a VLAN the switch
+// actually has. MEASURED on a GS728TPP (10.2.5.10, firmware 6.0.1.30): the
+// equivalent write to a nonexistent VLAN is ACCEPTED and reads back,
+// creating no VLAN -- so verify-after-write cannot catch it. Only a
+// precondition can, and nothing may be sent when it fails.
+func TestSetPVIDRefusesAVlanThatDoesNotExist(t *testing.T) {
+	sess := newWriterFakeSession(true)
+	w := mustNewWriter(t, sess, "gs305ep")
+	err := w.SetPVID(context.Background(), 3, 4007, false)
+	if !errors.Is(err, model.ErrHTTPUnexpectedPage) {
+		t.Fatalf("SetPVID() error = %v, want errors.Is(..., model.ErrHTTPUnexpectedPage)", err)
+	}
+	if !strings.Contains(err.Error(), "VLAN 4007 does not exist") {
+		t.Errorf("SetPVID() error = %q, want it to mention %q", err.Error(), "VLAN 4007 does not exist")
+	}
+	for _, p := range sess.posts {
+		if p.path == "/portPVID.cgi" {
+			t.Errorf("posts = %v, want no /portPVID.cgi POST -- precondition must fail before any write", sess.posts)
+		}
+	}
+	if sess.pvids[3] != 1 {
+		t.Errorf("pvids[3] = %d, want unchanged 1", sess.pvids[3])
+	}
 }
 
 func TestSetVlanMembershipVerifies(t *testing.T) {

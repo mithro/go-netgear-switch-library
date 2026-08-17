@@ -215,6 +215,29 @@ func TestWriter_SetPVIDVerificationFailureRaises(t *testing.T) {
 	}
 }
 
+// TestWriter_SetPVIDMissingVlanIsPreconditionNotVerifyError pins the GAP-1
+// fix (parity with Python commit 98fb935): a PVID pointing at a VLAN the
+// switch does not have must be refused BEFORE any write is attempted, as a
+// precondition failure (errNSDP-wrapped model.ErrNSDP), never a
+// *model.WriteVerificationError. newFakeNsdpWriteClient only ever
+// registers VLAN 90 (see its vlans map above), so VLAN 999 is absent by
+// construction.
+func TestWriter_SetPVIDMissingVlanIsPreconditionNotVerifyError(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	w := newTestWriter(t, client)
+	err := w.SetPVID(context.Background(), 1, 999, false)
+	if !errors.Is(err, model.ErrNSDP) {
+		t.Fatalf("SetPVID error = %v, want to wrap model.ErrNSDP", err)
+	}
+	var verr *model.WriteVerificationError
+	if errors.As(err, &verr) {
+		t.Errorf("SetPVID error is a *model.WriteVerificationError, want a precondition ErrNSDP instead")
+	}
+	if len(client.writes) != 0 {
+		t.Errorf("writes = %v, want none (precondition failed before any write)", client.writes)
+	}
+}
+
 // --- test_set_vlan_membership_rmw_tagged ---
 
 func TestWriter_SetVlanMembershipRMWTagged(t *testing.T) {

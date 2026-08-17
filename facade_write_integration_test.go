@@ -139,9 +139,11 @@ func withPort(ports []int, port int) []int {
 }
 
 // TestFacadeWriteIntegration_SetPVIDVisibleInGetPVIDs proves SetPVID's
-// write+verify round trip end-to-end: SnmpWriter.SetPVID (D-WR §2.9) issues
-// a single Gauge32 SET at dot1qPvid.<port> with no VLAN-existence
-// precondition, then re-reads the FULL PVID list to verify -- this test
+// write+verify round trip end-to-end: SnmpWriter.SetPVID (D-WR §2.9)
+// refuses up front unless vlan already exists (GAP-1 fix, parity with
+// Python commit 98fb935 -- vlan=41 is one of gsm7252ps's seeded VLANs, see
+// virtual.SeedGSM7252PS), then issues a single Gauge32 SET at
+// dot1qPvid.<port> and re-reads the FULL PVID list to verify -- this test
 // checks the facade surfaces that exact (port, vlan) pair afterward via its
 // own independent GetPVIDs() call.
 func TestFacadeWriteIntegration_SetPVIDVisibleInGetPVIDs(t *testing.T) {

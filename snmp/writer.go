@@ -226,13 +226,32 @@ func (w *Writer) SetPortEnabled(ctx context.Context, port int, enabled bool, for
 // see D-WR §2.9.
 //
 // The guard is UNCONDITIONAL (any PVID change is disruptive, unlike SetPoE/
-// SetPortEnabled's direction-gated guard). One Gauge32 SET (type letter
-// "u", NOT "i") at dot1qPvid.<port>. Verify: re-read the FULL pvid list via
-// the internal reader's GetPVIDs and check the exact (port, vlan) pair is a
-// member -- not just that port's own row changed.
+// SetPortEnabled's direction-gated guard), and runs BEFORE the VLAN-
+// existence precondition below. A missing target VLAN is itself a
+// PRECONDITION failure -- an error wrapping model.ErrSNMP (via errSNMP),
+// NOT a *model.WriteVerificationError -- and issues ZERO SETs, mirroring
+// SetVlanMembership's own existence check (writer_vlan.go) and Python's
+// SnmpWriter.set_pvid (snmp_write.py, commit 98fb935). The device will NOT
+// catch this itself: MEASURED on a GS728TPP (10.2.5.10, firmware 6.0.1.30,
+// 2026-08-03), `dot1qPvid.17 := 4002` for a VLAN that does not exist is
+// ACCEPTED, reads back as 4002, and creates no VLAN -- so verify-after-
+// write would pass while the port is left pointing at nothing. Only a
+// precondition check can catch that.
+//
+// One Gauge32 SET (type letter "u", NOT "i") at dot1qPvid.<port>. Verify:
+// re-read the FULL pvid list via the internal reader's GetPVIDs and check
+// the exact (port, vlan) pair is a member -- not just that port's own row
+// changed.
 func (w *Writer) SetPVID(ctx context.Context, port, vlan int, force bool) error {
 	if err := w.guard(port, force); err != nil {
 		return err
+	}
+	targetVlan, err := w.vlan(ctx, vlan)
+	if err != nil {
+		return err
+	}
+	if targetVlan == nil {
+		return errSNMP("VLAN %d does not exist", vlan)
 	}
 	before, err := w.reader.GetPVIDs(ctx)
 	if err != nil {

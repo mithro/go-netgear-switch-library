@@ -847,6 +847,13 @@ func TestHTTPFaceGS110EMXWriterSetPortEnabled(t *testing.T) {
 // the pinned reference, not something this port should paper over. (Compare
 // TestHTTPFaceGS110EMXWriterSetPortEnabled, the ONE write op gs110emx's own
 // web_gs110emx.py genuinely implements.)
+//
+// Target vlan is 90 (seeded on gs110emx, see SeedGS110EMX), NOT an
+// arbitrary unused id: SetPVID now refuses up front if the target VLAN
+// does not exist (GAP-1 fix, parity with Python commit 98fb935), via
+// requireVlanExists's GS110EMX-dialect-aware dispatch (writer.go), so this
+// test's target must be real or it would fail at that earlier check
+// instead of reaching the CSRF-hash bug this test exists to pin.
 func TestHTTPFaceGS110EMXWriterSetPVIDHasNoCSRFHash(t *testing.T) {
 	st := SeedGS110EMX()
 	m, err := model.GetModel("gs110emx")
@@ -858,13 +865,14 @@ func TestHTTPFaceGS110EMXWriterSetPVIDHasNoCSRFHash(t *testing.T) {
 		t.Fatalf("webui.HTTPSpec: %v", err)
 	}
 	wantUnchanged := st.Pvids[3]
+	const targetVlan = 90
 	addr, _ := startHTTPFace(t, st, spec, "password")
 	client := webui.NewHTTPClient(addr, "password", spec)
 	writer, err := webui.NewWriter(client, m)
 	if err != nil {
 		t.Fatalf("webui.NewWriter: %v", err)
 	}
-	err = writer.SetPVID(context.Background(), 3, wantUnchanged+1, false)
+	err = writer.SetPVID(context.Background(), 3, targetVlan, false)
 	if err == nil {
 		t.Fatalf("SetPVID() against gs110emx error = nil, want an error (no CSRF hash field on this model's PVID page, see doc comment)")
 	}
@@ -1047,6 +1055,13 @@ func TestHTTPFaceGS105PEGetMgmtIP(t *testing.T) {
 // against gs105pe either (dossier §8's test inventory has no such case),
 // consistent with this being a genuine, if surprising, capability gap of
 // the pinned reference rather than something this port should paper over.
+//
+// Target vlan is 41 (seeded on gs105pe, see SeedGS105PE), NOT an arbitrary
+// unused id: SetPVID now refuses up front if the target VLAN does not
+// exist (GAP-1 fix, parity with Python commit 98fb935), so this test's
+// target must be real or it would fail at that earlier precondition
+// instead of reaching the write-is-a-no-op behavior this test exists to
+// pin.
 func TestHTTPFaceGS105PEWriterSetPVIDNeverAppliesOnThisMock(t *testing.T) {
 	st := SeedGS105PE()
 	m, err := model.GetModel("gs105pe")
@@ -1058,13 +1073,14 @@ func TestHTTPFaceGS105PEWriterSetPVIDNeverAppliesOnThisMock(t *testing.T) {
 		t.Fatalf("webui.HTTPSpec: %v", err)
 	}
 	wantUnchanged := st.Pvids[3]
+	const targetVlan = 41
 	addr, _ := startHTTPFace(t, st, spec, "password")
 	client := webui.NewHTTPClient(addr, "password", spec)
 	writer, err := webui.NewWriter(client, m)
 	if err != nil {
 		t.Fatalf("webui.NewWriter: %v", err)
 	}
-	err = writer.SetPVID(context.Background(), 3, wantUnchanged+1, false)
+	err = writer.SetPVID(context.Background(), 3, targetVlan, false)
 	if err == nil {
 		t.Fatalf("SetPVID() against gs105pe error = nil, want a WriteVerificationError (this mock's known write-is-a-no-op gap, see doc comment)")
 	}

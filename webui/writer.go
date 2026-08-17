@@ -511,17 +511,93 @@ func (w *Writer) xuiPoEReset(ctx context.Context, path string, port int) error {
 	return raiseOnFastpathErrFlag(applied, fmt.Sprintf("PoE reset of port %d", port))
 }
 
+// requireVlanExists refuses a PVID pointing at a VLAN this switch does not
+// have, mirroring Python HttpWriter._require_vlan_exists (http_write.py:
+// 622-644, added by commit 98fb935). A precondition, so nothing is sent
+// when it fails.
+//
+// MEASURED on a GS728TPP (10.2.5.10, firmware 6.0.1.30, 2026-08-03):
+// dot1qPvid.17 := a VLAN that does not exist is ACCEPTED, reads back as
+// that value, and creates no VLAN -- so verify-after-write cannot catch
+// it. Only a precondition can.
+//
+// Skipped where this UI cannot enumerate VLANs at all (VlanConfigPath ==
+// ""): refusing against a list this backend cannot read would be worse
+// than the risk it prevents.
+//
+// Deliberately reads the SAME single VlanConfigPath page Python's
+// _require_vlan_exists reads (one GET, none of GetVLANs' extra per-VLAN
+// membership fetches on FASTPATH/GS105PE), but dispatches it with the SAME
+// per-dialect parsers GetVLANs itself uses (isGoAheadDialect/
+// isFastpathDialect/parseVlanIDs) rather than Python's plain two-way branch
+// (XML-API vs. parse_vlan_ids for everything else). Python's version
+// hands a FASTPATH model's vlanStatus.html, or GS110EMX's Cf8021q.html, to
+// parse_vlan_ids -- which expects 8021qCf.cgi's "vlanckN" checkboxes and
+// finds none there, so EVERY set_pvid call on those dialects would fail
+// with a confusing page-format error instead of the intended "VLAN does
+// not exist" refusal (or the intended success). That is a latent bug in
+// the pinned Python this port should not reproduce: the dispatch below
+// reads each dialect's page with the SAME parser GetVLANs already uses for
+// it, so a real target VLAN is still recognised as existing everywhere
+// GetVLANs itself can see it.
+func (w *Writer) requireVlanExists(ctx context.Context, vlan int) error {
+	if w.spec.VlanConfigPath == "" {
+		return nil
+	}
+	page, err := w.session.GetPage(ctx, w.spec.VlanConfigPath)
+	if err != nil {
+		return err
+	}
+	var known []int
+	switch {
+	case isGoAheadDialect(w.spec):
+		names, err := ParseGoAheadVlanNames(page)
+		if err != nil {
+			return err
+		}
+		for id := range names {
+			known = append(known, id)
+		}
+	case isFastpathDialect(w.spec):
+		vlans, err := parseVlans(w.spec, page)
+		if err != nil {
+			return err
+		}
+		for _, v := range vlans {
+			known = append(known, v.VlanID)
+		}
+	default:
+		known, err = parseVlanIDs(w.spec, page)
+		if err != nil {
+			return err
+		}
+	}
+	for _, id := range known {
+		if id == vlan {
+			return nil
+		}
+	}
+	sort.Ints(known)
+	return errUnexpectedPage("VLAN %d does not exist (known: %v)", vlan, known)
+}
+
 // SetPVID sets port's PVID, mirroring Python HttpWriter.set_pvid
-// (http_write.py:651-664). See this file's package doc comment for why
-// this always uses the STANDARD-dialect ParsePVIDs verify, even on a
-// FASTPATH/GS110EMX model -- a faithful port of a Python source quirk, not
-// a Go-side choice.
+// (http_write.py:651-664, updated by commit 98fb935). See this file's
+// package doc comment for why this always uses the STANDARD-dialect
+// ParsePVIDs verify, even on a FASTPATH/GS110EMX model -- a faithful port
+// of a Python source quirk, not a Go-side choice. requireVlanExists above
+// is NOT that quirk: it is the new GAP-1 precondition, dispatched
+// correctly for every dialect (see its own doc comment for why it differs
+// from Python's literal two-way branch).
 func (w *Writer) SetPVID(ctx context.Context, port, vlan int, force bool) error {
 	if err := w.guard(port, force); err != nil {
 		return err
 	}
 	path, err := requirePath(w.model.Key, w.spec.PvidPath, "port PVIDs")
 	if err != nil {
+		return err
+	}
+	if err := w.requireVlanExists(ctx, vlan); err != nil {
 		return err
 	}
 	page, err := w.session.GetPage(ctx, path)
