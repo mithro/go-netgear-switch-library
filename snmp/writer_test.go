@@ -427,6 +427,147 @@ func TestSetPVIDReReadTransportErrorPropagatesUnwrapped(t *testing.T) {
 	}
 }
 
+// --- SetPortDescription ------------------------------------------------
+
+// applyIfAlias applies an ifAlias SET into the IfAlias table, mirroring a
+// real agent: a non-empty value replaces the row, an empty value OMITS it
+// (both mean "no description" to ParsePortStatus -- see its own doc
+// comment -- so either representation is a faithful fake).
+func applyIfAlias(tables map[string][]Row, vbs []SetVarbind) {
+	rows := tables[IfAlias]
+	for _, vb := range vbs {
+		if !strings.HasPrefix(vb.OID, IfAlias+".") {
+			continue
+		}
+		rows = filterOutSuffix(rows, strings.TrimPrefix(vb.OID, IfAlias))
+		if text := toStrValue(vb.Value); text != "" {
+			rows = append(rows, NewStrRow(vb.OID, text))
+		}
+	}
+	tables[IfAlias] = rows
+}
+
+func TestSetPortDescriptionSetsIfAliasAndVerifies(t *testing.T) {
+	client := newScriptedWriteClient(portTables(1, 1), applyIfAlias)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetPortDescription(context.Background(), 5, "uplink", false); err != nil {
+		t.Fatalf("SetPortDescription: %v", err)
+	}
+	want := []SetVarbind{{OID: fmt.Sprintf("%s.5", IfAlias), Value: "uplink", TypeLetter: "s"}}
+	if !setVarbindsEqual(client.sets, want) {
+		t.Errorf("sets = %+v, want %+v", client.sets, want)
+	}
+}
+
+func TestSetPortDescriptionClearingSendsEmptyString(t *testing.T) {
+	tables := mergeTables(portTables(1, 1), map[string][]Row{
+		IfAlias: {NewStrRow(fmt.Sprintf("%s.5", IfAlias), "old-label")},
+	})
+	client := newScriptedWriteClient(tables, applyIfAlias)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.SetPortDescription(context.Background(), 5, "", false); err != nil {
+		t.Fatalf("SetPortDescription(\"\"): %v", err)
+	}
+	want := []SetVarbind{{OID: fmt.Sprintf("%s.5", IfAlias), Value: "", TypeLetter: "s"}}
+	if !setVarbindsEqual(client.sets, want) {
+		t.Errorf("sets = %+v, want %+v", client.sets, want)
+	}
+}
+
+func TestSetPortDescriptionVerificationFailureRaises(t *testing.T) {
+	client := newScriptedWriteClient(portTables(1, 1), nil) // device ignores the write
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	err = w.SetPortDescription(context.Background(), 5, "uplink", false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("SetPortDescription error = %v, want *model.WriteVerificationError", err)
+	}
+}
+
+// TestSetPortDescriptionClearingVerificationFailureRaises exercises the
+// quoteOrNone "None" branch: the target description ("") is nil-repr'd in
+// the mismatch message when the device silently ignores a clear.
+func TestSetPortDescriptionClearingVerificationFailureRaises(t *testing.T) {
+	tables := mergeTables(portTables(1, 1), map[string][]Row{
+		IfAlias: {NewStrRow(fmt.Sprintf("%s.5", IfAlias), "stuck-label")},
+	})
+	client := newScriptedWriteClient(tables, nil) // device ignores the write
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	err = w.SetPortDescription(context.Background(), 5, "", false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("SetPortDescription(\"\") error = %v, want *model.WriteVerificationError", err)
+	}
+	if !strings.Contains(err.Error(), "None") {
+		t.Errorf("SetPortDescription(\"\") error = %q, want it to mention None (the target was clearing the label)", err.Error())
+	}
+}
+
+func TestSetPortDescriptionProtectedPortBlocksWithoutForce(t *testing.T) {
+	client := newScriptedWriteClient(portTables(1, 1), applyIfAlias)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"), WithProtectedPorts(5))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	err = w.SetPortDescription(context.Background(), 5, "uplink", false)
+	if !errors.Is(err, model.ErrProtectedPort) {
+		t.Fatalf("SetPortDescription error = %v, want ErrProtectedPort", err)
+	}
+	if len(client.sets) != 0 {
+		t.Errorf("sets = %+v, want none (blocked before any SET)", client.sets)
+	}
+	if err := w.SetPortDescription(context.Background(), 5, "uplink", true); err != nil {
+		t.Fatalf("SetPortDescription with force=true: %v", err)
+	}
+}
+
+// --- SetPortSpeed / SetFlowControl: always refused ----------------------
+
+func TestSetPortSpeedAlwaysRefusesByName(t *testing.T) {
+	client := newScriptedWriteClient(nil, nil)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	err = w.SetPortSpeed(context.Background(), 5, model.AutoPortSpeed(), false)
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("SetPortSpeed error = %v, want ErrUnsupportedCapability", err)
+	}
+	if !strings.Contains(err.Error(), "NEGOTIATED port rate") {
+		t.Errorf("SetPortSpeed error = %q, want it to explain the negotiated-vs-configured distinction", err.Error())
+	}
+	if len(client.sets) != 0 {
+		t.Errorf("sets = %+v, want none: SetPortSpeed must never issue a SET", client.sets)
+	}
+}
+
+func TestSetFlowControlAlwaysRefusesByName(t *testing.T) {
+	client := newScriptedWriteClient(nil, nil)
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	err = w.SetFlowControl(context.Background(), 5, true, false)
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("SetFlowControl error = %v, want ErrUnsupportedCapability", err)
+	}
+	if len(client.sets) != 0 {
+		t.Errorf("sets = %+v, want none: SetFlowControl must never issue a SET", client.sets)
+	}
+}
+
 // setVarbindsEqual compares two []SetVarbind slices for exact equality
 // (OID, Value, TypeLetter).
 func setVarbindsEqual(a, b []SetVarbind) bool {

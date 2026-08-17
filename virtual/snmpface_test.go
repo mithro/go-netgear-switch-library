@@ -473,6 +473,46 @@ func TestSnmpFaceSetSingleVarbindVisibleOnRebuild(t *testing.T) {
 	}
 }
 
+// TestSnmpFaceSetIfAliasVisibleOnRebuild is SetSingleVarbindVisibleOnRebuild's
+// sibling for ifAlias (the per-port description column, C3 slice): a SET
+// with a non-empty OCTET STRING is visible on the next GET, and clearing it
+// (an EMPTY OCTET STRING) removes the row entirely -- an absent ifAlias
+// instance is how OIDMap/the reader represent "no description", never a
+// fabricated empty string.
+func TestSnmpFaceSetIfAliasVisibleOnRebuild(t *testing.T) {
+	addr, _, _ := startFace(t, SeedGSM7252PS())
+	client := snmp.NewGoSNMPClient(addr, "public", snmp.WithTimeout(2*time.Second))
+	ctx := context.Background()
+
+	oid := snmp.IfAlias + ".1"
+	vb, err := snmp.NewSetVarbind(oid, "uplink", "s")
+	if err != nil {
+		t.Fatalf("NewSetVarbind: %v", err)
+	}
+	if err := client.Set(ctx, vb); err != nil {
+		t.Fatalf("Set(%s=uplink) error = %v", oid, err)
+	}
+
+	rows, err := client.Get(ctx, []string{oid})
+	if err != nil {
+		t.Fatalf("Get(%s) after SET error = %v", oid, err)
+	}
+	if len(rows) != 1 || rows[0].Value != "uplink" {
+		t.Errorf("Get(%s) after SET = %+v, want a single row with value \"uplink\"", oid, rows)
+	}
+
+	clearVb, err := snmp.NewSetVarbind(oid, "", "s")
+	if err != nil {
+		t.Fatalf("NewSetVarbind (clear): %v", err)
+	}
+	if err := client.Set(ctx, clearVb); err != nil {
+		t.Fatalf("Set(%s=\"\") error = %v", oid, err)
+	}
+	if _, err := client.Get(ctx, []string{oid}); err == nil {
+		t.Errorf("Get(%s) after clearing error = nil, want an absent-OID error (NoSuchInstance)", oid)
+	}
+}
+
 func TestSnmpFaceSetNotWritableOID(t *testing.T) {
 	addr, _, _ := startFace(t, SeedGSM7252PS())
 	g := rawClient(t, addr)

@@ -1035,6 +1035,200 @@ func adminEnabledFor(statuses []model.PortStatus, port int) *bool {
 	return nil
 }
 
+// strPtrEqual reports whether a and b are both nil, or both non-nil with
+// the same referenced value -- used by SetPortDescription's verify step.
+func strPtrEqual(a, b *string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || *a == *b
+}
+
+// quoteOrNone renders s quoted, or "None" if s is nil -- mirrors Python's
+// `{want!r}` repr for an Optional[str] in SetPortDescription's verification
+// message.
+func quoteOrNone(s *string) string {
+	if s == nil {
+		return "None"
+	}
+	return strconv.Quote(*s)
+}
+
+// goaheadWrite POSTs body to this model's single shared "wcd" XML-API write
+// endpoint and raises unless the switch's own status reports success,
+// mirroring Python HttpWriter._goahead_write.
+func (w *Writer) goaheadWrite(ctx context.Context, body, what string) error {
+	path, err := requirePath(w.model.Key, w.spec.XMLWritePath, "XML-API write endpoint")
+	if err != nil {
+		return err
+	}
+	resp, err := w.session.PostXML(ctx, path, body)
+	if err != nil {
+		return err
+	}
+	return checkGoAheadStatus(resp, what)
+}
+
+// goaheadPortRow returns port's current model.PortStatus off the GoAhead
+// ports page at path, or nil if that port is absent from the parsed rows.
+func (w *Writer) goaheadPortRow(ctx context.Context, path string, port int) (*model.PortStatus, error) {
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := ParseGoAheadPorts(html)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		if rows[i].Port == port {
+			return &rows[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// SetPortDescription labels port through the GS728TPP ports page's
+// interfaceDescription, mirroring Python HttpWriter.set_port_description.
+//
+// XML-API (GOAHEAD_XML) only for now: that page carries the field and the
+// read side already parses it. The FASTPATH XUI port pages have a
+// description column too, but its cell id has not been captured, and
+// guessing one would post into an unknown cell.
+func (w *Writer) SetPortDescription(ctx context.Context, port int, description string, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	if !isGoAheadDialect(w.spec) {
+		return fmt.Errorf("model %q: no HTTP port-description write is built for this web UI dialect: %w", w.model.Key, model.ErrUnsupportedCapability)
+	}
+	path, err := requirePath(w.model.Key, w.spec.DashboardPath, "the ports page")
+	if err != nil {
+		return err
+	}
+	beforeRow, err := w.goaheadPortRow(ctx, path, port)
+	if err != nil {
+		return err
+	}
+	var before *string
+	if beforeRow != nil {
+		before = beforeRow.Description
+	}
+	body := portConfigBody(portInterfaceName(port), port, description)
+	if err := w.goaheadWrite(ctx, body, fmt.Sprintf("port %d description", port)); err != nil {
+		return err
+	}
+	afterRow, err := w.goaheadPortRow(ctx, path, port)
+	if err != nil {
+		return err
+	}
+	var after *string
+	if afterRow != nil {
+		after = afterRow.Description
+	}
+	var want *string
+	if description != "" {
+		want = &description
+	}
+	if !strPtrEqual(after, want) {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("description for port %d did not read back as %s", port, quoteOrNone(want)),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// SetPortSpeed sets port's speed/duplex through the ports page's admin
+// fields, mirroring Python HttpWriter.set_port_speed.
+//
+// XML-API only. That page's Standard802_3List carries
+// autoNegotiationAdminEnabled/speedAdmin/duplexAdminMode, the read side
+// already parses them, and the exact encoding is transcribed from the
+// page's own submit JS (see portSpeedBody, goahead_write.go). The FASTPATH
+// XUI port pages have a Speed control too, but its cell id has not been
+// captured, and guessing one would post into an unknown cell.
+//
+// A rate the page's own dropdown does not offer is refused by name: the
+// slctPortSpeed <option> set is 10/100 half-or-full, 1000 FULL ONLY, and
+// Auto. Note this UI DOES offer a forced 1000 where the FASTPATH CLI does
+// not -- which is exactly why that refusal lives in fastpath.Writer.
+// SetPortSpeed and not in model.PortSpeed itself.
+//
+// Disruptive -- applying a speed bounces the link -- so it honours
+// protected_ports.
+func (w *Writer) SetPortSpeed(ctx context.Context, port int, speed model.PortSpeed, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	if !isGoAheadDialect(w.spec) {
+		return fmt.Errorf("model %q: no HTTP speed/duplex write form has been captured for this web UI dialect: %w", w.model.Key, model.ErrUnsupportedCapability)
+	}
+	if !speed.Autonegotiate {
+		mbps := 0
+		if speed.SpeedMbps != nil {
+			mbps = *speed.SpeedMbps
+		}
+		full := speed.FullDuplex != nil && *speed.FullDuplex
+		if !isGoAheadForcedSpeed(mbps, full) {
+			return fmt.Errorf("model %q: this web UI offers no %s choice (its Speed control lists 10/100 half or full, 1000 full, and Auto): %w", w.model.Key, speed, model.ErrUnsupportedCapability)
+		}
+	}
+	path, err := requirePath(w.model.Key, w.spec.DashboardPath, "the ports page")
+	if err != nil {
+		return err
+	}
+	beforeRow, err := w.goaheadPortRow(ctx, path, port)
+	if err != nil {
+		return err
+	}
+	var before *model.PortSpeed
+	if beforeRow != nil {
+		before = beforeRow.SpeedConfig
+	}
+	body := portSpeedBody(portInterfaceName(port), port, speed)
+	if err := w.goaheadWrite(ctx, body, fmt.Sprintf("port %d speed -> %s", port, speed)); err != nil {
+		return err
+	}
+	afterRow, err := w.goaheadPortRow(ctx, path, port)
+	if err != nil {
+		return err
+	}
+	var after *model.PortSpeed
+	if afterRow != nil {
+		after = afterRow.SpeedConfig
+	}
+	if after == nil || !after.Equal(speed) {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("speed for port %d did not read back as %s", port, speed),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// SetFlowControl always returns an error wrapping
+// model.ErrUnsupportedCapability: this backend cannot configure flow
+// control on this UI. Mirrors Python HttpWriter.set_flow_control.
+//
+// Refused by name, and this one is a MEASURED absence rather than an
+// unsearched one. The GoAhead ports page publishes flowControlAdminType/
+// flowControlOperType but has no control for either: its slct* selects are
+// Admin Mode and Port Speed only, and its submit builder emits no
+// flow-control field at all (see webui/testdata/http/gs728tpp_ports.xml).
+// Flow control lives on a different page of that UI which has not been
+// captured, and the FASTPATH XUI equivalent has not either. No guard call
+// (unlike SetPortDescription/SetPortSpeed) -- mirroring Python exactly:
+// there is nothing here to protect, since nothing is ever sent. Every
+// parameter is accepted-but-unused, purely so this method's signature
+// matches the shared BackendWriter surface (see the root package's
+// write_dispatch.go).
+func (w *Writer) SetFlowControl(_ context.Context, _ int, _ bool, _ bool) error {
+	return fmt.Errorf("model %q: this web UI's ports page reports flow control but carries no control to change it: %w", w.model.Key, model.ErrUnsupportedCapability)
+}
+
 // SetMgmtIP sets the switch's static management address through its web
 // UI, mirroring Python HttpWriter.set_mgmt_ip (http_write.py:884-940).
 //

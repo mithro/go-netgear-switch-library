@@ -317,6 +317,14 @@ type HTTPModelSpec struct {
 	HTTPSServicePath  string
 	SSHServicePath    string
 	TelnetServicePath string
+
+	// XMLWritePath is the single POST target every write on a GOAHEAD_XML
+	// (gs728tpp) web UI shares: the object name and action verb INSIDE the
+	// XML body select the operation, not the URL -- its SiteMap.xml lists
+	// exactly one POST target ("wcd") repeated for all 100-odd pages
+	// (LIVE-READ 2026-08-02 from 10.2.5.10). "" for every other dialect,
+	// which has no such single write endpoint at all.
+	XMLWritePath string
 }
 
 // Shared FASTPATH/XUI path fragments, mirroring the Python module-level
@@ -737,6 +745,10 @@ var gs728tppSpec = HTTPModelSpec{
 	// session-path-prefixed wcd endpoint), NOT the gsm7228ps multipart
 	// form -- CertUploadFileField stays "" (no multipart file part).
 	CertUploadPath: "wcd",
+	// Every write on this UI POSTs an XML body here; the object name and
+	// action verb in the body select the operation. See goahead_write.go
+	// for the body shapes and where each was transcribed from.
+	XMLWritePath: "wcd",
 
 	// LIVE-VERIFIED 2026-07-29 against 28 g1..g28 ports, 24 PoE ports, real
 	// VLAN names, PVIDs, membership, 135 MAC entries, 4 LLDP neighbours,

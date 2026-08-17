@@ -537,6 +537,211 @@ func formatIntPtr(p *int) string {
 }
 
 // ---------------------------------------------------------------------
+// SetPortDescription / SetPortSpeed / SetFlowControl (C3 slice)
+// ---------------------------------------------------------------------
+
+// described returns port's current description via `show port description
+// <iface>`, mirroring Python CliWriter's inline `described()` closure in
+// set_port_description: NOT GetPorts -- `show port all` carries no
+// description column, so the reader honestly reports nil there. This
+// per-port command is the only one that reports a label back.
+func (w *Writer) described(ctx context.Context, port int) (*string, error) {
+	text, err := w.session.Run(ctx, w.spec.PortDescriptionShow(port))
+	if err != nil {
+		return nil, err
+	}
+	return parsePortDescription(text)
+}
+
+// strPtrEqual reports whether a and b are both nil, or both non-nil with
+// the same referenced value -- used by SetPortDescription's verify step.
+func strPtrEqual(a, b *string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || *a == *b
+}
+
+// SetPortDescription labels port (`description '<text>'`), or clears it
+// with "" (`no description`). Ported from Python CliWriter.
+// set_port_description.
+//
+// Cosmetic, so no `switchport mode general` preamble is needed (unlike the
+// VLAN commands, whose effect depends on the port's mode) and it is not
+// force-gated beyond the protected-port guard.
+func (w *Writer) SetPortDescription(ctx context.Context, port int, description string, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	before, err := w.described(ctx, port)
+	if err != nil {
+		return err
+	}
+	if err := inMode(
+		ctx, w.session,
+		[]string{w.spec.ConfigureCmd, w.spec.Interface(port)},
+		[]string{w.spec.PortDescription(description)},
+		w.spec.ExitCmd,
+	); err != nil {
+		return err
+	}
+	after, err := w.described(ctx, port)
+	if err != nil {
+		return err
+	}
+	var want *string
+	if description != "" {
+		want = &description
+	}
+	if !strPtrEqual(after, want) {
+		return &model.WriteVerificationError{
+			Msg: fmt.Sprintf(
+				"description for port %d did not read back as %s (got %s)",
+				port, formatStrPtr(want), formatStrPtr(after),
+			),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// speedConfig returns port's CONFIGURED speed, from `show port all`'s
+// Physical Mode column, mirroring Python CliWriter._speed_config.
+// Deliberately the Physical MODE column, not Physical Status: the latter is
+// what the link negotiated and is blank on a down port, which is the only
+// kind of port this writer is meant to touch.
+func (w *Writer) speedConfig(ctx context.Context, port int) (*model.PortSpeed, error) {
+	status, err := w.portStatus(ctx, port)
+	if err != nil {
+		return nil, err
+	}
+	if status == nil {
+		return nil, errCliCommand("switch reports no port %d", port)
+	}
+	return status.SpeedConfig, nil
+}
+
+// SetPortSpeed forces port's speed/duplex, or returns it to
+// auto-negotiation. Ported from Python CliWriter.set_port_speed.
+//
+// DISRUPTIVE: changing either setting bounces the link, so this honours
+// protected_ports exactly as SetPVID does.
+//
+// A forced 1000 is refused HERE, before anything is sent, because it is not
+// a rate this grammar has: 1000BASE-T makes auto-negotiation mandatory, and
+// the firmware encodes that by omitting 1000 from the forced rates while
+// keeping it among the advertised ones. Measured, not inferred -- "speed
+// 1000 full-duplex" on a live gsm7252ps port answered "% Invalid input
+// detected at '^' marker." and left Physical Mode untouched. This refusal
+// wraps ErrCliCommandRejected (mirroring Python's CliCommandError), NOT
+// model.ErrUnsupportedCapability -- the OP is supported, this one rate
+// simply is not. The message text, including "Use PortSpeed.auto()
+// instead", is preserved verbatim from the Python source even though this
+// package's equivalent constructor is model.AutoPortSpeed() -- see
+// guard's own doc comment for the same verbatim-preservation convention
+// this codebase already uses for "force=True".
+//
+// Every OTHER rate is sent unchecked, deliberately: the forced rates a port
+// offers follow its PHY rather than the firmware, so the switch is the only
+// authority worth asking. One it rejects comes back as
+// ErrCliCommandRejected carrying the device's own words.
+func (w *Writer) SetPortSpeed(ctx context.Context, port int, speed model.PortSpeed, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	if !speed.Autonegotiate && speed.SpeedMbps != nil && *speed.SpeedMbps == 1000 {
+		return errCliCommand(
+			"1000 Mbit/s cannot be FORCED on this firmware -- 1000BASE-T " +
+				"requires auto-negotiation, so the CLI offers 1000 only as an " +
+				"advertised rate. Use PortSpeed.auto() instead.",
+		)
+	}
+	before, err := w.speedConfig(ctx, port)
+	if err != nil {
+		return err
+	}
+	if err := inMode(
+		ctx, w.session,
+		[]string{w.spec.ConfigureCmd, w.spec.Interface(port)},
+		[]string{w.spec.PortSpeed(speed)},
+		w.spec.ExitCmd,
+	); err != nil {
+		return err
+	}
+	after, err := w.speedConfig(ctx, port)
+	if err != nil {
+		return err
+	}
+	if after == nil || !after.Equal(speed) {
+		got := "an unreadable Physical Mode"
+		if after != nil {
+			got = after.String()
+		}
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("speed for port %d did not read back as %s (got %s)", port, speed, got),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// flowControl returns port's Flow Mode column (the CONFIGURED setting),
+// mirroring Python CliWriter._flow_control.
+func (w *Writer) flowControl(ctx context.Context, port int) (*bool, error) {
+	status, err := w.portStatus(ctx, port)
+	if err != nil {
+		return nil, err
+	}
+	if status == nil {
+		return nil, errCliCommand("switch reports no port %d", port)
+	}
+	return status.FlowControl, nil
+}
+
+// SetFlowControl turns IEEE 802.3x flow control on or off for port (bare
+// `flowcontrol` / `no flowcontrol` toggles in interface config mode).
+// Ported from Python CliWriter.set_flow_control.
+//
+// Verified against `show port all`'s Flow Mode column, which is the
+// CONFIGURED setting -- PROVEN to move on a port whose link was DOWN
+// throughout (gsm7252ps 10.1.5.22 port 1/0/8, 2026-08-03), so it cannot be
+// reporting a negotiated result.
+//
+// Disruptive enough to honour protected_ports: enabling pause frames
+// changes how a link behaves under congestion.
+func (w *Writer) SetFlowControl(ctx context.Context, port int, enabled bool, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	before, err := w.flowControl(ctx, port)
+	if err != nil {
+		return err
+	}
+	if err := inMode(
+		ctx, w.session,
+		[]string{w.spec.ConfigureCmd, w.spec.Interface(port)},
+		[]string{w.spec.PortFlowControl(enabled)},
+		w.spec.ExitCmd,
+	); err != nil {
+		return err
+	}
+	after, err := w.flowControl(ctx, port)
+	if err != nil {
+		return err
+	}
+	if after == nil || *after != enabled {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("flow control for port %d did not read back as %v", port, enabled),
+			Before: before,
+			After:  after,
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
 // PoE (dossier §4.6) -- the m4300-24x device-limit gate
 // ---------------------------------------------------------------------
 

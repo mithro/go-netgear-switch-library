@@ -16,6 +16,7 @@ package snmp
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/mithro/go-netgear-switch-library/model"
@@ -219,6 +220,129 @@ func (w *Writer) SetPortEnabled(ctx context.Context, port int, enabled bool, for
 		}
 	}
 	return nil
+}
+
+// SetPortDescription sets port's ifAlias, the standard per-port description
+// column, and verifies the change read back correctly. Ported from Python's
+// SnmpWriter.set_port_description -- see D-WR §2.14.
+//
+// WRITABILITY MEASURED 2026-08-03 on a GS728TPP (10.2.5.10, firmware
+// 6.0.1.30): a SET of ifAlias.17 was accepted and read straight back through
+// GetPorts.
+//
+// Cosmetic (moves no traffic, cannot strand a switch): the guard fires
+// UNCONDITIONALLY the way SetPVID's does -- not direction-gated like SetPoE/
+// SetPortEnabled -- but only because a protected-port write is refused by
+// convention, not because clearing a label is itself disruptive.
+//
+// One OctetString SET (type letter "s") at ifAlias.<port>. Unlike Python's
+// net-snmp CLI transport, which needed a hex-string workaround to send an
+// empty OCTET STRING (`snmpset ... s ""` is refused by the net-snmp CLI
+// itself), this package's gosnmp-based WriteClient encodes an empty Go
+// string as a genuine empty OctetString PDU directly -- see
+// toOctetBytes/toSetPDU (gosnmp.go) -- so no such workaround is needed here.
+// Verify: re-read via the internal reader's GetPorts; the reader maps an
+// empty alias to nil, so compare on that footing (want is nil when
+// description == "").
+func (w *Writer) SetPortDescription(ctx context.Context, port int, description string, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	before, err := w.portStatus(ctx, port)
+	if err != nil {
+		return err
+	}
+	vb, err := NewSetVarbind(fmt.Sprintf("%s.%d", IfAlias, port), description, "s")
+	if err != nil {
+		return err
+	}
+	if err := w.client.Set(ctx, vb); err != nil {
+		return err
+	}
+	after, err := w.portStatus(ctx, port)
+	if err != nil {
+		return err
+	}
+	var want *string
+	if description != "" {
+		want = &description
+	}
+	if after == nil || !strPtrEqual(after.Description, want) {
+		var beforeDesc, afterDesc *string
+		if before != nil {
+			beforeDesc = before.Description
+		}
+		if after != nil {
+			afterDesc = after.Description
+		}
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("description for port %d did not read back as %s", port, quoteOrNone(want)),
+			Before: beforeDesc,
+			After:  afterDesc,
+		}
+	}
+	return nil
+}
+
+// strPtrEqual reports whether a and b are both nil, or both non-nil with the
+// same referenced value -- used by SetPortDescription's verify step to
+// compare an optional description against the requested one on the same
+// footing GetPorts reports it (an empty alias reads back as a nil
+// Description, mirroring Python's `after.description != (description or
+// None)`).
+func strPtrEqual(a, b *string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || *a == *b
+}
+
+// quoteOrNone renders s quoted, or "None" if s is nil -- mirrors Python's
+// `{want!r}` repr for an Optional[str] in SetPortDescription's verification
+// message.
+func quoteOrNone(s *string) string {
+	if s == nil {
+		return "None"
+	}
+	return strconv.Quote(*s)
+}
+
+// SetPortSpeed always returns an error wrapping
+// model.ErrUnsupportedCapability: this backend cannot configure a port's
+// speed. Mirrors Python's SnmpWriter.set_port_speed.
+//
+// Refused by name rather than approximated. What SNMP offers here is
+// ifSpeed/ifHighSpeed, and those report the rate the link NEGOTIATED --
+// writing one would be writing a counter, not a setting. The column that
+// would genuinely serve this is MAU-MIB's ifMauDefaultType/
+// ifMauAutoNegAdminStatus (mib-2.26); no switch here has been walked for it,
+// so its presence is UNKNOWN rather than absent, and the 2026-08-03 OID
+// sweep does not settle it (that sweep covered the 4526 VENDOR subtree
+// only). Use a CLI backend, or establish the MAU subtree first. Every
+// parameter is accepted-but-unused, purely so this method's signature
+// matches the shared BackendWriter surface (see write_dispatch.go).
+func (w *Writer) SetPortSpeed(_ context.Context, _ int, _ model.PortSpeed, _ bool) error {
+	return fmt.Errorf(
+		"model %q: SNMP exposes only the NEGOTIATED port rate (ifSpeed); no configured speed/duplex column has been located: %w",
+		w.model.Key, model.ErrUnsupportedCapability,
+	)
+}
+
+// SetFlowControl always returns an error wrapping
+// model.ErrUnsupportedCapability: this backend cannot configure flow
+// control. Mirrors Python's SnmpWriter.set_flow_control.
+//
+// Refused by name. EtherLike-MIB's dot3PauseAdminMode is the column that
+// would serve this, and it is READ on the one model that publishes it (the
+// GS728TPP) -- but no SET has ever been issued against it here, so whether
+// the agent accepts one is unknown. This library does not offer a write it
+// has never seen succeed. Every parameter is accepted-but-unused; see
+// SetPortSpeed's doc comment.
+func (w *Writer) SetFlowControl(_ context.Context, _ int, _ bool, _ bool) error {
+	return fmt.Errorf(
+		"model %q: no SNMP flow-control write has been established (dot3PauseAdminMode is read-only in this library): %w",
+		w.model.Key, model.ErrUnsupportedCapability,
+	)
 }
 
 // SetPVID sets port's default/untagged VLAN (PVID) to vlan and verifies the

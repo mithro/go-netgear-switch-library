@@ -78,11 +78,12 @@ func TestFacadeNSDPIntegration_GS110EMXEveryReadNonVacuousVsSeed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), facadeTestTimeout)
 	defer cancel()
 
-	// --- GetPorts: link/speed only -- NSDP PORT_STATUS carries no name/
-	// description, so AdminEnabled is always true and Description/Name are
-	// always nil (mirroring nsdp.Reader's mapPorts contract exactly) even
-	// though the seed's port 8 has a "rumpus" description at the State
-	// layer -- that field simply isn't on the NSDP wire.
+	// --- GetPorts: link/speed only -- NSDP PORT_STATUS carries no
+	// interface identifier at all, so AdminEnabled is always true and Name
+	// is always nil (mirroring nsdp.Reader's mapPorts contract exactly).
+	// Description, however, DOES carry the PORT_NAME (0xB000) operator
+	// label -- the seed's port 8 is "rumpus", every other port undescribed
+	// (nil) -- mirroring every other backend's ifAlias-equivalent field.
 	ports, err := sw.GetPorts(ctx)
 	if err != nil {
 		t.Fatalf("GetPorts() error = %v", err)
@@ -91,12 +92,20 @@ func TestFacadeNSDPIntegration_GS110EMXEveryReadNonVacuousVsSeed(t *testing.T) {
 		t.Fatalf("len(GetPorts()) = %d, want 10", len(ports))
 	}
 	wantSpeed := map[int]int{6: 100, 8: 1000, 9: 10000, 10: 10000}
+	wantDescription := map[int]string{8: "rumpus"}
 	for _, p := range ports {
 		if !p.AdminEnabled {
 			t.Errorf("port %d AdminEnabled = false, want true (NSDP always reports true)", p.Port)
 		}
-		if p.Description != nil {
-			t.Errorf("port %d Description = %v, want nil (NSDP has no description tag)", p.Port, *p.Description)
+		if p.Name != nil {
+			t.Errorf("port %d Name = %v, want nil (NSDP PORT_STATUS carries no interface identifier)", p.Port, *p.Name)
+		}
+		wantDesc, hasDesc := wantDescription[p.Port]
+		switch {
+		case hasDesc && (p.Description == nil || *p.Description != wantDesc):
+			t.Errorf("port %d Description = %v, want %q", p.Port, p.Description, wantDesc)
+		case !hasDesc && p.Description != nil:
+			t.Errorf("port %d Description = %v, want nil (undescribed)", p.Port, *p.Description)
 		}
 		wantMbps, linkUp := wantSpeed[p.Port]
 		if p.LinkUp != linkUp {

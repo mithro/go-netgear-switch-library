@@ -55,6 +55,70 @@ func nsdpTestClient(t *testing.T, port int) *nsdp.UDPClient {
 	return c
 }
 
+// TestNsdpFaceWriterSetPortDescriptionRoundTrips drives a REAL
+// nsdp.Writer.SetPortDescription (C3 slice) against the REAL GS110EMX NSDP
+// fake over UDP loopback: the write's own verify-after-write re-read must
+// see the change, proving the fake's ApplyNsdpWrite TagPortName (0xB000)
+// handling round-trips end to end -- not just that the write TLV was sent.
+// SetPortDescription's own doc comment (nsdp/writer.go) records that this
+// write has NEVER been exercised against real hardware; this test proves
+// only that the LIBRARY's own write/verify shape is internally consistent
+// against this mock, not that real Plus hardware accepts it.
+//
+// Verification reads back through a SEPARATE nsdp.Reader over the SAME UDP
+// client -- never by peeking at *State directly -- because the fake's serve
+// loop runs on its own goroutine: the wire round trip is a real
+// synchronization point the Go race detector understands, a direct
+// State field read from the test goroutine is not (even though the
+// write is causally complete by the time SetPortDescription returns).
+func TestNsdpFaceWriterSetPortDescriptionRoundTrips(t *testing.T) {
+	st := SeedGS110EMX()
+	port, _ := startNsdpFace(t, st)
+	client := nsdpTestClient(t, port)
+	m, err := model.GetModel("gs110emx")
+	if err != nil {
+		t.Fatalf("model.GetModel(gs110emx): %v", err)
+	}
+	writer, err := nsdp.NewWriter(client, m, st.NsdpPassword)
+	if err != nil {
+		t.Fatalf("nsdp.NewWriter: %v", err)
+	}
+	reader, err := nsdp.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("nsdp.NewReader: %v", err)
+	}
+	ctx := context.Background()
+
+	descriptionOf := func(port int) *string {
+		t.Helper()
+		ports, err := reader.GetPorts(ctx)
+		if err != nil {
+			t.Fatalf("GetPorts: %v", err)
+		}
+		for _, p := range ports {
+			if p.Port == port {
+				return p.Description
+			}
+		}
+		t.Fatalf("GetPorts: no such port %d", port)
+		return nil
+	}
+
+	if err := writer.SetPortDescription(ctx, 5, "uplink", false); err != nil {
+		t.Fatalf("SetPortDescription: %v", err)
+	}
+	if got := descriptionOf(5); got == nil || *got != "uplink" {
+		t.Errorf("port 5 Description = %v, want \"uplink\"", got)
+	}
+
+	if err := writer.SetPortDescription(ctx, 5, "", false); err != nil {
+		t.Fatalf("SetPortDescription(\"\"): %v", err)
+	}
+	if got := descriptionOf(5); got != nil {
+		t.Errorf("port 5 Description after clearing = %v, want nil", got)
+	}
+}
+
 // -- Read/write intent (test_virtual_nsdp_face.py) --------------------------
 
 func TestNsdpFaceReadReturnsSeedPorts(t *testing.T) {

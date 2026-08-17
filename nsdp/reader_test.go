@@ -539,8 +539,9 @@ func TestReader_GetMgmtIPDhcp(t *testing.T) {
 }
 
 // portNameNsdpClient returns a fixed packet with two ports -- one described,
-// one bare -- for exercising GetPorts' PORT_NAME (0xB000) -> PortStatus.Name
-// mapping. It always includes MODEL and MAC (ParseDevice requires both).
+// one bare -- for exercising GetPorts' PORT_NAME (0xB000) -> PortStatus.
+// Description mapping. It always includes MODEL and MAC (ParseDevice
+// requires both).
 type portNameNsdpClient struct{}
 
 func (portNameNsdpClient) Read(_ context.Context, _ []nsdp.Tag) (*nsdp.Packet, error) {
@@ -556,8 +557,11 @@ func (portNameNsdpClient) Read(_ context.Context, _ []nsdp.Tag) (*nsdp.Packet, e
 }
 
 // TestReader_GetPortsMapsPortName proves GetPorts folds PORT_NAME into
-// PortStatus.Name -- a described port gets its name, a bare PORT_NAME TLV
-// leaves Name nil (mirroring Python _ports' names.get()).
+// PortStatus.Description -- the operator label, matching every other
+// backend's ifAlias-equivalent field, NOT Name (which NSDP never
+// populates: PORT_STATUS carries no interface identifier at all) -- a
+// described port gets its label, a bare PORT_NAME TLV leaves Description
+// nil (mirroring Python _ports' labels.get()).
 func TestReader_GetPortsMapsPortName(t *testing.T) {
 	reader, err := nsdp.NewReader(portNameNsdpClient{}, gs110emx(t))
 	if err != nil {
@@ -571,11 +575,14 @@ func TestReader_GetPortsMapsPortName(t *testing.T) {
 	for _, p := range ports {
 		byPort[p.Port] = p
 	}
-	if p1 := byPort[1]; p1.Name == nil || *p1.Name != "lab-uplink" {
-		t.Errorf("port 1 Name = %v, want \"lab-uplink\"", p1.Name)
+	if p1 := byPort[1]; p1.Description == nil || *p1.Description != "lab-uplink" {
+		t.Errorf("port 1 Description = %v, want \"lab-uplink\"", p1.Description)
 	}
-	if p2 := byPort[2]; p2.Name != nil {
-		t.Errorf("port 2 Name = %v, want nil (bare PORT_NAME TLV = undescribed)", p2.Name)
+	if p1 := byPort[1]; p1.Name != nil {
+		t.Errorf("port 1 Name = %v, want nil (NSDP PORT_STATUS carries no interface identifier)", p1.Name)
+	}
+	if p2 := byPort[2]; p2.Description != nil {
+		t.Errorf("port 2 Description = %v, want nil (bare PORT_NAME TLV = undescribed)", p2.Description)
 	}
 }
 

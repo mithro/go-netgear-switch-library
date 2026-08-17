@@ -531,6 +531,116 @@ func TestCliFaceWriteVisibleOverSNMPOidMap(t *testing.T) {
 	}
 }
 
+// --- C3 slice: SetPortDescription / SetPortSpeed / SetFlowControl round
+// trip against the REAL CliFace (description '<text>'/no description,
+// speed auto/speed <rate> <duplex>-duplex, flowcontrol/no flowcontrol) ---
+
+func TestCliFaceWriterSetPortDescriptionRoundTrips(t *testing.T) {
+	st := SeedGSM7252PS()
+	face, m := newTestCliFace(t, "gsm7252ps", st)
+	writer, err := fastpath.NewWriter(face, m)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ctx := context.Background()
+	const port = 7
+
+	if err := writer.SetPortDescription(ctx, port, "uplink", false); err != nil {
+		t.Fatalf("SetPortDescription: %v", err)
+	}
+	if st.Ports[port].Description == nil || *st.Ports[port].Description != "uplink" {
+		t.Errorf("state.Ports[%d].Description = %v, want \"uplink\"", port, st.Ports[port].Description)
+	}
+
+	if err := writer.SetPortDescription(ctx, port, "", false); err != nil {
+		t.Fatalf("SetPortDescription(\"\"): %v", err)
+	}
+	if st.Ports[port].Description != nil {
+		t.Errorf("state.Ports[%d].Description after clearing = %v, want nil", port, st.Ports[port].Description)
+	}
+}
+
+func TestCliFaceWriterSetPortSpeedRoundTrips(t *testing.T) {
+	st := SeedGSM7252PS()
+	face, m := newTestCliFace(t, "gsm7252ps", st)
+	writer, err := fastpath.NewWriter(face, m)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ctx := context.Background()
+	const port = 7
+
+	if err := writer.SetPortSpeed(ctx, port, model.ForcedPortSpeed(100, true), false); err != nil {
+		t.Fatalf("SetPortSpeed(100 full): %v", err)
+	}
+	if got := st.Ports[port].PhysicalMode; got != "100 Full" {
+		t.Errorf("state.Ports[%d].PhysicalMode = %q, want \"100 Full\"", port, got)
+	}
+
+	if err := writer.SetPortSpeed(ctx, port, model.AutoPortSpeed(), false); err != nil {
+		t.Fatalf("SetPortSpeed(auto): %v", err)
+	}
+	if got := st.Ports[port].PhysicalMode; got != "Auto" {
+		t.Errorf("state.Ports[%d].PhysicalMode after auto = %q, want \"Auto\"", port, got)
+	}
+}
+
+// TestCliFaceWriterSetPortSpeedRefusesForced1000 proves the MEASURED
+// refusal (1000BASE-T requires auto-negotiation) round-trips through the
+// REAL CliFace too: "speed 1000 full-duplex" answers cliInvalid and leaves
+// PhysicalMode untouched -- but fastpath.Writer.SetPortSpeed refuses this
+// rate itself BEFORE ever sending the command (writer.go), so this test
+// drives the fake DIRECTLY via CliFace.Run to prove the mock's own
+// backstop, independent of the writer's pre-check.
+func TestCliFaceRefusesForced1000Directly(t *testing.T) {
+	st := SeedGSM7252PS()
+	face, _ := newTestCliFace(t, "gsm7252ps", st)
+	const port = 7
+	iface := st.Ports[port].Name
+
+	for _, cmd := range []string{"configure", fmt.Sprintf("interface %s", iface)} {
+		out, err := face.Run(context.Background(), cmd)
+		if err != nil || out != "" {
+			t.Fatalf("setup command %q: out=%q err=%v, want accepted", cmd, out, err)
+		}
+	}
+	out, err := face.Run(context.Background(), "speed 1000 full-duplex")
+	if err != nil {
+		t.Fatalf("Run(speed 1000 full-duplex): %v", err)
+	}
+	if out == "" {
+		t.Fatalf("Run(speed 1000 full-duplex) = accepted, want a rejection (1000BASE-T requires auto-negotiation)")
+	}
+	if st.Ports[port].PhysicalMode != "" {
+		t.Errorf("state.Ports[%d].PhysicalMode = %q after a refused forced-1000, want unchanged (\"\")", port, st.Ports[port].PhysicalMode)
+	}
+}
+
+func TestCliFaceWriterSetFlowControlRoundTrips(t *testing.T) {
+	st := SeedGSM7252PS()
+	face, m := newTestCliFace(t, "gsm7252ps", st)
+	writer, err := fastpath.NewWriter(face, m)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ctx := context.Background()
+	const port = 7
+
+	if err := writer.SetFlowControl(ctx, port, true, false); err != nil {
+		t.Fatalf("SetFlowControl(true): %v", err)
+	}
+	if !st.Ports[port].FlowControl {
+		t.Errorf("state.Ports[%d].FlowControl = false, want true", port)
+	}
+
+	if err := writer.SetFlowControl(ctx, port, false, false); err != nil {
+		t.Fatalf("SetFlowControl(false): %v", err)
+	}
+	if st.Ports[port].FlowControl {
+		t.Errorf("state.Ports[%d].FlowControl = true, want false", port)
+	}
+}
+
 // --- 3. access-mode inertness ------------------------------------------
 
 // TestCliFaceAccessModeInertness is the load-bearing contract test (dossier

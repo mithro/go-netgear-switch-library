@@ -29,6 +29,20 @@ type fakeWriter struct {
 		port           int
 		enabled, force bool
 	}
+	setPortDescriptionCalls []struct {
+		port        int
+		description string
+		force       bool
+	}
+	setPortSpeedCalls []struct {
+		port  int
+		speed model.PortSpeed
+		force bool
+	}
+	setFlowControlCalls []struct {
+		port           int
+		enabled, force bool
+	}
 	setPVIDCalls []struct {
 		port, vlan int
 		force      bool
@@ -78,6 +92,38 @@ func (f *fakeWriter) SetPortEnabled(_ context.Context, port int, enabled bool, f
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.setPortEnabledCalls = append(f.setPortEnabledCalls, struct {
+		port           int
+		enabled, force bool
+	}{port, enabled, force})
+	return f.err
+}
+
+func (f *fakeWriter) SetPortDescription(_ context.Context, port int, description string, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setPortDescriptionCalls = append(f.setPortDescriptionCalls, struct {
+		port        int
+		description string
+		force       bool
+	}{port, description, force})
+	return f.err
+}
+
+func (f *fakeWriter) SetPortSpeed(_ context.Context, port int, speed model.PortSpeed, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setPortSpeedCalls = append(f.setPortSpeedCalls, struct {
+		port  int
+		speed model.PortSpeed
+		force bool
+	}{port, speed, force})
+	return f.err
+}
+
+func (f *fakeWriter) SetFlowControl(_ context.Context, port int, enabled bool, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setFlowControlCalls = append(f.setFlowControlCalls, struct {
 		port           int
 		enabled, force bool
 	}{port, enabled, force})
@@ -527,6 +573,49 @@ func TestSetPortEnabled_DelegatesToWriterAndForwardsForce(t *testing.T) {
 	got := fw.setPortEnabledCalls[0]
 	if got.port != 3 || got.enabled != false || got.force != true {
 		t.Fatalf("SetPortEnabled call = %+v, want port=3 enabled=false force=true", got)
+	}
+}
+
+func TestSetPortDescription_DelegatesToWriterAndForwardsForce(t *testing.T) {
+	sw, fw := testSwitchWithFakeWriter(t)
+	if err := sw.SetPortDescription(context.Background(), 3, "uplink", Write{Force: true}); err != nil {
+		t.Fatalf("SetPortDescription() error = %v", err)
+	}
+	if len(fw.setPortDescriptionCalls) != 1 {
+		t.Fatalf("SetPortDescription calls = %d, want 1", len(fw.setPortDescriptionCalls))
+	}
+	got := fw.setPortDescriptionCalls[0]
+	if got.port != 3 || got.description != "uplink" || got.force != true {
+		t.Fatalf("SetPortDescription call = %+v, want port=3 description=uplink force=true", got)
+	}
+}
+
+func TestSetPortSpeed_DelegatesToWriterAndForwardsForce(t *testing.T) {
+	sw, fw := testSwitchWithFakeWriter(t)
+	speed := ForcedPortSpeed(100, true)
+	if err := sw.SetPortSpeed(context.Background(), 3, speed, Write{Force: true}); err != nil {
+		t.Fatalf("SetPortSpeed() error = %v", err)
+	}
+	if len(fw.setPortSpeedCalls) != 1 {
+		t.Fatalf("SetPortSpeed calls = %d, want 1", len(fw.setPortSpeedCalls))
+	}
+	got := fw.setPortSpeedCalls[0]
+	if got.port != 3 || !got.speed.Equal(speed) || got.force != true {
+		t.Fatalf("SetPortSpeed call = %+v, want port=3 speed=%v force=true", got, speed)
+	}
+}
+
+func TestSetFlowControl_DelegatesToWriterAndForwardsForce(t *testing.T) {
+	sw, fw := testSwitchWithFakeWriter(t)
+	if err := sw.SetFlowControl(context.Background(), 3, true, Write{Force: true}); err != nil {
+		t.Fatalf("SetFlowControl() error = %v", err)
+	}
+	if len(fw.setFlowControlCalls) != 1 {
+		t.Fatalf("SetFlowControl calls = %d, want 1", len(fw.setFlowControlCalls))
+	}
+	got := fw.setFlowControlCalls[0]
+	if got.port != 3 || got.enabled != true || got.force != true {
+		t.Fatalf("SetFlowControl call = %+v, want port=3 enabled=true force=true", got)
 	}
 }
 

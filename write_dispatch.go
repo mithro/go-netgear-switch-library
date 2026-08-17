@@ -21,7 +21,7 @@ import (
 
 // BackendWriter is the write-op surface dispatch calls, mirroring the union
 // Python's writer-side _write spans (SnmpWriter | NsdpWriter | HttpWriter):
-// every registered backend's writer must implement all nine methods, and an
+// every registered backend's writer must implement all twelve methods, and an
 // op it cannot serve returns an error wrapping model.ErrUnsupportedCapability
 // rather than a panic or a silent no-op. snmp.Writer (see snmp/writer.go,
 // snmp/writer_vlan.go, snmp/writer_cycle.go) already satisfies this
@@ -37,6 +37,9 @@ import (
 type BackendWriter interface {
 	SetPoE(ctx context.Context, port int, on bool, force bool) error
 	SetPortEnabled(ctx context.Context, port int, enabled bool, force bool) error
+	SetPortDescription(ctx context.Context, port int, description string, force bool) error
+	SetPortSpeed(ctx context.Context, port int, speed model.PortSpeed, force bool) error
+	SetFlowControl(ctx context.Context, port int, enabled bool, force bool) error
 	SetPVID(ctx context.Context, port, vlan int, force bool) error
 	SetVlanMembership(ctx context.Context, vlanID, port int, mode model.VlanMode, force bool) error
 	CreateVlan(ctx context.Context, vlanID int, name string) error

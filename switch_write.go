@@ -100,6 +100,48 @@ func (s *Switch) SetPortEnabled(ctx context.Context, port int, enabled bool, o W
 	})
 }
 
+// SetPortDescription labels port (ifAlias), dispatched through the resolved
+// backend (o.Backend, or this Switch's default). Pass "" to clear the label.
+// Cosmetic -- it moves no traffic and cannot strand a switch, so it is NOT
+// force-gated beyond the ordinary protected-port guard every BackendWriter
+// method applies internally (snmp.Writer.SetPortDescription, nsdp.Writer.
+// SetPortDescription, fastpath.Writer.SetPortDescription, webui.Writer.
+// SetPortDescription); o.Force is forwarded unchanged.
+func (s *Switch) SetPortDescription(ctx context.Context, port int, description string, o Write) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
+		return w.SetPortDescription(ctx, port, description, o.Force)
+	})
+}
+
+// SetPortSpeed forces port's speed/duplex, or returns it to auto-negotiation
+// (model.AutoPortSpeed()), dispatched through the resolved backend
+// (o.Backend, or this Switch's default). DISRUPTIVE -- applying either
+// bounces the link -- so the protected-port guard every BackendWriter method
+// applies internally (snmp.Writer.SetPortSpeed, fastpath.Writer.
+// SetPortSpeed, webui.Writer.SetPortSpeed; nsdp.Writer.SetPortSpeed always
+// refuses) fires unless o.Force overrides it. SNMP and NSDP refuse this op
+// by name (wrapping model.ErrUnsupportedCapability): neither backend
+// exposes a genuine CONFIGURED-speed column, only the negotiated rate.
+func (s *Switch) SetPortSpeed(ctx context.Context, port int, speed PortSpeed, o Write) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
+		return w.SetPortSpeed(ctx, port, speed, o.Force)
+	})
+}
+
+// SetFlowControl turns IEEE 802.3x flow control on or off for port,
+// dispatched through the resolved backend (o.Backend, or this Switch's
+// default). Served only over the FASTPATH CLI (fastpath.Writer.
+// SetFlowControl); SNMP, NSDP and HTTP all refuse this op by name (wrapping
+// model.ErrUnsupportedCapability) -- SNMP has never issued a SET against
+// dot3PauseAdminMode, NSDP has no write tag for it, and the HTTP web UIs
+// measured here carry no control for it at all. o.Force is forwarded
+// unchanged to the CLI backend's protected-port guard.
+func (s *Switch) SetFlowControl(ctx context.Context, port int, enabled bool, o Write) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
+		return w.SetFlowControl(ctx, port, enabled, o.Force)
+	})
+}
+
 // SetPVID sets port's default/untagged VLAN, dispatched through the
 // resolved backend (o.Backend, or this Switch's default). The unconditional
 // protected-port guard lives entirely in the BackendWriter (snmp.Writer.
