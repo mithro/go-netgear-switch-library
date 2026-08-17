@@ -1,9 +1,15 @@
 package capabilities
 
 // support_nsdp.go: the NSDP-backend derivation, ported field-for-field from
-// src/netgear_switch/capabilities.py's _nsdp_support (pin go-port-pin-a9e0ebc,
-// lines 222-240). Any discrepancy between this file and that pin is a bug in
-// this file.
+// src/netgear_switch/capabilities.py's _nsdp_support (pin go-port-pin-b26eb1f,
+// lines 469-487). Any discrepancy between this file and that pin is a bug in
+// this file. The refusals map is unchanged by the b26eb1f refresh: none of
+// the 11 new operations gained an NSDP-specific refusal there -- the ones
+// NSDP cannot serve (get_users/get_services/get_syslog/set_port_speed/
+// set_flow_control/set_syslog_enabled/add_syslog_collector) are excluded at
+// the Operation.Backends level instead (types.go), so nsdpSupport is never
+// even asked about them; the one NSDP DOES serve (set_hostname, via the
+// HOSTNAME tag) needed no model-dependent gate either.
 //
 // WARNING (R1, dossier): create_vlan/delete_vlan are DELIBERATELY absent
 // from nsdpRefusals below -- nsdp/writer.go's CreateVlan/DeleteVlan are real,

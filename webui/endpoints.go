@@ -119,6 +119,34 @@ const (
 	HTMLDialectGoAheadXML HTMLDialect = "goahead_xml"
 )
 
+// DialectHasCSRFHash reports whether dialect's pages carry an
+// `<input name="hash">` CSRF token, mirroring Python
+// protocols.http.endpoints.dialect_has_csrf_hash.
+//
+// MEASURED 2026-08-02, not inferred. Live probes found NO hash field on any
+// write page of gsm7252ps -- HTMLDialectXEFastpath (10.1.5.22:
+// vlanStatus, poeInterfaceConfiguration, portPvidConfiguration,
+// vlan_port_cfg, portsConfiguration) -- nor of gs110emx -- HTMLDialectGS110EMX
+// (10.1.5.25: Cf8021q, vlan_pvidsetting). Only the Plus `.cgi` pages
+// (HTMLDialectStandard, HTMLDialectGS105PE) have it -- the surface this
+// package's Plus-style form writer (webui/writer.go's requireCSRF) was
+// originally written against.
+//
+// Exported so the capabilities oracle's HTTP derivation
+// (capabilities/support_http.go) can gate the writers that scrape this
+// token (today: CreateVlan/DeleteVlan) on the SAME measured fact, one
+// definition rather than a re-derived guess. NOT YET consulted by
+// webui.Writer.CreateVlan/DeleteVlan themselves -- they discover the same
+// fact indirectly (and less legibly, via a generic "no CSRF token on page"
+// HttpUnexpectedPageError rather than a named capability refusal) when
+// requireCSRF finds no hash field on a dialect this predicate already knows
+// lacks one. Wiring those two writers to check this predicate up front,
+// the way Python's HttpWriter.create_vlan/delete_vlan now do, is tracked
+// follow-up work, not done by this change.
+func DialectHasCSRFHash(dialect HTMLDialect) bool {
+	return dialect == HTMLDialectStandard || dialect == HTMLDialectGS105PE
+}
+
 // XuiMgmtIPFields names which fields of a FASTPATH XUI management-IP page
 // carry address/mask/gateway/method/apply, mirroring Python
 // protocols.http.endpoints.XuiMgmtIPFields. Deliberately PER MODEL, never

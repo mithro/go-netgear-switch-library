@@ -10,15 +10,16 @@ import (
 // wantModel is the expected shape of one registry entry, hand-verified
 // against src/netgear_switch/registry.py (the normative source).
 type wantModel struct {
-	key          string
-	displayName  string
-	class        model.SwitchClass
-	portCount    int
-	poePortCount int
-	backends     []model.Backend
-	vendorBase   string
-	verified     bool
-	hasMACTable  bool
+	key               string
+	displayName       string
+	class             model.SwitchClass
+	portCount         int
+	poePortCount      int
+	backends          []model.Backend
+	vendorBase        string
+	verified          bool
+	hasMACTable       bool
+	snmpCanCreateVLAN bool
 }
 
 // wantModelsInOrder mirrors the exact order and every field of Python's
@@ -26,114 +27,124 @@ type wantModel struct {
 // re-checking the Python source: the Go registry order is a direct port.
 var wantModelsInOrder = []wantModel{
 	{
-		key:          "m4300-24x",
-		displayName:  "M4300-24X (XSM4324CS)",
-		class:        model.ClassFullyManaged,
-		portCount:    28,
-		poePortCount: 0,
-		backends:     []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendSSH, model.BackendTelnet},
-		vendorBase:   "1.3.6.1.4.1.4526.10",
-		verified:     true,
-		hasMACTable:  true,
+		key:               "m4300-24x",
+		displayName:       "M4300-24X (XSM4324CS)",
+		class:             model.ClassFullyManaged,
+		portCount:         28,
+		poePortCount:      0,
+		backends:          []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendSSH, model.BackendTelnet},
+		vendorBase:        "1.3.6.1.4.1.4526.10",
+		verified:          true,
+		hasMACTable:       true,
+		snmpCanCreateVLAN: true,
 	},
 	{
-		key:          "m4300-16x",
-		displayName:  "M4300-16X (XSM4316)",
-		class:        model.ClassFullyManaged,
-		portCount:    16,
-		poePortCount: 16,
-		backends:     []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendSSH, model.BackendTelnet},
-		vendorBase:   "1.3.6.1.4.1.4526.10",
-		verified:     true,
-		hasMACTable:  true,
+		key:               "m4300-16x",
+		displayName:       "M4300-16X (XSM4316)",
+		class:             model.ClassFullyManaged,
+		portCount:         16,
+		poePortCount:      16,
+		backends:          []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendSSH, model.BackendTelnet},
+		vendorBase:        "1.3.6.1.4.1.4526.10",
+		verified:          true,
+		hasMACTable:       true,
+		snmpCanCreateVLAN: true,
 	},
 	{
-		key:          "gsm7252ps",
-		displayName:  "GSM7252PS",
-		class:        model.ClassFullyManaged,
-		portCount:    52,
-		poePortCount: 48,
-		backends:     []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendSSH, model.BackendTelnet},
-		vendorBase:   "1.3.6.1.4.1.4526.10",
-		verified:     true,
-		hasMACTable:  true,
+		key:               "gsm7252ps",
+		displayName:       "GSM7252PS",
+		class:             model.ClassFullyManaged,
+		portCount:         52,
+		poePortCount:      48,
+		backends:          []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendSSH, model.BackendTelnet},
+		vendorBase:        "1.3.6.1.4.1.4526.10",
+		verified:          true,
+		hasMACTable:       true,
+		snmpCanCreateVLAN: true,
 	},
 	{
-		key:          "gsm7228ps",
-		displayName:  "GSM7228PS (S3300)",
-		class:        model.ClassSmartManagedPro,
-		portCount:    52,
-		poePortCount: 48,
-		backends:     []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendTelnet},
-		vendorBase:   "1.3.6.1.4.1.4526.11",
-		verified:     true,
-		hasMACTable:  true,
+		key:               "gsm7228ps",
+		displayName:       "GSM7228PS (S3300)",
+		class:             model.ClassSmartManagedPro,
+		portCount:         52,
+		poePortCount:      48,
+		backends:          []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendTelnet},
+		vendorBase:        "1.3.6.1.4.1.4526.11",
+		verified:          true,
+		hasMACTable:       true,
+		snmpCanCreateVLAN: true,
 	},
 	{
-		key:          "gs110emx",
-		displayName:  "GS110EMX",
-		class:        model.ClassPlus,
-		portCount:    10,
-		poePortCount: 0,
-		backends:     []model.Backend{model.BackendNSDP, model.BackendHTTP},
-		vendorBase:   "",
-		verified:     true,
-		hasMACTable:  false,
+		key:               "gs110emx",
+		displayName:       "GS110EMX",
+		class:             model.ClassPlus,
+		portCount:         10,
+		poePortCount:      0,
+		backends:          []model.Backend{model.BackendNSDP, model.BackendHTTP},
+		vendorBase:        "",
+		verified:          true,
+		hasMACTable:       false,
+		snmpCanCreateVLAN: true,
 	},
 	{
-		key:          "gs305ep",
-		displayName:  "GS305EP",
-		class:        model.ClassPlus,
-		portCount:    5,
-		poePortCount: 4,
-		backends:     []model.Backend{model.BackendNSDP, model.BackendHTTP},
-		vendorBase:   "",
-		verified:     true,
-		hasMACTable:  false,
+		key:               "gs305ep",
+		displayName:       "GS305EP",
+		class:             model.ClassPlus,
+		portCount:         5,
+		poePortCount:      4,
+		backends:          []model.Backend{model.BackendNSDP, model.BackendHTTP},
+		vendorBase:        "",
+		verified:          true,
+		hasMACTable:       false,
+		snmpCanCreateVLAN: true,
 	},
 	{
-		key:          "m7300",
-		displayName:  "M7300-24XF",
-		class:        model.ClassFullyManaged,
-		portCount:    24,
-		poePortCount: 0,
-		backends:     []model.Backend{model.BackendSNMP},
-		vendorBase:   "1.3.6.1.4.1.4526.10",
-		verified:     false,
-		hasMACTable:  true,
+		key:               "m7300",
+		displayName:       "M7300-24XF",
+		class:             model.ClassFullyManaged,
+		portCount:         24,
+		poePortCount:      0,
+		backends:          []model.Backend{model.BackendSNMP},
+		vendorBase:        "1.3.6.1.4.1.4526.10",
+		verified:          false,
+		hasMACTable:       true,
+		snmpCanCreateVLAN: true,
 	},
 	{
-		key:          "xs748t",
-		displayName:  "XS748T",
-		class:        model.ClassSmartManagedPro,
-		portCount:    48,
-		poePortCount: 0,
-		backends:     []model.Backend{model.BackendSNMP},
-		vendorBase:   "1.3.6.1.4.1.4526.11",
-		verified:     false,
-		hasMACTable:  true,
+		key:               "xs748t",
+		displayName:       "XS748T",
+		class:             model.ClassSmartManagedPro,
+		portCount:         48,
+		poePortCount:      0,
+		backends:          []model.Backend{model.BackendSNMP},
+		vendorBase:        "1.3.6.1.4.1.4526.11",
+		verified:          false,
+		hasMACTable:       true,
+		snmpCanCreateVLAN: true,
 	},
 	{
-		key:          "gs728tpp",
-		displayName:  "GS728TPP",
-		class:        model.ClassSmartManagedPro,
-		portCount:    28,
-		poePortCount: 24,
-		backends:     []model.Backend{model.BackendSNMP, model.BackendHTTP},
-		vendorBase:   "",
-		verified:     true,
-		hasMACTable:  true,
+		key:               "gs728tpp",
+		displayName:       "GS728TPP",
+		class:             model.ClassSmartManagedPro,
+		portCount:         28,
+		poePortCount:      24,
+		backends:          []model.Backend{model.BackendSNMP, model.BackendHTTP},
+		vendorBase:        "",
+		verified:          true,
+		hasMACTable:       true,
+		snmpCanCreateVLAN: false,
 	},
 	{
-		key:          "gs105pe",
-		displayName:  "GS105PE",
-		class:        model.ClassPlus,
-		portCount:    5,
-		poePortCount: 0,
-		backends:     []model.Backend{model.BackendNSDP, model.BackendHTTP},
-		vendorBase:   "",
-		verified:     true,
-		hasMACTable:  false,
+		key:               "gs105pe",
+		displayName:       "GS105PE",
+		class:             model.ClassPlus,
+		portCount:         5,
+		poePortCount:      0,
+		backends:          []model.Backend{model.BackendNSDP, model.BackendHTTP},
+		vendorBase:        "",
+		verified:          true,
+		hasMACTable:       false,
+		snmpCanCreateVLAN: true,
 	},
 }
 
@@ -187,6 +198,9 @@ func TestModelsOrderAndFields(t *testing.T) {
 		}
 		if m.HasMACTable() != want.hasMACTable {
 			t.Errorf("%s: HasMACTable() = %v, want %v", want.key, m.HasMACTable(), want.hasMACTable)
+		}
+		if m.SNMPCanCreateVLAN != want.snmpCanCreateVLAN {
+			t.Errorf("%s: SNMPCanCreateVLAN = %v, want %v", want.key, m.SNMPCanCreateVLAN, want.snmpCanCreateVLAN)
 		}
 	}
 }

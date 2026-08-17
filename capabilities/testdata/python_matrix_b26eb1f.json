@@ -2,6 +2,13 @@
   {
     "model_key": "gs105pe",
     "backend": "http",
+    "operation": "add_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
     "operation": "clear_poe_fault",
     "support": "unsupported",
     "reason_nonempty": true
@@ -24,6 +31,13 @@
     "model_key": "gs105pe",
     "backend": "http",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -79,9 +93,30 @@
   {
     "model_key": "gs105pe",
     "backend": "http",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_syslog",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs105pe",
@@ -94,6 +129,27 @@
     "model_key": "gs105pe",
     "backend": "http",
     "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "remove_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "set_hostname",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -114,7 +170,21 @@
   {
     "model_key": "gs105pe",
     "backend": "http",
+    "operation": "set_port_description",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
     "operation": "set_port_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "set_port_speed",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -124,6 +194,13 @@
     "operation": "set_pvid",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "http",
+    "operation": "set_syslog_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs105pe",
@@ -143,6 +220,13 @@
     "model_key": "gs105pe",
     "backend": "http",
     "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "add_syslog_collector",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -171,6 +255,13 @@
     "model_key": "gs105pe",
     "backend": "nsdp",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -226,9 +317,30 @@
   {
     "model_key": "gs105pe",
     "backend": "nsdp",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_syslog",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs105pe",
@@ -247,6 +359,27 @@
   {
     "model_key": "gs105pe",
     "backend": "nsdp",
+    "operation": "remove_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -261,7 +394,21 @@
   {
     "model_key": "gs105pe",
     "backend": "nsdp",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
     "operation": "set_port_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
+    "operation": "set_port_speed",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -275,6 +422,13 @@
   {
     "model_key": "gs105pe",
     "backend": "nsdp",
+    "operation": "set_syslog_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs105pe",
+    "backend": "nsdp",
     "operation": "set_vlan_membership",
     "support": "supported",
     "reason_nonempty": false
@@ -296,6 +450,13 @@
   {
     "model_key": "gs110emx",
     "backend": "http",
+    "operation": "add_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
     "operation": "clear_poe_fault",
     "support": "unsupported",
     "reason_nonempty": true
@@ -304,8 +465,8 @@
     "model_key": "gs110emx",
     "backend": "http",
     "operation": "create_vlan",
-    "support": "supported",
-    "reason_nonempty": false
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs110emx",
@@ -318,6 +479,13 @@
     "model_key": "gs110emx",
     "backend": "http",
     "operation": "delete_vlan",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -373,9 +541,30 @@
   {
     "model_key": "gs110emx",
     "backend": "http",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_syslog",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs110emx",
@@ -394,6 +583,27 @@
   {
     "model_key": "gs110emx",
     "backend": "http",
+    "operation": "remove_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
     "operation": "set_mgmt_ip",
     "support": "unsupported",
     "reason_nonempty": true
@@ -408,6 +618,13 @@
   {
     "model_key": "gs110emx",
     "backend": "http",
+    "operation": "set_port_description",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -415,9 +632,23 @@
   {
     "model_key": "gs110emx",
     "backend": "http",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
     "operation": "set_pvid",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "http",
+    "operation": "set_syslog_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs110emx",
@@ -437,6 +668,13 @@
     "model_key": "gs110emx",
     "backend": "http",
     "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "add_syslog_collector",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -465,6 +703,13 @@
     "model_key": "gs110emx",
     "backend": "nsdp",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -520,9 +765,30 @@
   {
     "model_key": "gs110emx",
     "backend": "nsdp",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_syslog",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs110emx",
@@ -541,6 +807,27 @@
   {
     "model_key": "gs110emx",
     "backend": "nsdp",
+    "operation": "remove_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -555,7 +842,21 @@
   {
     "model_key": "gs110emx",
     "backend": "nsdp",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
     "operation": "set_port_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
+    "operation": "set_port_speed",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -569,6 +870,13 @@
   {
     "model_key": "gs110emx",
     "backend": "nsdp",
+    "operation": "set_syslog_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs110emx",
+    "backend": "nsdp",
     "operation": "set_vlan_membership",
     "support": "supported",
     "reason_nonempty": false
@@ -590,6 +898,13 @@
   {
     "model_key": "gs305ep",
     "backend": "http",
+    "operation": "add_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
     "operation": "clear_poe_fault",
     "support": "supported",
     "reason_nonempty": false
@@ -614,6 +929,13 @@
     "operation": "delete_vlan",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_hostname",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs305ep",
@@ -667,9 +989,30 @@
   {
     "model_key": "gs305ep",
     "backend": "http",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_syslog",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs305ep",
@@ -682,6 +1025,27 @@
     "model_key": "gs305ep",
     "backend": "http",
     "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "remove_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "set_hostname",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -702,7 +1066,21 @@
   {
     "model_key": "gs305ep",
     "backend": "http",
+    "operation": "set_port_description",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
     "operation": "set_port_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "set_port_speed",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -712,6 +1090,13 @@
     "operation": "set_pvid",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "http",
+    "operation": "set_syslog_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs305ep",
@@ -731,6 +1116,13 @@
     "model_key": "gs305ep",
     "backend": "http",
     "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "add_syslog_collector",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -759,6 +1151,13 @@
     "model_key": "gs305ep",
     "backend": "nsdp",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -814,9 +1213,30 @@
   {
     "model_key": "gs305ep",
     "backend": "nsdp",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_syslog",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs305ep",
@@ -835,6 +1255,27 @@
   {
     "model_key": "gs305ep",
     "backend": "nsdp",
+    "operation": "remove_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -849,7 +1290,21 @@
   {
     "model_key": "gs305ep",
     "backend": "nsdp",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
     "operation": "set_port_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
+    "operation": "set_port_speed",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -863,6 +1318,13 @@
   {
     "model_key": "gs305ep",
     "backend": "nsdp",
+    "operation": "set_syslog_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs305ep",
+    "backend": "nsdp",
     "operation": "set_vlan_membership",
     "support": "supported",
     "reason_nonempty": false
@@ -884,9 +1346,16 @@
   {
     "model_key": "gs728tpp",
     "backend": "http",
-    "operation": "clear_poe_fault",
+    "operation": "add_syslog_collector",
     "support": "unsupported",
     "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "clear_poe_fault",
+    "support": "supported",
+    "reason_nonempty": false
   },
   {
     "model_key": "gs728tpp",
@@ -899,13 +1368,20 @@
     "model_key": "gs728tpp",
     "backend": "http",
     "operation": "cycle_poe",
-    "support": "unsupported",
-    "reason_nonempty": true
+    "support": "supported",
+    "reason_nonempty": false
   },
   {
     "model_key": "gs728tpp",
     "backend": "http",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -961,7 +1437,28 @@
   {
     "model_key": "gs728tpp",
     "backend": "http",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
     "operation": "get_stats",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_syslog",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "get_users",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -982,6 +1479,27 @@
   {
     "model_key": "gs728tpp",
     "backend": "http",
+    "operation": "remove_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
     "operation": "set_mgmt_ip",
     "support": "unsupported",
     "reason_nonempty": true
@@ -990,15 +1508,29 @@
     "model_key": "gs728tpp",
     "backend": "http",
     "operation": "set_poe",
-    "support": "unsupported",
-    "reason_nonempty": true
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
   },
   {
     "model_key": "gs728tpp",
     "backend": "http",
     "operation": "set_port_enabled",
-    "support": "unsupported",
-    "reason_nonempty": true
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "set_port_speed",
+    "support": "supported",
+    "reason_nonempty": false
   },
   {
     "model_key": "gs728tpp",
@@ -1010,9 +1542,16 @@
   {
     "model_key": "gs728tpp",
     "backend": "http",
-    "operation": "set_vlan_membership",
+    "operation": "set_syslog_enabled",
     "support": "unsupported",
     "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "http",
+    "operation": "set_vlan_membership",
+    "support": "supported",
+    "reason_nonempty": false
   },
   {
     "model_key": "gs728tpp",
@@ -1031,6 +1570,13 @@
   {
     "model_key": "gs728tpp",
     "backend": "snmp",
+    "operation": "add_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
     "operation": "clear_poe_fault",
     "support": "supported",
     "reason_nonempty": false
@@ -1039,8 +1585,8 @@
     "model_key": "gs728tpp",
     "backend": "snmp",
     "operation": "create_vlan",
-    "support": "supported",
-    "reason_nonempty": false
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs728tpp",
@@ -1053,6 +1599,13 @@
     "model_key": "gs728tpp",
     "backend": "snmp",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -1108,9 +1661,30 @@
   {
     "model_key": "gs728tpp",
     "backend": "snmp",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_syslog",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs728tpp",
@@ -1129,6 +1703,27 @@
   {
     "model_key": "gs728tpp",
     "backend": "snmp",
+    "operation": "remove_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
     "operation": "set_mgmt_ip",
     "support": "unsupported",
     "reason_nonempty": true
@@ -1143,9 +1738,23 @@
   {
     "model_key": "gs728tpp",
     "backend": "snmp",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gs728tpp",
@@ -1157,6 +1766,13 @@
   {
     "model_key": "gs728tpp",
     "backend": "snmp",
+    "operation": "set_syslog_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gs728tpp",
+    "backend": "snmp",
     "operation": "set_vlan_membership",
     "support": "supported",
     "reason_nonempty": false
@@ -1178,6 +1794,13 @@
   {
     "model_key": "gsm7228ps",
     "backend": "http",
+    "operation": "add_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
     "operation": "clear_poe_fault",
     "support": "supported",
     "reason_nonempty": false
@@ -1186,8 +1809,8 @@
     "model_key": "gsm7228ps",
     "backend": "http",
     "operation": "create_vlan",
-    "support": "supported",
-    "reason_nonempty": false
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gsm7228ps",
@@ -1200,8 +1823,15 @@
     "model_key": "gsm7228ps",
     "backend": "http",
     "operation": "delete_vlan",
-    "support": "supported",
-    "reason_nonempty": false
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_hostname",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gsm7228ps",
@@ -1255,9 +1885,30 @@
   {
     "model_key": "gsm7228ps",
     "backend": "http",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gsm7228ps",
@@ -1270,6 +1921,27 @@
     "model_key": "gsm7228ps",
     "backend": "http",
     "operation": "nsdp_device",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "remove_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "set_hostname",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -1290,6 +1962,13 @@
   {
     "model_key": "gsm7228ps",
     "backend": "http",
+    "operation": "set_port_description",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -1297,9 +1976,23 @@
   {
     "model_key": "gsm7228ps",
     "backend": "http",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
     "operation": "set_pvid",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "http",
+    "operation": "set_syslog_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gsm7228ps",
@@ -1319,6 +2012,13 @@
     "model_key": "gsm7228ps",
     "backend": "http",
     "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "add_syslog_collector",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -1347,6 +2047,13 @@
     "model_key": "gsm7228ps",
     "backend": "snmp",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -1402,9 +2109,30 @@
   {
     "model_key": "gsm7228ps",
     "backend": "snmp",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gsm7228ps",
@@ -1423,6 +2151,27 @@
   {
     "model_key": "gsm7228ps",
     "backend": "snmp",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -1437,6 +2186,13 @@
   {
     "model_key": "gsm7228ps",
     "backend": "snmp",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -1444,7 +2200,21 @@
   {
     "model_key": "gsm7228ps",
     "backend": "snmp",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "snmp",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -1472,6 +2242,13 @@
   {
     "model_key": "gsm7228ps",
     "backend": "telnet",
+    "operation": "add_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
     "operation": "clear_poe_fault",
     "support": "supported",
     "reason_nonempty": false
@@ -1494,6 +2271,13 @@
     "model_key": "gsm7228ps",
     "backend": "telnet",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -1549,7 +2333,28 @@
   {
     "model_key": "gsm7228ps",
     "backend": "telnet",
+    "operation": "get_services",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
     "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "get_users",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -1570,6 +2375,27 @@
   {
     "model_key": "gsm7228ps",
     "backend": "telnet",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "set_flow_control",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -1584,7 +2410,21 @@
   {
     "model_key": "gsm7228ps",
     "backend": "telnet",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
     "operation": "set_port_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
+    "operation": "set_port_speed",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -1598,6 +2438,13 @@
   {
     "model_key": "gsm7228ps",
     "backend": "telnet",
+    "operation": "set_syslog_enabled",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7228ps",
+    "backend": "telnet",
     "operation": "set_vlan_membership",
     "support": "supported",
     "reason_nonempty": false
@@ -1619,6 +2466,13 @@
   {
     "model_key": "gsm7252ps",
     "backend": "http",
+    "operation": "add_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
     "operation": "clear_poe_fault",
     "support": "supported",
     "reason_nonempty": false
@@ -1627,8 +2481,8 @@
     "model_key": "gsm7252ps",
     "backend": "http",
     "operation": "create_vlan",
-    "support": "supported",
-    "reason_nonempty": false
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gsm7252ps",
@@ -1641,8 +2495,15 @@
     "model_key": "gsm7252ps",
     "backend": "http",
     "operation": "delete_vlan",
-    "support": "supported",
-    "reason_nonempty": false
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_hostname",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gsm7252ps",
@@ -1696,7 +2557,28 @@
   {
     "model_key": "gsm7252ps",
     "backend": "http",
+    "operation": "get_services",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
     "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "get_users",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -1717,6 +2599,27 @@
   {
     "model_key": "gsm7252ps",
     "backend": "http",
+    "operation": "remove_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "set_hostname",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -1731,6 +2634,13 @@
   {
     "model_key": "gsm7252ps",
     "backend": "http",
+    "operation": "set_port_description",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -1738,9 +2648,23 @@
   {
     "model_key": "gsm7252ps",
     "backend": "http",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
     "operation": "set_pvid",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "http",
+    "operation": "set_syslog_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gsm7252ps",
@@ -1760,6 +2684,13 @@
     "model_key": "gsm7252ps",
     "backend": "http",
     "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "add_syslog_collector",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -1788,6 +2719,13 @@
     "model_key": "gsm7252ps",
     "backend": "snmp",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -1843,9 +2781,30 @@
   {
     "model_key": "gsm7252ps",
     "backend": "snmp",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "gsm7252ps",
@@ -1864,6 +2823,27 @@
   {
     "model_key": "gsm7252ps",
     "backend": "snmp",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -1878,6 +2858,13 @@
   {
     "model_key": "gsm7252ps",
     "backend": "snmp",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -1885,7 +2872,21 @@
   {
     "model_key": "gsm7252ps",
     "backend": "snmp",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "snmp",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -1913,6 +2914,13 @@
   {
     "model_key": "gsm7252ps",
     "backend": "ssh",
+    "operation": "add_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
     "operation": "clear_poe_fault",
     "support": "supported",
     "reason_nonempty": false
@@ -1935,6 +2943,13 @@
     "model_key": "gsm7252ps",
     "backend": "ssh",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -1990,7 +3005,28 @@
   {
     "model_key": "gsm7252ps",
     "backend": "ssh",
+    "operation": "get_services",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
     "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "get_users",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2011,6 +3047,27 @@
   {
     "model_key": "gsm7252ps",
     "backend": "ssh",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "set_flow_control",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -2025,6 +3082,13 @@
   {
     "model_key": "gsm7252ps",
     "backend": "ssh",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -2032,7 +3096,21 @@
   {
     "model_key": "gsm7252ps",
     "backend": "ssh",
+    "operation": "set_port_speed",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "ssh",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2054,6 +3132,13 @@
     "model_key": "gsm7252ps",
     "backend": "ssh",
     "operation": "upload_certificate_scp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "add_syslog_collector",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2082,6 +3167,13 @@
     "model_key": "gsm7252ps",
     "backend": "telnet",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2137,7 +3229,28 @@
   {
     "model_key": "gsm7252ps",
     "backend": "telnet",
+    "operation": "get_services",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
     "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "get_users",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2158,6 +3271,27 @@
   {
     "model_key": "gsm7252ps",
     "backend": "telnet",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "set_flow_control",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -2172,6 +3306,13 @@
   {
     "model_key": "gsm7252ps",
     "backend": "telnet",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -2179,7 +3320,21 @@
   {
     "model_key": "gsm7252ps",
     "backend": "telnet",
+    "operation": "set_port_speed",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "gsm7252ps",
+    "backend": "telnet",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2207,6 +3362,13 @@
   {
     "model_key": "m4300-16x",
     "backend": "http",
+    "operation": "add_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
     "operation": "clear_poe_fault",
     "support": "supported",
     "reason_nonempty": false
@@ -2215,8 +3377,8 @@
     "model_key": "m4300-16x",
     "backend": "http",
     "operation": "create_vlan",
-    "support": "supported",
-    "reason_nonempty": false
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "m4300-16x",
@@ -2229,8 +3391,15 @@
     "model_key": "m4300-16x",
     "backend": "http",
     "operation": "delete_vlan",
-    "support": "supported",
-    "reason_nonempty": false
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_hostname",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "m4300-16x",
@@ -2284,7 +3453,28 @@
   {
     "model_key": "m4300-16x",
     "backend": "http",
+    "operation": "get_services",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
     "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "get_users",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2305,6 +3495,27 @@
   {
     "model_key": "m4300-16x",
     "backend": "http",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "set_hostname",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -2319,6 +3530,13 @@
   {
     "model_key": "m4300-16x",
     "backend": "http",
+    "operation": "set_port_description",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -2326,9 +3544,23 @@
   {
     "model_key": "m4300-16x",
     "backend": "http",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
     "operation": "set_pvid",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "http",
+    "operation": "set_syslog_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "m4300-16x",
@@ -2348,6 +3580,13 @@
     "model_key": "m4300-16x",
     "backend": "http",
     "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "add_syslog_collector",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -2376,6 +3615,13 @@
     "model_key": "m4300-16x",
     "backend": "snmp",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2431,9 +3677,30 @@
   {
     "model_key": "m4300-16x",
     "backend": "snmp",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "m4300-16x",
@@ -2452,6 +3719,27 @@
   {
     "model_key": "m4300-16x",
     "backend": "snmp",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -2466,6 +3754,13 @@
   {
     "model_key": "m4300-16x",
     "backend": "snmp",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -2473,7 +3768,21 @@
   {
     "model_key": "m4300-16x",
     "backend": "snmp",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "snmp",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2501,6 +3810,13 @@
   {
     "model_key": "m4300-16x",
     "backend": "ssh",
+    "operation": "add_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
     "operation": "clear_poe_fault",
     "support": "supported",
     "reason_nonempty": false
@@ -2523,6 +3839,13 @@
     "model_key": "m4300-16x",
     "backend": "ssh",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2578,7 +3901,28 @@
   {
     "model_key": "m4300-16x",
     "backend": "ssh",
+    "operation": "get_services",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
     "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "get_users",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2599,6 +3943,27 @@
   {
     "model_key": "m4300-16x",
     "backend": "ssh",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "set_flow_control",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -2613,6 +3978,13 @@
   {
     "model_key": "m4300-16x",
     "backend": "ssh",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -2620,7 +3992,21 @@
   {
     "model_key": "m4300-16x",
     "backend": "ssh",
+    "operation": "set_port_speed",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "ssh",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2642,6 +4028,13 @@
     "model_key": "m4300-16x",
     "backend": "ssh",
     "operation": "upload_certificate_scp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "add_syslog_collector",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2670,6 +4063,13 @@
     "model_key": "m4300-16x",
     "backend": "telnet",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2725,7 +4125,28 @@
   {
     "model_key": "m4300-16x",
     "backend": "telnet",
+    "operation": "get_services",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
     "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "get_users",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2746,6 +4167,27 @@
   {
     "model_key": "m4300-16x",
     "backend": "telnet",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "set_flow_control",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -2760,6 +4202,13 @@
   {
     "model_key": "m4300-16x",
     "backend": "telnet",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -2767,7 +4216,21 @@
   {
     "model_key": "m4300-16x",
     "backend": "telnet",
+    "operation": "set_port_speed",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-16x",
+    "backend": "telnet",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2795,6 +4258,13 @@
   {
     "model_key": "m4300-24x",
     "backend": "http",
+    "operation": "add_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
     "operation": "clear_poe_fault",
     "support": "unsupported",
     "reason_nonempty": true
@@ -2803,8 +4273,8 @@
     "model_key": "m4300-24x",
     "backend": "http",
     "operation": "create_vlan",
-    "support": "supported",
-    "reason_nonempty": false
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "m4300-24x",
@@ -2817,8 +4287,15 @@
     "model_key": "m4300-24x",
     "backend": "http",
     "operation": "delete_vlan",
-    "support": "supported",
-    "reason_nonempty": false
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_hostname",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "m4300-24x",
@@ -2872,7 +4349,28 @@
   {
     "model_key": "m4300-24x",
     "backend": "http",
+    "operation": "get_services",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
     "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "get_users",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -2893,6 +4391,27 @@
   {
     "model_key": "m4300-24x",
     "backend": "http",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "set_hostname",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -2907,6 +4426,13 @@
   {
     "model_key": "m4300-24x",
     "backend": "http",
+    "operation": "set_port_description",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -2914,9 +4440,23 @@
   {
     "model_key": "m4300-24x",
     "backend": "http",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
     "operation": "set_pvid",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "http",
+    "operation": "set_syslog_enabled",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "m4300-24x",
@@ -2936,6 +4476,13 @@
     "model_key": "m4300-24x",
     "backend": "http",
     "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "add_syslog_collector",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -2964,6 +4511,13 @@
     "model_key": "m4300-24x",
     "backend": "snmp",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -3019,9 +4573,30 @@
   {
     "model_key": "m4300-24x",
     "backend": "snmp",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "m4300-24x",
@@ -3040,6 +4615,27 @@
   {
     "model_key": "m4300-24x",
     "backend": "snmp",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -3054,6 +4650,13 @@
   {
     "model_key": "m4300-24x",
     "backend": "snmp",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -3061,7 +4664,21 @@
   {
     "model_key": "m4300-24x",
     "backend": "snmp",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "snmp",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -3089,6 +4706,13 @@
   {
     "model_key": "m4300-24x",
     "backend": "ssh",
+    "operation": "add_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
     "operation": "clear_poe_fault",
     "support": "unsupported",
     "reason_nonempty": true
@@ -3111,6 +4735,13 @@
     "model_key": "m4300-24x",
     "backend": "ssh",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -3166,7 +4797,28 @@
   {
     "model_key": "m4300-24x",
     "backend": "ssh",
+    "operation": "get_services",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
     "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "get_users",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -3187,6 +4839,27 @@
   {
     "model_key": "m4300-24x",
     "backend": "ssh",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "set_flow_control",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -3201,6 +4874,13 @@
   {
     "model_key": "m4300-24x",
     "backend": "ssh",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -3208,7 +4888,21 @@
   {
     "model_key": "m4300-24x",
     "backend": "ssh",
+    "operation": "set_port_speed",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "ssh",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -3230,6 +4924,13 @@
     "model_key": "m4300-24x",
     "backend": "ssh",
     "operation": "upload_certificate_scp",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "add_syslog_collector",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -3258,6 +4959,13 @@
     "model_key": "m4300-24x",
     "backend": "telnet",
     "operation": "delete_vlan",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_hostname",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -3313,7 +5021,28 @@
   {
     "model_key": "m4300-24x",
     "backend": "telnet",
+    "operation": "get_services",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
     "operation": "get_stats",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "get_users",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -3334,6 +5063,27 @@
   {
     "model_key": "m4300-24x",
     "backend": "telnet",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "set_flow_control",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -3348,6 +5098,13 @@
   {
     "model_key": "m4300-24x",
     "backend": "telnet",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -3355,7 +5112,21 @@
   {
     "model_key": "m4300-24x",
     "backend": "telnet",
+    "operation": "set_port_speed",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m4300-24x",
+    "backend": "telnet",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -3379,6 +5150,13 @@
     "operation": "upload_certificate_scp",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "add_syslog_collector",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "m7300",
@@ -3411,6 +5189,13 @@
   {
     "model_key": "m7300",
     "backend": "snmp",
+    "operation": "get_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
     "operation": "get_lldp",
     "support": "supported",
     "reason_nonempty": false
@@ -3460,9 +5245,30 @@
   {
     "model_key": "m7300",
     "backend": "snmp",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "m7300",
@@ -3481,6 +5287,27 @@
   {
     "model_key": "m7300",
     "backend": "snmp",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -3495,6 +5322,13 @@
   {
     "model_key": "m7300",
     "backend": "snmp",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -3502,7 +5336,21 @@
   {
     "model_key": "m7300",
     "backend": "snmp",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "m7300",
+    "backend": "snmp",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },
@@ -3524,6 +5372,13 @@
     "model_key": "m7300",
     "backend": "snmp",
     "operation": "upload_certificate_scp",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "add_syslog_collector",
     "support": "unsupported",
     "reason_nonempty": true
   },
@@ -3558,6 +5413,13 @@
   {
     "model_key": "xs748t",
     "backend": "snmp",
+    "operation": "get_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
     "operation": "get_lldp",
     "support": "supported",
     "reason_nonempty": false
@@ -3607,9 +5469,30 @@
   {
     "model_key": "xs748t",
     "backend": "snmp",
+    "operation": "get_services",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
     "operation": "get_stats",
     "support": "supported",
     "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "get_syslog",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "get_users",
+    "support": "unsupported",
+    "reason_nonempty": true
   },
   {
     "model_key": "xs748t",
@@ -3628,6 +5511,27 @@
   {
     "model_key": "xs748t",
     "backend": "snmp",
+    "operation": "remove_syslog_collector",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "set_flow_control",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "set_hostname",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
     "operation": "set_mgmt_ip",
     "support": "supported",
     "reason_nonempty": false
@@ -3642,6 +5546,13 @@
   {
     "model_key": "xs748t",
     "backend": "snmp",
+    "operation": "set_port_description",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
     "operation": "set_port_enabled",
     "support": "supported",
     "reason_nonempty": false
@@ -3649,7 +5560,21 @@
   {
     "model_key": "xs748t",
     "backend": "snmp",
+    "operation": "set_port_speed",
+    "support": "unsupported",
+    "reason_nonempty": true
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
     "operation": "set_pvid",
+    "support": "supported",
+    "reason_nonempty": false
+  },
+  {
+    "model_key": "xs748t",
+    "backend": "snmp",
+    "operation": "set_syslog_enabled",
     "support": "supported",
     "reason_nonempty": false
   },

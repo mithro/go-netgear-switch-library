@@ -1,8 +1,8 @@
 package capabilities
 
 // types_test.go: pins the Operations table's shape against the pinned
-// Python capabilities.py (a9e0ebc) verbatim -- counts, names, kinds, and the
-// three backend-restricted operations.
+// Python capabilities.py (b26eb1f) verbatim -- counts, names, kinds, and the
+// backend-restricted operations.
 
 import (
 	"errors"
@@ -12,14 +12,14 @@ import (
 )
 
 func TestOperationTableShape(t *testing.T) {
-	if len(ReadOperations) != 10 {
-		t.Errorf("len(ReadOperations) = %d, want 10", len(ReadOperations))
+	if len(ReadOperations) != 14 {
+		t.Errorf("len(ReadOperations) = %d, want 14", len(ReadOperations))
 	}
-	if len(WriteOperations) != 11 {
-		t.Errorf("len(WriteOperations) = %d, want 11", len(WriteOperations))
+	if len(WriteOperations) != 18 {
+		t.Errorf("len(WriteOperations) = %d, want 18", len(WriteOperations))
 	}
-	if len(Operations) != 21 {
-		t.Errorf("len(Operations) = %d, want 21", len(Operations))
+	if len(Operations) != 32 {
+		t.Errorf("len(Operations) = %d, want 32", len(Operations))
 	}
 	for _, op := range ReadOperations {
 		if op.Kind != OperationKindRead {
@@ -36,12 +36,16 @@ func TestOperationTableShape(t *testing.T) {
 func TestOperationNamesExactAndOrdered(t *testing.T) {
 	wantRead := []string{
 		"get_ports", "get_stats", "get_vlans", "get_pvids", "get_lldp",
-		"get_macs", "get_poe", "get_sensors", "get_mgmt_ip", "nsdp_device",
+		"get_macs", "get_poe", "get_sensors", "get_mgmt_ip", "get_hostname",
+		"get_users", "get_services", "get_syslog", "nsdp_device",
 	}
 	wantWrite := []string{
 		"set_port_enabled", "set_poe", "cycle_poe", "clear_poe_fault",
+		"set_port_description", "set_port_speed", "set_flow_control",
 		"set_pvid", "set_vlan_membership", "create_vlan", "delete_vlan",
-		"set_mgmt_ip", "upload_certificate", "upload_certificate_scp",
+		"set_mgmt_ip", "set_hostname", "set_syslog_enabled",
+		"add_syslog_collector", "remove_syslog_collector",
+		"upload_certificate", "upload_certificate_scp",
 	}
 	for i, want := range wantRead {
 		if ReadOperations[i].Name != want {
@@ -92,6 +96,41 @@ func TestBackendRestrictedOperations(t *testing.T) {
 	}
 	if getPorts.Backends != nil {
 		t.Errorf("get_ports.Backends = %v, want nil (unrestricted)", getPorts.Backends)
+	}
+
+	setPortDescription, err := OperationByName("set_port_description")
+	if err != nil {
+		t.Fatalf("OperationByName(set_port_description): %v", err)
+	}
+	if setPortDescription.Backends != nil {
+		t.Errorf("set_port_description.Backends = %v, want nil (unrestricted)", setPortDescription.Backends)
+	}
+
+	wantBackends := map[string]map[model.Backend]bool{
+		"get_users":               {model.BackendHTTP: true, model.BackendSSH: true, model.BackendTelnet: true, model.BackendConsole: true},
+		"get_services":            {model.BackendHTTP: true, model.BackendSSH: true, model.BackendTelnet: true, model.BackendConsole: true},
+		"get_syslog":              {model.BackendSNMP: true, model.BackendHTTP: true, model.BackendSSH: true, model.BackendTelnet: true, model.BackendConsole: true},
+		"set_port_speed":          {model.BackendHTTP: true, model.BackendSSH: true, model.BackendTelnet: true, model.BackendConsole: true},
+		"set_flow_control":        {model.BackendSSH: true, model.BackendTelnet: true, model.BackendConsole: true},
+		"set_hostname":            {model.BackendSNMP: true, model.BackendNSDP: true, model.BackendHTTP: true, model.BackendSSH: true, model.BackendTelnet: true, model.BackendConsole: true},
+		"set_syslog_enabled":      {model.BackendSNMP: true, model.BackendSSH: true, model.BackendTelnet: true, model.BackendConsole: true},
+		"add_syslog_collector":    {model.BackendSSH: true, model.BackendTelnet: true, model.BackendConsole: true},
+		"remove_syslog_collector": {model.BackendSNMP: true, model.BackendHTTP: true, model.BackendSSH: true, model.BackendTelnet: true, model.BackendConsole: true},
+	}
+	for name, want := range wantBackends {
+		op, err := OperationByName(name)
+		if err != nil {
+			t.Fatalf("OperationByName(%s): %v", name, err)
+		}
+		if len(op.Backends) != len(want) {
+			t.Errorf("%s.Backends = %v, want %d entries", name, op.Backends, len(want))
+			continue
+		}
+		for _, b := range op.Backends {
+			if !want[b] {
+				t.Errorf("%s.Backends contains unexpected %v", name, b)
+			}
+		}
 	}
 }
 

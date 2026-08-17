@@ -1,7 +1,7 @@
 package capabilities
 
-// support_snmp_test.go: pins snmpSupport's 3 branches against Python's
-// _snmp_support (capabilities.py:197-219).
+// support_snmp_test.go: pins snmpSupport's branches against Python's
+// _snmp_support (capabilities.py:419-466).
 
 import (
 	"testing"
@@ -64,6 +64,71 @@ func TestSNMPSupportDefaultSupported(t *testing.T) {
 	}
 	if reason != "" {
 		t.Errorf("snmpSupport(m4300-24x, get_ports) reason = %q, want empty", reason)
+	}
+}
+
+func TestSNMPSupportCannotCreateVLAN(t *testing.T) {
+	// gs728tpp: the one model with SNMPCanCreateVLAN == false.
+	m := mustModelSnmp(t, "gs728tpp")
+	if m.SNMPCanCreateVLAN {
+		t.Fatalf("gs728tpp.SNMPCanCreateVLAN = true, want false (test assumption broken)")
+	}
+	op, err := OperationByName("create_vlan")
+	if err != nil {
+		t.Fatalf("OperationByName(create_vlan): %v", err)
+	}
+	support, reason := snmpSupport(m, op)
+	if support != SupportUnsupported {
+		t.Errorf("snmpSupport(gs728tpp, create_vlan) = %v, want SupportUnsupported", support)
+	}
+	if reason == "" {
+		t.Error("snmpSupport(gs728tpp, create_vlan) reason is empty")
+	}
+
+	// Every other SNMP model can create a VLAN.
+	m2 := mustModelSnmp(t, "m4300-24x")
+	support2, reason2 := snmpSupport(m2, op)
+	if support2 != SupportSupported {
+		t.Errorf("snmpSupport(m4300-24x, create_vlan) = %v, want SupportSupported", support2)
+	}
+	if reason2 != "" {
+		t.Errorf("snmpSupport(m4300-24x, create_vlan) reason = %q, want empty", reason2)
+	}
+}
+
+func TestSNMPSupportSyslogNoVendorOIDs(t *testing.T) {
+	// gs728tpp: SNMPVendorBase == "" (no 4526 subtree), so the logging
+	// columns (get_syslog/set_syslog_enabled/remove_syslog_collector) are
+	// all refused the same way set_mgmt_ip's vendor-only write columns are.
+	m := mustModelSnmp(t, "gs728tpp")
+	for _, opName := range []string{"get_syslog", "set_syslog_enabled", "remove_syslog_collector"} {
+		op, err := OperationByName(opName)
+		if err != nil {
+			t.Fatalf("OperationByName(%q): %v", opName, err)
+		}
+		support, reason := snmpSupport(m, op)
+		if support != SupportUnsupported {
+			t.Errorf("snmpSupport(gs728tpp, %s) = %v, want SupportUnsupported", opName, support)
+		}
+		if reason == "" {
+			t.Errorf("snmpSupport(gs728tpp, %s) reason is empty", opName)
+		}
+	}
+
+	// A model with a vendor OID subtree serves all three normally.
+	m2 := mustModelSnmp(t, "m4300-24x")
+	for _, opName := range []string{"get_syslog", "set_syslog_enabled", "remove_syslog_collector"} {
+		op, err := OperationByName(opName)
+		if err != nil {
+			t.Fatalf("OperationByName(%q): %v", opName, err)
+		}
+		support, reason := snmpSupport(m2, op)
+		if support != SupportSupported {
+			t.Errorf("snmpSupport(m4300-24x, %s) = %v, want SupportSupported", opName, support)
+		}
+		if reason != "" {
+			t.Errorf("snmpSupport(m4300-24x, %s) reason = %q, want empty", opName, reason)
+		}
 	}
 }
 

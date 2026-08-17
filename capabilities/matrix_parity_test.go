@@ -2,10 +2,29 @@ package capabilities
 
 // matrix_parity_test.go: the capstone faithfulness gate. Pins Matrix(nil,
 // nil)'s verdicts against a golden fixture generated directly from the
-// pinned Python capabilities.py (go-port-pin-a9e0ebc's matrix()) -- see
-// testdata/python_matrix_a9e0ebc.json's own generation command, recorded in
-// this repo's implementation plan (docs/superpowers/plans/
-// 2026-08-13-capabilities-oracle.md, Task 10).
+// pinned Python capabilities.py (go-port-pin-b26eb1f's matrix()):
+//
+//	uv run --extra async --extra http python3 -c "
+//	import json
+//	from netgear_switch.capabilities import matrix
+//	rows = [
+//	    {
+//	        'model_key': c.model_key,
+//	        'backend': c.backend.name.lower(),
+//	        'operation': c.operation.name,
+//	        'support': c.support.value,
+//	        'reason_nonempty': bool(c.reason),
+//	    }
+//	    for c in matrix()
+//	]
+//	rows.sort(key=lambda r: (r['model_key'], r['backend'], r['operation']))
+//	print(json.dumps(rows, indent=2))
+//	" > testdata/python_matrix_b26eb1f.json
+//
+// run from the pinned worktree
+// (python-netgear-switch-library/.claude/worktrees/go-port-pin-b26eb1f), with
+// the output redirected into THIS repo (the pin is read-only). See
+// testdata/python_matrix_b26eb1f.json.
 //
 // Deliberately does NOT compare reason text byte-for-byte -- this plan's
 // Global Constraints document why (Go and Python's reason prose has already
@@ -29,7 +48,7 @@ type pythonMatrixRow struct {
 
 func loadPythonMatrixFixture(t *testing.T) []pythonMatrixRow {
 	t.Helper()
-	data, err := os.ReadFile("testdata/python_matrix_a9e0ebc.json")
+	data, err := os.ReadFile("testdata/python_matrix_b26eb1f.json")
 	if err != nil {
 		t.Fatalf("reading golden fixture: %v", err)
 	}
@@ -49,8 +68,9 @@ func TestGoMatrixMatchesPinnedPythonMatrix(t *testing.T) {
 	}
 	if len(goCaps) != len(pythonRows) {
 		t.Fatalf("len(Matrix()) = %d, want %d (pinned Python row count) -- "+
-			"if this is exactly 21 off, check model/registry.go's per-model "+
-			"backend counts against the pinned registry.py first",
+			"if the difference is a multiple of 32 (the op count), check "+
+			"model/registry.go's per-model backend counts against the pinned "+
+			"registry.py first",
 			len(goCaps), len(pythonRows))
 	}
 

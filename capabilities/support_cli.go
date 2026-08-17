@@ -2,12 +2,17 @@ package capabilities
 
 // support_cli.go: the CLI-backend (SSH/Telnet/Console) derivation, ported
 // field-for-field from src/netgear_switch/capabilities.py's _cli_support
-// (pin go-port-pin-a9e0ebc, lines 314-341), plus the Python _dispatch
+// (pin go-port-pin-b26eb1f, lines 662-689), plus the Python _dispatch
 // module's cli_reads_supported/cli_writes_supported (_dispatch.py:202-234),
 // which Go has no direct equivalent of yet -- re-derived here directly from
 // fastpath.CLISpec rather than duplicated as a separate exported helper,
 // since nothing else in this codebase needs it today. Any discrepancy
 // between this file and the pin is a bug in this file.
+//
+// Unchanged by the b26eb1f refresh's 11 new operations: every one of them is
+// gated CLI-side only by the same generic ReadsVerified/WritesVerified check
+// every other op already goes through (cliReadsSupported/cliWritesSupported
+// below) -- none needed a per-model or per-op CLI refusal of its own.
 
 import (
 	"fmt"

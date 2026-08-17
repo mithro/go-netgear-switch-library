@@ -1,7 +1,7 @@
 package capabilities
 
 // support_http_test.go: pins httpSupport against Python's _http_support and
-// _http_path_for (capabilities.py:243-311).
+// _http_path_for (capabilities.py:516-659).
 
 import (
 	"strings"
@@ -102,6 +102,191 @@ func TestHTTPSupportSetMgmtIPNeedsBothPageAndFields(t *testing.T) {
 	support, _ := httpSupport(m, spec, op)
 	if support != SupportUnsupported {
 		t.Errorf("httpSupport(gs110emx, set_mgmt_ip) = %v, want SupportUnsupported (no XUI mgmt-IP write page)", support)
+	}
+}
+
+func TestHTTPSupportCSRFGate(t *testing.T) {
+	op, err := OperationByName("create_vlan")
+	if err != nil {
+		t.Fatalf("OperationByName(create_vlan): %v", err)
+	}
+	// gsm7252ps: XE_FASTPATH dialect, no CSRF hash on its write pages.
+	m, spec := mustHTTPSpec(t, "gsm7252ps")
+	support, reason := httpSupport(m, spec, op)
+	if support != SupportUnsupported {
+		t.Errorf("httpSupport(gsm7252ps, create_vlan) = %v, want SupportUnsupported (no CSRF hash)", support)
+	}
+	if !strings.Contains(reason, "CSRF") {
+		t.Errorf("httpSupport(gsm7252ps, create_vlan) reason = %q, want it to mention CSRF", reason)
+	}
+	// gs305ep: STANDARD dialect, has the CSRF hash.
+	m2, spec2 := mustHTTPSpec(t, "gs305ep")
+	support2, _ := httpSupport(m2, spec2, op)
+	if support2 != SupportSupported {
+		t.Errorf("httpSupport(gs305ep, create_vlan) = %v, want SupportSupported (CSRF hash present)", support2)
+	}
+	// gs728tpp: GoAhead XML-API dialect, exempt from the CSRF gate entirely
+	// (its writer never scrapes a token).
+	m3, spec3 := mustHTTPSpec(t, "gs728tpp")
+	support3, reason3 := httpSupport(m3, spec3, op)
+	if support3 != SupportSupported {
+		t.Errorf("httpSupport(gs728tpp, create_vlan) = %v, want SupportSupported (XML-API dialect is CSRF-exempt)", support3)
+	}
+	if reason3 != "" {
+		t.Errorf("httpSupport(gs728tpp, create_vlan) reason = %q, want empty", reason3)
+	}
+}
+
+func TestHTTPSupportXMLAPIWrites(t *testing.T) {
+	m, spec := mustHTTPSpec(t, "gs728tpp")
+	for _, opName := range []string{
+		"set_vlan_membership", "set_port_enabled", "set_poe", "set_pvid",
+		"create_vlan", "delete_vlan", "cycle_poe", "clear_poe_fault",
+		"set_port_description", "set_hostname", "set_port_speed",
+	} {
+		op, err := OperationByName(opName)
+		if err != nil {
+			t.Fatalf("OperationByName(%q): %v", opName, err)
+		}
+		support, reason := httpSupport(m, spec, op)
+		if support != SupportSupported {
+			t.Errorf("httpSupport(gs728tpp, %s) = %v, want SupportSupported (grounded XML-API write)", opName, support)
+		}
+		if reason != "" {
+			t.Errorf("httpSupport(gs728tpp, %s) reason = %q, want empty", opName, reason)
+		}
+	}
+	// set_flow_control has no grounded XML-API body builder, unlike the ops
+	// above -- xmlAPIWrites deliberately omits it.
+	flowCtl, err := OperationByName("set_flow_control")
+	if err != nil {
+		t.Fatalf("OperationByName(set_flow_control): %v", err)
+	}
+	if path := httpPathFor(spec, flowCtl); path != "" {
+		t.Errorf("httpPathFor(gs728tpp, set_flow_control) = %q, want \"\" (no XML-API write body)", path)
+	}
+}
+
+func TestHTTPSupportGetHostnameGate(t *testing.T) {
+	op, err := OperationByName("get_hostname")
+	if err != nil {
+		t.Fatalf("OperationByName(get_hostname): %v", err)
+	}
+	// gs110emx, gs105pe and gs728tpp (GoAhead) all carry the field.
+	for _, key := range []string{"gs110emx", "gs105pe", "gs728tpp"} {
+		m, spec := mustHTTPSpec(t, key)
+		support, reason := httpSupport(m, spec, op)
+		if support != SupportSupported {
+			t.Errorf("httpSupport(%s, get_hostname) = %v, want SupportSupported", key, support)
+		}
+		if reason != "" {
+			t.Errorf("httpSupport(%s, get_hostname) reason = %q, want empty", key, reason)
+		}
+	}
+	// gs305ep (STANDARD dialect) has no identity-page host-name field.
+	m, spec := mustHTTPSpec(t, "gs305ep")
+	support, reason := httpSupport(m, spec, op)
+	if support != SupportUnsupported {
+		t.Errorf("httpSupport(gs305ep, get_hostname) = %v, want SupportUnsupported", support)
+	}
+	if reason == "" {
+		t.Error("httpSupport(gs305ep, get_hostname) reason is empty")
+	}
+}
+
+func TestHTTPSupportGetUsersGate(t *testing.T) {
+	op, err := OperationByName("get_users")
+	if err != nil {
+		t.Fatalf("OperationByName(get_users): %v", err)
+	}
+	m, spec := mustHTTPSpec(t, "gsm7252ps")
+	support, reason := httpSupport(m, spec, op)
+	if support != SupportSupported {
+		t.Errorf("httpSupport(gsm7252ps, get_users) = %v, want SupportSupported", support)
+	}
+	if reason != "" {
+		t.Errorf("httpSupport(gsm7252ps, get_users) reason = %q, want empty", reason)
+	}
+	// gsm7228ps: its own users page 404s, so UsersPath is unset.
+	m2, spec2 := mustHTTPSpec(t, "gsm7228ps")
+	support2, reason2 := httpSupport(m2, spec2, op)
+	if support2 != SupportUnsupported {
+		t.Errorf("httpSupport(gsm7228ps, get_users) = %v, want SupportUnsupported", support2)
+	}
+	if reason2 == "" {
+		t.Error("httpSupport(gsm7228ps, get_users) reason is empty")
+	}
+}
+
+func TestHTTPSupportGetServicesAllOrNothing(t *testing.T) {
+	op, err := OperationByName("get_services")
+	if err != nil {
+		t.Fatalf("OperationByName(get_services): %v", err)
+	}
+	// gsm7252ps names all four service pages.
+	m, spec := mustHTTPSpec(t, "gsm7252ps")
+	support, _ := httpSupport(m, spec, op)
+	if support != SupportSupported {
+		t.Errorf("httpSupport(gsm7252ps, get_services) = %v, want SupportSupported", support)
+	}
+	// gsm7228ps names only two of the four -- all-or-nothing means refused.
+	m2, spec2 := mustHTTPSpec(t, "gsm7228ps")
+	support2, reason2 := httpSupport(m2, spec2, op)
+	if support2 != SupportUnsupported {
+		t.Errorf("httpSupport(gsm7228ps, get_services) = %v, want SupportUnsupported (not all 4 pages)", support2)
+	}
+	if reason2 == "" {
+		t.Error("httpSupport(gsm7228ps, get_services) reason is empty")
+	}
+}
+
+func TestHTTPSupportSetHostnameGS110EMXOnly(t *testing.T) {
+	op, err := OperationByName("set_hostname")
+	if err != nil {
+		t.Fatalf("OperationByName(set_hostname): %v", err)
+	}
+	m, spec := mustHTTPSpec(t, "gs110emx")
+	support, reason := httpSupport(m, spec, op)
+	if support != SupportSupported {
+		t.Errorf("httpSupport(gs110emx, set_hostname) = %v, want SupportSupported", support)
+	}
+	if reason != "" {
+		t.Errorf("httpSupport(gs110emx, set_hostname) reason = %q, want empty", reason)
+	}
+	// gs105pe's switch_info.cgi carries the same field but its own
+	// CSRF-hash envelope, which has not been driven -- deliberately not
+	// offered.
+	m2, spec2 := mustHTTPSpec(t, "gs105pe")
+	support2, reason2 := httpSupport(m2, spec2, op)
+	if support2 != SupportUnsupported {
+		t.Errorf("httpSupport(gs105pe, set_hostname) = %v, want SupportUnsupported", support2)
+	}
+	if reason2 == "" {
+		t.Error("httpSupport(gs105pe, set_hostname) reason is empty")
+	}
+}
+
+func TestHTTPSupportRemoveSyslogCollectorM4300Only(t *testing.T) {
+	op, err := OperationByName("remove_syslog_collector")
+	if err != nil {
+		t.Fatalf("OperationByName(remove_syslog_collector): %v", err)
+	}
+	m, spec := mustHTTPSpec(t, "m4300-24x")
+	support, reason := httpSupport(m, spec, op)
+	if support != SupportSupported {
+		t.Errorf("httpSupport(m4300-24x, remove_syslog_collector) = %v, want SupportSupported", support)
+	}
+	if reason != "" {
+		t.Errorf("httpSupport(m4300-24x, remove_syslog_collector) reason = %q, want empty", reason)
+	}
+	// gsm7252ps (XE_FASTPATH, not M4300) has no grounded template row.
+	m2, spec2 := mustHTTPSpec(t, "gsm7252ps")
+	support2, reason2 := httpSupport(m2, spec2, op)
+	if support2 != SupportUnsupported {
+		t.Errorf("httpSupport(gsm7252ps, remove_syslog_collector) = %v, want SupportUnsupported", support2)
+	}
+	if reason2 == "" {
+		t.Error("httpSupport(gsm7252ps, remove_syslog_collector) reason is empty")
 	}
 }
 
