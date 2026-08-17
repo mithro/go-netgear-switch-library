@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1248,6 +1249,351 @@ func TestHTTPFaceGS728TPPWriterSetFlowControlAlwaysRefuses(t *testing.T) {
 	err = writer.SetFlowControl(context.Background(), 2, true, false)
 	if !errors.Is(err, model.ErrUnsupportedCapability) {
 		t.Fatalf("SetFlowControl error = %v, want model.ErrUnsupportedCapability", err)
+	}
+}
+
+// --- GS728TPP GoAhead write completion (pin b26eb1f / commit f8a890f) ----
+//
+// The 8 ops below round-trip through applyGoAheadWrite's new VLANList/
+// VLANMembershipList/VLANInterfaceList/PoEPSEInterfaceList branches
+// (httpface.go) the same way TestHTTPFaceGS728TPPWriterSetPortDescription
+// RoundTrips proves Standard802_3List already does: driven over real TCP
+// loopback, verified through a SEPARATE webui.Reader (never by peeking at
+// *State directly -- see that test's own doc comment for why, under -race).
+
+// gs728tppGoAheadHarness sets up a GS728TPP virtual HTTP face plus a real
+// webui.Writer/Reader pair over it, shared by every round-trip test below.
+func gs728tppGoAheadHarness(t *testing.T) (*State, *webui.Writer, *webui.Reader) {
+	t.Helper()
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	return st, writer, reader
+}
+
+func gs728tppPoEAdminOf(t *testing.T, reader *webui.Reader, port int) model.PoEStatus {
+	t.Helper()
+	rows, err := reader.GetPoE(context.Background())
+	if err != nil {
+		t.Fatalf("GetPoE: %v", err)
+	}
+	for _, r := range rows {
+		if r.Port == port {
+			return r
+		}
+	}
+	t.Fatalf("GetPoE: no such port %d", port)
+	return model.PoEStatus{}
+}
+
+// TestHTTPFaceGS728TPPWriterSetPoERoundTrips drives webui.Writer.SetPoE's
+// GoAhead PoEPSEInterfaceList path (goaheadPoEAdmin, writer.go) against the
+// real fake: port 17 (link-down, nothing attached, matching the throwaway
+// port the real-hardware commit f8a890f used) toggled off then back on.
+func TestHTTPFaceGS728TPPWriterSetPoERoundTrips(t *testing.T) {
+	_, writer, reader := gs728tppGoAheadHarness(t)
+
+	if err := writer.SetPoE(context.Background(), 17, false, false); err != nil {
+		t.Fatalf("SetPoE(17, false) error = %v", err)
+	}
+	if got := gs728tppPoEAdminOf(t, reader, 17); got.AdminEnabled {
+		t.Errorf("port 17 PoE admin after SetPoE(false) = %+v, want AdminEnabled=false", got)
+	}
+
+	if err := writer.SetPoE(context.Background(), 17, true, false); err != nil {
+		t.Fatalf("SetPoE(17, true) error = %v", err)
+	}
+	if got := gs728tppPoEAdminOf(t, reader, 17); !got.AdminEnabled {
+		t.Errorf("port 17 PoE admin after SetPoE(true) = %+v, want AdminEnabled=true", got)
+	}
+}
+
+// TestHTTPFaceGS728TPPWriterCyclePoERoundTrips drives
+// webui.Writer.CyclePoE's GoAhead off/on re-arm (goaheadPoERearm, writer.go)
+// against the real fake: port 17 has nothing attached (PowerMw=0), so the
+// completion predicate (goaheadPoECycleComplete) is satisfied by the port
+// resuming SEARCHING rather than reaching DELIVERING -- exactly the
+// scenario commit f8a890f's own commit message documents fixing for
+// SnmpWriter (a port with no powered device can never reach DELIVERING).
+func TestHTTPFaceGS728TPPWriterCyclePoERoundTrips(t *testing.T) {
+	_, writer, reader := gs728tppGoAheadHarness(t)
+
+	if err := writer.CyclePoE(context.Background(), 17, false); err != nil {
+		t.Fatalf("CyclePoE(17) error = %v", err)
+	}
+	got := gs728tppPoEAdminOf(t, reader, 17)
+	if !got.AdminEnabled {
+		t.Errorf("port 17 PoE admin after CyclePoE = %+v, want re-armed AdminEnabled=true", got)
+	}
+	if got.Detect != model.PoEDetectSearching {
+		t.Errorf("port 17 PoE detect after CyclePoE = %v, want %v (nothing attached, re-detecting)", got.Detect, model.PoEDetectSearching)
+	}
+}
+
+// TestHTTPFaceGS728TPPWriterClearPoEFaultRoundTrips is CyclePoE's sibling:
+// on this dialect ClearPoEFault drives the IDENTICAL goaheadPoERearm
+// mechanism (Python's _goahead_poe_rearm is literally the same function
+// for both callers, not just conceptually similar -- see writer.go's
+// ClearPoEFault doc comment).
+func TestHTTPFaceGS728TPPWriterClearPoEFaultRoundTrips(t *testing.T) {
+	_, writer, reader := gs728tppGoAheadHarness(t)
+
+	if err := writer.ClearPoEFault(context.Background(), 17, false); err != nil {
+		t.Fatalf("ClearPoEFault(17) error = %v", err)
+	}
+	got := gs728tppPoEAdminOf(t, reader, 17)
+	if !got.AdminEnabled {
+		t.Errorf("port 17 PoE admin after ClearPoEFault = %+v, want re-armed AdminEnabled=true", got)
+	}
+	if got.Detect != model.PoEDetectSearching {
+		t.Errorf("port 17 PoE detect after ClearPoEFault = %v, want %v (nothing attached, re-detecting)", got.Detect, model.PoEDetectSearching)
+	}
+}
+
+// TestHTTPFaceGS728TPPWriterSetPoERespectsProtectedPorts proves the guard
+// fires BEFORE any GoAhead write is attempted -- port 17 stays untouched.
+func TestHTTPFaceGS728TPPWriterSetPoERespectsProtectedPorts(t *testing.T) {
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+	writer, err := webui.NewWriter(client, m, webui.WithProtectedPorts(17))
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	before := gs728tppPoEAdminOf(t, reader, 17)
+
+	err = writer.SetPoE(context.Background(), 17, false, false)
+	if !errors.Is(err, model.ErrProtectedPort) {
+		t.Fatalf("SetPoE(protected, no force) error = %v, want model.ErrProtectedPort", err)
+	}
+
+	// Compared field-by-field, not with `!=` on the whole struct: PowerMw is
+	// a *int, freshly allocated by each GetPoE parse, so a struct-level `!=`
+	// would compare pointer identity (always unequal) rather than value.
+	got := gs728tppPoEAdminOf(t, reader, 17)
+	if got.AdminEnabled != before.AdminEnabled || got.Detect != before.Detect {
+		t.Errorf("port 17 PoE changed by a refused SetPoE: got %+v, want unchanged %+v", got, before)
+	}
+}
+
+func gs728tppPortAdminOf(t *testing.T, reader *webui.Reader, port int) bool {
+	t.Helper()
+	ports, err := reader.GetPorts(context.Background())
+	if err != nil {
+		t.Fatalf("GetPorts: %v", err)
+	}
+	for _, p := range ports {
+		if p.Port == port {
+			return p.AdminEnabled
+		}
+	}
+	t.Fatalf("GetPorts: no such port %d", port)
+	return false
+}
+
+// TestHTTPFaceGS728TPPWriterSetPortEnabledRoundTrips drives
+// webui.Writer.SetPortEnabled's GoAhead Standard802_3List/adminState path
+// (setGoAheadPortEnabled, writer.go) against the real fake -- the SAME
+// object/page SetPortDescription already proves live, now carrying
+// adminState instead of interfaceDescription.
+func TestHTTPFaceGS728TPPWriterSetPortEnabledRoundTrips(t *testing.T) {
+	_, writer, reader := gs728tppGoAheadHarness(t)
+
+	if err := writer.SetPortEnabled(context.Background(), 3, false, false); err != nil {
+		t.Fatalf("SetPortEnabled(3, false) error = %v", err)
+	}
+	if gs728tppPortAdminOf(t, reader, 3) {
+		t.Errorf("port 3 admin after SetPortEnabled(false) = true, want false")
+	}
+
+	if err := writer.SetPortEnabled(context.Background(), 3, true, false); err != nil {
+		t.Fatalf("SetPortEnabled(3, true) error = %v", err)
+	}
+	if !gs728tppPortAdminOf(t, reader, 3) {
+		t.Errorf("port 3 admin after SetPortEnabled(true) = false, want true")
+	}
+}
+
+func gs728tppVlanIDs(t *testing.T, reader *webui.Reader) []int {
+	t.Helper()
+	vlans, err := reader.GetVLANs(context.Background())
+	if err != nil {
+		t.Fatalf("GetVLANs: %v", err)
+	}
+	ids := make([]int, len(vlans))
+	for i, v := range vlans {
+		ids[i] = v.VlanID
+	}
+	return ids
+}
+
+// TestHTTPFaceGS728TPPWriterCreateDeleteVlanRoundTrips drives
+// webui.Writer.CreateVlan/DeleteVlan's GoAhead VLANList path
+// (goaheadCreateVlan/goaheadDeleteVlan, writer.go) against the real fake --
+// VLAN 4001, the SAME id the real-hardware commit f8a890f created and
+// deleted on the live switch. Unlike the Plus-CGI path, name IS carried and
+// observable afterward (VLANList's VLANName, applyGoAheadVLANList).
+func TestHTTPFaceGS728TPPWriterCreateDeleteVlanRoundTrips(t *testing.T) {
+	_, writer, reader := gs728tppGoAheadHarness(t)
+	const vlan = 4001
+
+	if err := writer.CreateVlan(context.Background(), vlan, "throwaway"); err != nil {
+		t.Fatalf("CreateVlan(%d) error = %v", vlan, err)
+	}
+	if !slices.Contains(gs728tppVlanIDs(t, reader), vlan) {
+		t.Fatalf("VLAN %d not present after CreateVlan", vlan)
+	}
+	vlans, err := reader.GetVLANs(context.Background())
+	if err != nil {
+		t.Fatalf("GetVLANs: %v", err)
+	}
+	found := false
+	for _, v := range vlans {
+		if v.VlanID == vlan {
+			found = true
+			if v.Name == nil || *v.Name != "throwaway" {
+				t.Errorf("VLAN %d name = %v, want \"throwaway\"", vlan, v.Name)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("GetVLANs: VLAN %d not found after CreateVlan", vlan)
+	}
+
+	if err := writer.DeleteVlan(context.Background(), vlan, false); err != nil {
+		t.Fatalf("DeleteVlan(%d) error = %v", vlan, err)
+	}
+	if slices.Contains(gs728tppVlanIDs(t, reader), vlan) {
+		t.Errorf("VLAN %d still present after DeleteVlan", vlan)
+	}
+}
+
+func gs728tppMembershipModeOf(t *testing.T, reader *webui.Reader, vlan, port int) model.VlanMode {
+	t.Helper()
+	vlans, err := reader.GetVLANs(context.Background())
+	if err != nil {
+		t.Fatalf("GetVLANs: %v", err)
+	}
+	for _, v := range vlans {
+		if v.VlanID != vlan {
+			continue
+		}
+		if slices.Contains(v.UntaggedPorts, port) {
+			return model.VlanUntagged
+		}
+		if slices.Contains(v.TaggedPorts, port) {
+			return model.VlanTagged
+		}
+		return model.VlanExcluded
+	}
+	t.Fatalf("GetVLANs: no such VLAN %d", vlan)
+	return ""
+}
+
+// TestHTTPFaceGS728TPPWriterSetVlanMembershipRoundTrips drives
+// webui.Writer.SetVlanMembership's GoAhead VLANMembershipList path
+// (setGoAheadMembership, writer.go) against the real fake: VLAN 90 port 17,
+// tagged -> excluded -> tagged, the SAME (vlan, port) pair and mode
+// sequence the real-hardware commit f8a890f drove and restored. EXCLUDED
+// exercises the DELETE-action branch (vlanMembershipBody/
+// applyGoAheadVLANMembership), never a "set" with taggingMode 0.
+func TestHTTPFaceGS728TPPWriterSetVlanMembershipRoundTrips(t *testing.T) {
+	_, writer, reader := gs728tppGoAheadHarness(t)
+	const vlan, port = 90, 17
+
+	if got := gs728tppMembershipModeOf(t, reader, vlan, port); got != model.VlanTagged {
+		t.Fatalf("precondition: VLAN %d port %d mode = %v, want tagged", vlan, port, got)
+	}
+
+	if err := writer.SetVlanMembership(context.Background(), vlan, port, model.VlanExcluded, false); err != nil {
+		t.Fatalf("SetVlanMembership(excluded) error = %v", err)
+	}
+	if got := gs728tppMembershipModeOf(t, reader, vlan, port); got != model.VlanExcluded {
+		t.Errorf("VLAN %d port %d mode after excluding = %v, want excluded", vlan, port, got)
+	}
+
+	if err := writer.SetVlanMembership(context.Background(), vlan, port, model.VlanTagged, false); err != nil {
+		t.Fatalf("SetVlanMembership(tagged) error = %v", err)
+	}
+	if got := gs728tppMembershipModeOf(t, reader, vlan, port); got != model.VlanTagged {
+		t.Errorf("VLAN %d port %d mode after restoring tagged = %v, want tagged", vlan, port, got)
+	}
+
+	if err := writer.SetVlanMembership(context.Background(), vlan, port, model.VlanUntagged, false); err != nil {
+		t.Fatalf("SetVlanMembership(untagged) error = %v", err)
+	}
+	if got := gs728tppMembershipModeOf(t, reader, vlan, port); got != model.VlanUntagged {
+		t.Errorf("VLAN %d port %d mode after untagging = %v, want untagged", vlan, port, got)
+	}
+
+	// restore to the seed's original tagged state.
+	if err := writer.SetVlanMembership(context.Background(), vlan, port, model.VlanTagged, false); err != nil {
+		t.Fatalf("SetVlanMembership(restore tagged) error = %v", err)
+	}
+}
+
+func gs728tppPVIDOf(t *testing.T, reader *webui.Reader, port int) int {
+	t.Helper()
+	pairs, err := reader.GetPVIDs(context.Background())
+	if err != nil {
+		t.Fatalf("GetPVIDs: %v", err)
+	}
+	for _, p := range pairs {
+		if p.Port == port {
+			return p.Vlan
+		}
+	}
+	t.Fatalf("GetPVIDs: no such port %d", port)
+	return 0
+}
+
+// TestHTTPFaceGS728TPPWriterSetPVIDRoundTrips drives
+// webui.Writer.SetPVID's GoAhead VLANInterfaceList path (setGoAheadPVID,
+// writer.go) against the real fake, verifying through the DIALECT-AWARE
+// ParseGoAheadPVIDs this branch uses (not the plain STANDARD ParsePVIDs
+// every other dialect's SetPVID verifies against -- see setGoAheadPVID's
+// own doc comment).
+func TestHTTPFaceGS728TPPWriterSetPVIDRoundTrips(t *testing.T) {
+	_, writer, reader := gs728tppGoAheadHarness(t)
+	const port = 2
+
+	if got := gs728tppPVIDOf(t, reader, port); got != 1 {
+		t.Fatalf("precondition: port %d PVID = %d, want 1 (seed value)", port, got)
+	}
+
+	if err := writer.SetPVID(context.Background(), port, 5, false); err != nil {
+		t.Fatalf("SetPVID(%d, 5) error = %v", port, err)
+	}
+	if got := gs728tppPVIDOf(t, reader, port); got != 5 {
+		t.Errorf("port %d PVID after SetPVID(5) = %d, want 5", port, got)
 	}
 }
 

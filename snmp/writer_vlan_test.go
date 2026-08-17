@@ -509,6 +509,28 @@ func TestCreateVlanSetsRowStatusAndName(t *testing.T) {
 	}
 }
 
+// TestCreateVlanRefusesOnModelThatCannotCreateVLANs is the GS728TPP gate
+// (pin b26eb1f / commit f8a890f): MEASURED on the real device, every
+// documented RowStatus creation mechanism answers inconsistentValue (see
+// model.SwitchModel.SNMPCanCreateVLAN's own doc comment), so
+// requireSNMPVLANCreation must refuse BEFORE sending the createAndGo SET,
+// wrapping model.ErrUnsupportedCapability -- never attempting (and then
+// having to interpret) the device's own refusal.
+func TestCreateVlanRefusesOnModelThatCannotCreateVLANs(t *testing.T) {
+	client := newScriptedWriteClient(nil, applyRowStatusAndName)
+	w, err := NewWriter(client, mustModel(t, "gs728tpp"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	err = w.CreateVlan(context.Background(), 4001, "guests")
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("CreateVlan error = %v, want model.ErrUnsupportedCapability", err)
+	}
+	if len(client.sets) != 0 {
+		t.Errorf("sets = %+v, want none (refused before any SET)", client.sets)
+	}
+}
+
 // --- DeleteVlan --------------------------------------------------------
 
 func TestDeleteVlanDestroysAndVerifiesAbsent(t *testing.T) {

@@ -12,28 +12,6 @@ import (
 	"github.com/mithro/go-netgear-switch-library/snmp"
 )
 
-// noVLANCreateMsg is why an SNMP VLAN create is refused on a model whose
-// agent cannot do it (model.SwitchModel.SNMPCanCreateVLAN == false),
-// translated from Python's snmp_write._NO_VLAN_CREATE (this codebase's
-// reason text is never asserted byte-identical to Python's -- see this
-// package's plan's "Deliberate divergences" note 2).
-//
-// Unlike the NSDP refusal messages in support_nsdp.go, this is NOT reused
-// from a snmp package writer constant: snmp.Writer.CreateVlan
-// (snmp/writer_vlan.go) does not itself enforce this gate yet -- it
-// attempts the RowStatus create SET unconditionally, for every model. That
-// is a real, pre-existing gap this capabilities-oracle refresh surfaces but
-// does not close (wiring model.SwitchModel.SNMPCanCreateVLAN into
-// snmp.Writer.CreateVlan, mirroring Python's snmp_write._require_snmp_vlan_
-// creation, is tracked follow-up work). The oracle still asserts the
-// correct verdict here because it derives from model.SwitchModel.
-// SNMPCanCreateVLAN -- the SAME registry fact Python's model.
-// snmp_can_create_vlan carries -- not from what the writer currently does.
-const noVLANCreateMsg = "this model's SNMP agent cannot create a VLAN: every RowStatus mechanism " +
-	"(createAndGo, createAndGo+name in one PDU, createAndWait->name->active, the name column alone, " +
-	"and createAndGo carrying an egress PortList) is answered inconsistentValue -- measured on the " +
-	"device. Membership, PVID and delete DO work over SNMP; create a VLAN over the HTTP backend"
-
 // snmpSupport derives the SNMP-backend verdict for (m, op). SnmpReader/
 // SnmpWriter serve almost everything from standard MIBs; the model-dependent
 // refusals below are the guards they raise themselves -- this function reads
@@ -43,10 +21,12 @@ func snmpSupport(m *model.SwitchModel, op Operation) (Support, string) {
 		return noPSE(m)
 	}
 	if op.Name == "create_vlan" && !m.SNMPCanCreateVLAN {
-		// Reuse the writer's own refusal text so the table and the code
-		// that (eventually) enforces it cannot drift apart -- see
-		// noVLANCreateMsg's own doc comment for the current caveat.
-		return SupportUnsupported, fmt.Sprintf("model %q: %s", m.Key, noVLANCreateMsg)
+		// Reuse the writer's OWN refusal text (snmp.Writer.CreateVlan,
+		// snmp/writer_vlan.go's requireSNMPVLANCreation, pin b26eb1f /
+		// commit f8a890f) so the table and the code that enforces it cannot
+		// drift apart -- mirroring Python's capabilities.py importing
+		// _NO_VLAN_CREATE from snmp_write.py rather than duplicating it.
+		return SupportUnsupported, fmt.Sprintf("model %q: %s", m.Key, snmp.NoVLANCreateMsg)
 	}
 	if op.Name == "set_mgmt_ip" && !snmp.HasVendorOids(m) {
 		// SNMP writer's set_mgmt_ip writes the vendor mgmt-IP columns, so a

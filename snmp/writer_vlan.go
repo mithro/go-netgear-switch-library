@@ -219,19 +219,53 @@ func (w *Writer) SetVlanMembership(ctx context.Context, vlanID, port int, mode m
 	return nil
 }
 
+// NoVLANCreateMsg is why an SNMP VLAN create is refused on a model whose
+// agent cannot do it, mirroring Python snmp_write._NO_VLAN_CREATE
+// (pin b26eb1f / commit f8a890f). Exported so
+// capabilities/support_snmp.go can reuse the SAME text this writer's own
+// refusal raises -- one definition, not a parallel guess (mirroring
+// Python's `from .snmp_write import _NO_VLAN_CREATE`).
+const NoVLANCreateMsg = "this model's SNMP agent cannot create a VLAN: every RowStatus mechanism " +
+	"(createAndGo, createAndGo+name in one PDU, createAndWait->name->active, the name column alone, " +
+	"and createAndGo carrying an egress PortList) is answered inconsistentValue -- measured on the " +
+	"device. Membership, PVID and delete DO work over SNMP; create a VLAN over the HTTP backend"
+
+// requireSNMPVLANCreation refuses a VLAN create BEFORE sending anything on
+// a model whose SNMP agent cannot do it, mirroring Python
+// snmp_write._require_snmp_vlan_creation. MEASURED on the GS728TPP
+// (10.2.5.10, firmware 6.0.1.30, 2026-08-03): every documented RowStatus
+// creation mechanism answers inconsistentValue -- see
+// model.SwitchModel.SNMPCanCreateVLAN's own doc comment for the full
+// per-mechanism list.
+func requireSNMPVLANCreation(m *model.SwitchModel) error {
+	if !m.SNMPCanCreateVLAN {
+		return fmt.Errorf("model %q: %s: %w", m.Key, NoVLANCreateMsg, model.ErrUnsupportedCapability)
+	}
+	return nil
+}
+
 // CreateVlan creates vlanID with the given name and verifies it exists with
 // that name afterward. Ported from Python's SnmpWriter.create_vlan -- see
 // D-WR §2.11.
 //
+// requireSNMPVLANCreation is checked FIRST (pin b26eb1f / commit f8a890f):
+// a model whose agent cannot create a VLAN row at all (model.SwitchModel.
+// SNMPCanCreateVLAN == false, e.g. gs728tpp) is refused honestly before any
+// SET is attempted, rather than sending a createAndGo the device will
+// answer inconsistentValue to.
+//
 // CreateVlan NEVER guards on protected ports: creating an EMPTY VLAN adds
 // no port membership, so it is non-disruptive by construction -- there is
 // no `force` parameter (unlike DeleteVlan) since nothing here is ever
-// refused. One SetMany PDU, two varbinds: RowStatus createAndGo (int 4,
-// type "i") + Name (type "s", plain string -- NOT "x" like the VLAN
-// membership bitmaps). Verify: VLAN exists AND its name equals the
-// requested name exactly, treating a nil Name the same as empty string
-// (mirrors Python's `after.name or ""`).
+// refused (other than the capability gate above). One SetMany PDU, two
+// varbinds: RowStatus createAndGo (int 4, type "i") + Name (type "s", plain
+// string -- NOT "x" like the VLAN membership bitmaps). Verify: VLAN exists
+// AND its name equals the requested name exactly, treating a nil Name the
+// same as empty string (mirrors Python's `after.name or ""`).
 func (w *Writer) CreateVlan(ctx context.Context, vlanID int, name string) error {
+	if err := requireSNMPVLANCreation(w.model); err != nil {
+		return err
+	}
 	before, err := w.vlan(ctx, vlanID)
 	if err != nil {
 		return err
