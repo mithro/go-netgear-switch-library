@@ -14,6 +14,7 @@ package virtual
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -1206,11 +1207,49 @@ func (s *State) ApplyWrite(oid string, value any) {
 			s.Syslog.AdminMode = mustInt(oid, value)
 			return
 		}
+		// Syslog host RowStatus. MEASURED on m4300-24x 10.1.5.13
+		// (2026-08-05): this agent honours destroy(6) on an existing row but
+		// refuses to CREATE one through every mechanism -- createAndGo(4)
+		// and createAndWait(5) answer inconsistentValue, and writing the
+		// value columns at a free index answers commitFailed. The mock
+		// reproduces the "no existing row -> refused" half by panicking with
+		// errSyslogRowCreateRefused, which snmpface.go's applyUncommitted
+		// recognizes and maps to gosnmp.InconsistentValue rather than the
+		// generic WrongValue every other apply-time panic maps to -- so the
+		// writer's asymmetric support (remove yes, add no) is checked
+		// against a fake that behaves the same way.
+		if index, ok := columnTail(v.SyslogHostStatus, oid); ok {
+			pos := -1
+			for i := range s.Syslog.Collectors {
+				if s.Syslog.Collectors[i].Index == index {
+					pos = i
+					break
+				}
+			}
+			if pos < 0 {
+				panic(errSyslogRowCreateRefused)
+			}
+			if mustInt(oid, value) == snmp.RowStatusDestroy {
+				// Survivors KEEP their index -- that is what makes the
+				// table sparse, and what a position-based remover gets
+				// wrong.
+				s.Syslog.Collectors = append(s.Syslog.Collectors[:pos], s.Syslog.Collectors[pos+1:]...)
+			} else {
+				s.Syslog.Collectors[pos].Status = mustInt(oid, value)
+			}
+			return
+		}
 	}
 
 	// 11. Unhandled writable OID: deliberate no-op (verify-after-write
 	// catches it).
 }
+
+// errSyslogRowCreateRefused is the panic value ApplyWrite raises for a SET
+// attempt on the syslog-host RowStatus column at an index with no existing
+// collector row -- see the RowStatus-column block above for the measured
+// finding this mirrors (Python's InconsistentValueError).
+var errSyslogRowCreateRefused = errors.New("virtual: syslog host row does not exist; this mock refuses to create one (measured inconsistentValue)")
 
 // IsWritableOID reports whether oid is one this mock recognizes as
 // SNMP-writable. See the section doc comment above for why this is a
@@ -1265,6 +1304,14 @@ func (s *State) IsWritableOID(oid string) bool {
 	// 10.1.5.13, gsm7252ps 10.1.5.22, gsm7228ps 10.1.5.11, 2026-08-02, with
 	// the Read/Write community): it is what SetSyslogEnabled writes.
 	if oid == v.SyslogAdminMode {
+		return true
+	}
+	// The syslog host RowStatus column. WRITABLE on real hardware
+	// (m4300-24x 10.1.5.13, 2026-08-05): it accepts destroy(6) on an
+	// existing row -- while refusing to CREATE one, which ApplyWrite models
+	// by panicking with errSyslogRowCreateRefused for an index that is not
+	// there (see that block's own doc comment).
+	if _, ok := columnTail(v.SyslogHostStatus, oid); ok {
 		return true
 	}
 	return oid == v.DHCPModeUnverified+".0"

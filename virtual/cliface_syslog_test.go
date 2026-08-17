@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/mithro/go-netgear-switch-library/fastpath"
+	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/snmp"
 )
 
@@ -130,6 +131,103 @@ func TestSyslogCLIRoundTrip(t *testing.T) {
 			}
 			if got, err := reader.GetSyslog(ctx); err != nil || got.Enabled != original.Enabled {
 				t.Errorf("GetSyslog after restore = (%+v, %v), want Enabled=%v", got, err, original.Enabled)
+			}
+		})
+	}
+}
+
+// TestSyslogCLIAddRemoveRoundTrip proves AddSyslogCollector/
+// RemoveSyslogCollector round-trip through the CLI face: adding a
+// throwaway collector reads back with the right port/severity and a NEW
+// index, and removing it by host makes it disappear -- while a
+// PRE-EXISTING collector at a lower index survives untouched (a cheap
+// sparse-table sanity check; the FULL sparse-index crux -- proving a
+// removal addresses the target's own index rather than a position -- is
+// covered directly against parseSyslog's own sparse fixture in
+// fastpath/parse_syslog_test.go and against the SNMP virtual agent in
+// snmpface_syslog_test.go).
+func TestSyslogCLIAddRemoveRoundTrip(t *testing.T) {
+	for _, key := range hostnameCLIModels {
+		key := key
+		t.Run(key, func(t *testing.T) {
+			st := seedByKey(t, key)
+			face, m := newTestCliFace(t, key, st)
+			reader, err := fastpath.NewReader(face, m)
+			if err != nil {
+				t.Fatalf("fastpath.NewReader: %v", err)
+			}
+			writer, err := fastpath.NewWriter(face, m)
+			if err != nil {
+				t.Fatalf("fastpath.NewWriter: %v", err)
+			}
+			ctx := context.Background()
+
+			before, err := reader.GetSyslog(ctx)
+			if err != nil {
+				t.Fatalf("GetSyslog (before): %v", err)
+			}
+			preExisting := len(before.Servers)
+
+			const throwaway = "192.0.2.1" // TEST-NET-1, routes nowhere
+			if err := writer.AddSyslogCollector(ctx, throwaway, 601, 3, false); err != nil {
+				t.Fatalf("AddSyslogCollector: %v", err)
+			}
+			afterAdd, err := reader.GetSyslog(ctx)
+			if err != nil {
+				t.Fatalf("GetSyslog (after add): %v", err)
+			}
+			if len(afterAdd.Servers) != preExisting+1 {
+				t.Fatalf("Servers after add = %d, want %d (pre-existing + 1)", len(afterAdd.Servers), preExisting+1)
+			}
+			var added *SyslogCollectorSim
+			for i := range st.Syslog.Collectors {
+				if st.Syslog.Collectors[i].Host == throwaway {
+					added = &st.Syslog.Collectors[i]
+				}
+			}
+			if added == nil {
+				t.Fatalf("state has no collector for %q after AddSyslogCollector", throwaway)
+			}
+			if added.Port != 601 || added.Severity != 3 {
+				t.Errorf("added collector = %+v, want port=601 severity=3", *added)
+			}
+			// A NEW index, never a renumbering of an existing row.
+			for _, c := range before.Servers {
+				if c.Index != nil && *c.Index == added.Index {
+					t.Errorf("added collector's index %d collides with a pre-existing row", added.Index)
+				}
+			}
+
+			if err := writer.RemoveSyslogCollector(ctx, throwaway, false); err != nil {
+				t.Fatalf("RemoveSyslogCollector: %v", err)
+			}
+			afterRemove, err := reader.GetSyslog(ctx)
+			if err != nil {
+				t.Fatalf("GetSyslog (after remove): %v", err)
+			}
+			if len(afterRemove.Servers) != preExisting {
+				t.Fatalf("Servers after remove = %d, want %d (back to pre-existing)", len(afterRemove.Servers), preExisting)
+			}
+			for _, s := range afterRemove.Servers {
+				if s.Host == throwaway {
+					t.Errorf("Servers after remove still contains %q", throwaway)
+				}
+			}
+			// Every pre-existing collector must survive byte-identical.
+			for _, want := range before.Servers {
+				var got *model.SyslogServer
+				for i := range afterRemove.Servers {
+					if afterRemove.Servers[i].Host == want.Host {
+						got = &afterRemove.Servers[i]
+					}
+				}
+				if got == nil {
+					t.Errorf("pre-existing collector %+v missing after add+remove of a throwaway", want)
+					continue
+				}
+				if got.Port != want.Port || got.Severity != want.Severity {
+					t.Errorf("pre-existing collector %q changed: got %+v, want %+v", want.Host, *got, want)
+				}
 			}
 		})
 	}

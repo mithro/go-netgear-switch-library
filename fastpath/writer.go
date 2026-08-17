@@ -1104,6 +1104,118 @@ func (w *Writer) SetSyslogEnabled(ctx context.Context, enabled bool, _ bool) err
 }
 
 // ---------------------------------------------------------------------
+// AddSyslogCollector / RemoveSyslogCollector
+// ---------------------------------------------------------------------
+
+// AddSyslogCollector adds a remote syslog collector, mirroring Python
+// CliWriter.add_syslog_collector (cli_write.py:892-925).
+//
+// `logging host "<address>" <ipv4|ipv6|dns> <port> <severity-word>`, which
+// is VERBATIM the line all four FASTPATH models print in their own `show
+// running-config` (read 2026-08-05 -- read-only, no `?`).
+//
+// Refuses up front if a collector for host already exists: FASTPATH would
+// otherwise add a SECOND row for the same address, and the caller who
+// asked for "send logs here" would silently get duplicate delivery. A
+// precondition failure, so no command is sent (mirroring SetPVID's VLAN-
+// exists guard).
+//
+// Not force-gated, for the same reason as SetSyslogEnabled. force is
+// accepted-but-unused, purely so this method's signature matches every
+// other writer.
+func (w *Writer) AddSyslogCollector(ctx context.Context, host string, port, severity int, _ bool) error {
+	before, err := w.reader.GetSyslog(ctx)
+	if err != nil {
+		return err
+	}
+	for _, srv := range before.Servers {
+		if srv.Host == host {
+			return errCliCommand("a syslog collector for %q already exists", host)
+		}
+	}
+	cmd, err := w.spec.LoggingHostAdd(host, port, severity)
+	if err != nil {
+		return err
+	}
+	if err := inMode(ctx, w.session, []string{w.spec.ConfigureCmd}, []string{cmd}, w.spec.ExitCmd); err != nil {
+		return err
+	}
+	after, err := w.reader.GetSyslog(ctx)
+	if err != nil {
+		return err
+	}
+	var added *model.SyslogServer
+	for i := range after.Servers {
+		if after.Servers[i].Host == host {
+			added = &after.Servers[i]
+			break
+		}
+	}
+	if added == nil || added.Port != port || added.Severity != severity {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("syslog collector %q did not read back as port=%d severity=%d", host, port, severity),
+			Before: before.Servers,
+			After:  after.Servers,
+		}
+	}
+	return nil
+}
+
+// RemoveSyslogCollector removes the remote syslog collector for host,
+// mirroring Python CliWriter.remove_syslog_collector (cli_write.py:927-970).
+//
+// `logging host remove <index>` -- a SUBCOMMAND, not a negation, and
+// addressed by the table's OWN Index column rather than by address. Read
+// from a fresh table immediately before the write, never cached.
+//
+// THE INDEX IS SPARSE, and it is not the row's position -- measured on
+// m4300-24x 10.1.5.13 (2026-08-05): after some churn the table held Index 1
+// and Index 3, with nothing at 2. index is taken from row.Index (the
+// backend's own reader, which never invents one), NEVER derived from a
+// row's position in before.Servers.
+//
+// Refuses up front if no such collector exists, rather than sending a
+// removal for a row that is not there. force is accepted-but-unused,
+// purely so this method's signature matches every other writer.
+func (w *Writer) RemoveSyslogCollector(ctx context.Context, host string, _ bool) error {
+	before, err := w.reader.GetSyslog(ctx)
+	if err != nil {
+		return err
+	}
+	var row *model.SyslogServer
+	for i := range before.Servers {
+		if before.Servers[i].Host == host {
+			row = &before.Servers[i]
+			break
+		}
+	}
+	if row == nil {
+		return errCliCommand("no syslog collector for %q to remove", host)
+	}
+	if row.Index == nil {
+		return errCliCommand("the syslog collector for %q carries no table index, so it cannot be addressed for removal", host)
+	}
+	cmd := w.spec.LoggingHostRemove(*row.Index)
+	if err := inMode(ctx, w.session, []string{w.spec.ConfigureCmd}, []string{cmd}, w.spec.ExitCmd); err != nil {
+		return err
+	}
+	after, err := w.reader.GetSyslog(ctx)
+	if err != nil {
+		return err
+	}
+	for _, s := range after.Servers {
+		if s.Host == host {
+			return &model.WriteVerificationError{
+				Msg:    fmt.Sprintf("syslog collector %q is still configured after removal", host),
+				Before: before.Servers,
+				After:  after.Servers,
+			}
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
 // SetMgmtIP (dossier §4.8)
 // ---------------------------------------------------------------------
 

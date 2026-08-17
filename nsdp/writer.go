@@ -595,6 +595,28 @@ func (w *Writer) SetSyslogEnabled(_ context.Context, _ bool, _ bool) error {
 	return unsupportedWrite(fmt.Sprintf("model %q: this backend does not expose a remote-logging toggle", w.model.Key))
 }
 
+// AddSyslogCollector always returns an error wrapping
+// model.ErrUnsupportedCapability: this backend cannot add a syslog
+// collector. Mirrors Python NsdpWriter.add_syslog_collector.
+//
+// Refused by name: NSDP has no logging surface at all. That is measured
+// absence -- an exhaustive tag sweep of a live GS110EMX turned up no syslog
+// tag of any kind, which is the same finding that keeps NSDP off GetSyslog.
+// Every parameter is accepted-but-unused, purely so this method's signature
+// matches the shared BackendWriter surface (see write_dispatch.go).
+func (w *Writer) AddSyslogCollector(_ context.Context, _ string, _, _ int, _ bool) error {
+	return unsupportedWrite(fmt.Sprintf("model %q: this backend has no grounded syslog-collector row write", w.model.Key))
+}
+
+// RemoveSyslogCollector always returns an error wrapping
+// model.ErrUnsupportedCapability: this backend cannot remove a syslog
+// collector. Mirrors Python NsdpWriter.remove_syslog_collector. See
+// AddSyslogCollector's doc comment for the measured absence this refuses
+// by name.
+func (w *Writer) RemoveSyslogCollector(_ context.Context, _ string, _ bool) error {
+	return unsupportedWrite(fmt.Sprintf("model %q: this backend has no grounded syslog-collector row write", w.model.Key))
+}
+
 // vlanIDs projects a VLAN list to just its ids, mirroring the
 // `[v.vlan_id for v in vlans]` comprehensions Python's create_vlan/
 // delete_vlan put in their WriteVerificationError before/after payloads.

@@ -901,6 +901,73 @@ func TestSetSyslogEnabled_WriteBackendOverrideRunsOverNamedBackend(t *testing.T)
 	}
 }
 
+// TestAddSyslogCollector_WriteBackendOverrideRunsOverNamedBackend mirrors
+// TestSetSyslogEnabled_WriteBackendOverrideRunsOverNamedBackend's shape:
+// Write.Backend routes the call to a non-default backend, and the facade
+// forwards host/port/severity/force unchanged.
+func TestAddSyslogCollector_WriteBackendOverrideRunsOverNamedBackend(t *testing.T) {
+	clearWriteBackendRegistry(t)
+	snmpWriter := &fakeWriter{}
+	withRegisteredWriteBackend(t, model.BackendSNMP, func(_ *Switch) (BackendWriter, error) {
+		return snmpWriter, nil
+	})
+	nsdpWriter := &fakeWriter{}
+	withRegisteredWriteBackend(t, model.BackendNSDP, func(_ *Switch) (BackendWriter, error) {
+		return nsdpWriter, nil
+	})
+
+	m := fakeModel("fake", model.BackendSNMP, model.BackendNSDP)
+	sw, err := New(m, "10.0.0.1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	nsdp := model.BackendNSDP
+	if err := sw.AddSyslogCollector(context.Background(), "10.1.5.9", model.DefaultSyslogPort, model.DefaultSyslogSeverity, Write{Backend: &nsdp}); err != nil {
+		t.Fatalf("AddSyslogCollector(Write{Backend: NSDP}) error = %v, want nil", err)
+	}
+	call := nsdpWriter.addSyslogCollectorCall
+	if call == nil || call.host != "10.1.5.9" || call.port != model.DefaultSyslogPort || call.severity != model.DefaultSyslogSeverity {
+		t.Fatalf("NSDP writer addSyslogCollectorCall = %+v, want host=10.1.5.9 port=%d severity=%d recorded", call, model.DefaultSyslogPort, model.DefaultSyslogSeverity)
+	}
+	if snmpWriter.addSyslogCollectorCall != nil {
+		t.Fatal("SNMP writer must NOT be invoked when Write.Backend explicitly names NSDP")
+	}
+}
+
+// TestRemoveSyslogCollector_WriteBackendOverrideRunsOverNamedBackend
+// mirrors TestAddSyslogCollector_WriteBackendOverrideRunsOverNamedBackend's
+// shape for the removal side.
+func TestRemoveSyslogCollector_WriteBackendOverrideRunsOverNamedBackend(t *testing.T) {
+	clearWriteBackendRegistry(t)
+	snmpWriter := &fakeWriter{}
+	withRegisteredWriteBackend(t, model.BackendSNMP, func(_ *Switch) (BackendWriter, error) {
+		return snmpWriter, nil
+	})
+	nsdpWriter := &fakeWriter{}
+	withRegisteredWriteBackend(t, model.BackendNSDP, func(_ *Switch) (BackendWriter, error) {
+		return nsdpWriter, nil
+	})
+
+	m := fakeModel("fake", model.BackendSNMP, model.BackendNSDP)
+	sw, err := New(m, "10.0.0.1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	nsdp := model.BackendNSDP
+	if err := sw.RemoveSyslogCollector(context.Background(), "10.1.5.1", Write{Backend: &nsdp}); err != nil {
+		t.Fatalf("RemoveSyslogCollector(Write{Backend: NSDP}) error = %v, want nil", err)
+	}
+	call := nsdpWriter.removeSyslogCollectorCall
+	if call == nil || call.host != "10.1.5.1" {
+		t.Fatalf("NSDP writer removeSyslogCollectorCall = %+v, want host=10.1.5.1 recorded", call)
+	}
+	if snmpWriter.removeSyslogCollectorCall != nil {
+		t.Fatal("SNMP writer must NOT be invoked when Write.Backend explicitly names NSDP")
+	}
+}
+
 // --- FromConfig field mapping ---------------------------------------------
 
 func TestFromConfig_NeverResolvesSecretsOrDialsNetwork(t *testing.T) {

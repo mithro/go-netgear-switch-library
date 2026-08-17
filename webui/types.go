@@ -159,13 +159,22 @@ func (r XuiRow) Field(column string) (string, bool) {
 // ENABLED hidden inputs, so a browser submits them on every apply -- and on
 // the GSM7252PS PoE page the firmware REQUIRES one of these to resolve the
 // row at all (see forms.go's XuiRowApplyForm).
+// Template is the page's blank "v_g_<table>_<tr>_<col>" TEMPLATE row, keyed
+// by its FULL field name, mirroring Python XuiListPage.template. This is
+// the row an ADD fills in: the firmware renders it with every value empty
+// inside display:none cells, and the page's Apply button writes the
+// row-status into it. Empty for a page that renders no template row --
+// which is most of them, and is why this is a separate field rather than
+// being folded into Rows: a one-row apply must never mention it (see
+// XuiRowApplyForm, which deliberately never reads this field).
 type XuiListPage struct {
-	Action  string
-	Hidden  map[string]string
-	Buttons map[string]string
-	Rows    []XuiRow
-	Tokens  map[string]string
-	Nav     map[string]string
+	Action   string
+	Hidden   map[string]string
+	Buttons  map[string]string
+	Rows     []XuiRow
+	Tokens   map[string]string
+	Nav      map[string]string
+	Template map[string]string
 }
 
 // RowFor returns the row whose column renders value (e.g. the ifName cell),

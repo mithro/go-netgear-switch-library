@@ -343,6 +343,30 @@ func TestCliModelSpec_TemplatingMethods(t *testing.T) {
 	}
 }
 
+// TestCliModelSpec_LoggingHostAddAndRemove pins LoggingHostAdd/
+// LoggingHostRemove's exact templating, and proves LoggingHostAdd
+// propagates model.SyslogSeverityWord's own error for an out-of-range
+// severity rather than sending a command built from it.
+func TestCliModelSpec_LoggingHostAddAndRemove(t *testing.T) {
+	spec := specFor(t, "m4300-24x")
+
+	got, err := spec.LoggingHostAdd("10.1.5.1", 514, 6)
+	if err != nil {
+		t.Fatalf("LoggingHostAdd: %v", err)
+	}
+	if want := `logging host "10.1.5.1" ipv4 514 info`; got != want {
+		t.Errorf("LoggingHostAdd = %q, want %q", got, want)
+	}
+
+	if got, want := spec.LoggingHostRemove(3), "logging host remove 3"; got != want {
+		t.Errorf("LoggingHostRemove(3) = %q, want %q", got, want)
+	}
+
+	if _, err := spec.LoggingHostAdd("10.1.5.1", 514, 8); err == nil {
+		t.Error("LoggingHostAdd(severity=8): want error, got nil")
+	}
+}
+
 // TestM4300Overrides pins _M4300_OVERRIDES (dossier §1.5) verbatim, and
 // proves it replaces EXACTLY those 4 keys -- every other field on the two
 // M4300 specs must still carry the base CliModelSpec default (proven here

@@ -1241,6 +1241,136 @@ func (w *Writer) SetSyslogEnabled(_ context.Context, _ bool, _ bool) error {
 	return fmt.Errorf("model %q: this backend does not expose a remote-logging toggle: %w", w.model.Key, model.ErrUnsupportedCapability)
 }
 
+// syslogPath returns w.spec.SyslogPath or refuses honestly, mirroring
+// Python HttpWriter._syslog_path.
+func (w *Writer) syslogPath() (string, error) {
+	return requirePath(w.model.Key, w.spec.SyslogPath, "remote-logging configuration")
+}
+
+// syslogPage fetches and parses the syslog page as an XUI list, mirroring
+// Python HttpWriter._syslog_page.
+//
+// Only the two M4300 pages inline the cell metadata this write depends on
+// and render the template row; gsm7252ps/gsm7228ps declare nine xeData
+// entries and load the rest from a resource no capture has followed, so
+// their coordinates are NOT established and they are refused here rather
+// than posted at on the assumption they match.
+func (w *Writer) syslogPage(ctx context.Context) (XuiListPage, error) {
+	if w.spec.HTMLDialect != HTMLDialectM4300 {
+		return XuiListPage{}, fmt.Errorf(
+			"model %q: no syslog-collector row write is grounded for this web UI dialect (only the M4300 pages render the template row and declare their cell metadata): %w",
+			w.model.Key, model.ErrUnsupportedCapability)
+	}
+	path, err := w.syslogPath()
+	if err != nil {
+		return XuiListPage{}, err
+	}
+	html, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return XuiListPage{}, err
+	}
+	page, err := ParseXUIListPage(html, "syslog configuration")
+	if err != nil {
+		return XuiListPage{}, err
+	}
+	if len(page.Template) == 0 {
+		return XuiListPage{}, errUnexpectedPage(
+			"the syslog page renders no v_g_* template row, so a collector cannot be added through it")
+	}
+	return page, nil
+}
+
+// AddSyslogCollector always returns an error wrapping
+// model.ErrUnsupportedCapability: this UI will not accept a collector ADD
+// -- established, not assumed.
+//
+// The template row is real and reachable: the page renders
+// v_g_2_1_1..v_g_2_1_7 in the served HTML, and this library can build the
+// body. What the FIRMWARE does with it, driven live against m4300-24x
+// 10.1.5.13 on 2026-08-05, is refuse -- HTTP 200 with "Error! Failed to
+// Set 'Host Address' with '<value>'" and the collector table unchanged
+// (checked through the switch's own CLI, an independent witness). Three of
+// the four fields can be made to stick and the address cannot; the
+// remaining step is one capture of a real browser Add submission to diff
+// against.
+//
+// The DELETE path on the same page DOES work and is live-verified; see
+// RemoveSyslogCollector. Add over a CLI backend. Every parameter is
+// accepted-but-unused, purely so this method's signature matches every
+// other writer.
+func (w *Writer) AddSyslogCollector(_ context.Context, _ string, _, _ int, _ bool) error {
+	return fmt.Errorf(
+		"model %q: this web UI refuses a collector add (measured: HTTP 200 + \"Failed to Set 'Host Address'\"); the page's delete works, and the CLI backend adds: %w",
+		w.model.Key, model.ErrUnsupportedCapability)
+}
+
+// RemoveSyslogCollector removes a collector by marking its row-status
+// "Delete", mirroring Python HttpWriter.remove_syslog_collector
+// (http_write.py:1620-1650).
+//
+// The page's Delete action array writes "Delete" into the same write-only
+// cell an Add sets to "Active". The row is addressed by its OWN rendered
+// fields and checkbox, so no index arithmetic is involved -- unlike the CLI
+// and SNMP routes, whose sparse table index bit once already. force is
+// accepted-but-unused: redirecting logs cannot strand a switch.
+func (w *Writer) RemoveSyslogCollector(ctx context.Context, host string, _ bool) error {
+	page, err := w.syslogPage(ctx)
+	if err != nil {
+		return err
+	}
+	path, err := w.syslogPath()
+	if err != nil {
+		return err
+	}
+	beforeHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	before, err := ParseXUISyslog(beforeHTML)
+	if err != nil {
+		return err
+	}
+	beforeHas := false
+	for _, s := range before.Servers {
+		if s.Host == host {
+			beforeHas = true
+			break
+		}
+	}
+	if !beforeHas {
+		return errUnexpectedPage("no syslog collector for %q to remove", host)
+	}
+	row, ok := page.RowFor(xuiSyslogHostAddressCol, host)
+	if !ok {
+		return errUnexpectedPage("the syslog page renders no row for %q", host)
+	}
+	body, err := XuiRowApplyForm(page, row, map[string]string{xuiSyslogHostRowStatus: xuiSyslogRowStatusDelete}, xuiSyslogDeleteButton, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := w.session.PostForm(ctx, page.Action, body); err != nil {
+		return err
+	}
+	afterHTML, err := w.session.GetPage(ctx, path)
+	if err != nil {
+		return err
+	}
+	after, err := ParseXUISyslog(afterHTML)
+	if err != nil {
+		return err
+	}
+	for _, s := range after.Servers {
+		if s.Host == host {
+			return &model.WriteVerificationError{
+				Msg:    fmt.Sprintf("syslog collector %q is still configured after delete", host),
+				Before: before.Servers,
+				After:  after.Servers,
+			}
+		}
+	}
+	return nil
+}
+
 // emxNameMax is the GS110EMX sysInfo name box's maxlength="20"; its own
 // checkValidName() additionally rejects anything outside printable ASCII.
 // Both read off the live page (10.1.5.27, 2026-08-05), mirroring Python

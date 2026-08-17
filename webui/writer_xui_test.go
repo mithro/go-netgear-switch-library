@@ -689,6 +689,198 @@ func TestFastpathSetVlanMembershipRefusesWrongVLANAfterReselect(t *testing.T) {
 	}
 }
 
+// --- M4300 RemoveSyslogCollector (syslogConfiguration.html) -----------------
+//
+// syslogFakeSession is a hand-built webui.Session for exactly ONE
+// collector row on the real captured m4300_24x_syslog_configuration.html
+// fixture (host 10.1.5.1, table Index 1). xuiFakeSession's generic
+// NAME=/VALUE= mutation is not enough here: ParseXUISyslog decides a
+// collector is present by finding its <TR p="..."> row at all (via
+// ParseXERows), not by inspecting the write-only v_2_1_5 cell a generic
+// mutation WOULD update -- so a genuine removal has to strip the row's
+// <TR>...</TR> block itself, exactly as a real firmware's next render
+// would, mirroring fastpathMembershipFakeSession's same rationale for the
+// VLAN-membership grid.
+type syslogFakeSession struct {
+	original     string
+	removed      bool
+	honourWrites bool
+	errFlag      bool
+	posts        []postRecord
+}
+
+// syslogDataRowRE matches the fixture's single data row -- <TR p="1.0.10"
+// id=2_1>...</TR> -- and nothing else (the template row is <TR id=g_2_1>,
+// with no p="..." attribute at all, so it is never matched).
+var syslogDataRowRE = regexp.MustCompile(`(?is)<TR p="1\.0\.10" id=2_1>.*?</TR>\n`)
+
+func newSyslogFakeSession(t *testing.T) *syslogFakeSession {
+	t.Helper()
+	return &syslogFakeSession{
+		original:     readFixture(t, "m4300_24x_syslog_configuration.html"),
+		honourWrites: true,
+	}
+}
+
+func (s *syslogFakeSession) render() string {
+	if s.removed {
+		return syslogDataRowRE.ReplaceAllString(s.original, "")
+	}
+	return s.original
+}
+
+func (s *syslogFakeSession) Login(context.Context) error { return nil }
+
+func (s *syslogFakeSession) GetPage(_ context.Context, path string) (string, error) {
+	if path != "/v1/syslogConfiguration.html" {
+		return "", fmt.Errorf("syslogFakeSession: no page registered for %q", path)
+	}
+	return s.render(), nil
+}
+
+func (s *syslogFakeSession) PostForm(_ context.Context, path string, data map[string]string) (string, error) {
+	s.posts = append(s.posts, postRecord{path: path, data: cloneMap(data)})
+	if path != "/v1/syslogConfiguration.html/a1" {
+		return "", fmt.Errorf("syslogFakeSession: PostForm to unexpected path %q", path)
+	}
+	if s.honourWrites {
+		for k, v := range data {
+			if strings.HasSuffix(k, "v_2_1_5") && v == "Delete" {
+				s.removed = true
+			}
+		}
+	}
+	response := s.render()
+	if s.errFlag {
+		if mutated, ok := setNamedFieldValue(response, "err_flag", "1"); ok {
+			response = mutated
+		}
+		if mutated, ok := setNamedFieldValue(response, "err_msg", "switch refused the write"); ok {
+			response = mutated
+		}
+	}
+	return response, nil
+}
+
+func (s *syslogFakeSession) PostMultipart(_ context.Context, path string, _ map[string]string, _ webui.MultipartFile) (string, error) {
+	return "", fmt.Errorf("syslogFakeSession: PostMultipart(%q) not supported by this fake", path)
+}
+
+func (s *syslogFakeSession) PostXML(_ context.Context, path string, _ string) (string, error) {
+	return "", fmt.Errorf("syslogFakeSession: PostXML(%q) not supported by this fake", path)
+}
+
+var _ webui.Session = (*syslogFakeSession)(nil)
+
+// TestAddSyslogCollectorIsUnsupportedEverywhere proves the web UI refuses a
+// collector ADD by name on every model measured, issuing NO session I/O at
+// all -- MEASURED on m4300-24x (2026-08-05): HTTP 200 + "Failed to Set
+// 'Host Address'" and the table unchanged.
+func TestAddSyslogCollectorIsUnsupportedEverywhere(t *testing.T) {
+	for _, key := range []string{"gs305ep", "gsm7252ps", "m4300-24x"} {
+		key := key
+		t.Run(key, func(t *testing.T) {
+			sess := newSyslogFakeSession(t)
+			w := mustNewWriter(t, sess, key)
+			err := w.AddSyslogCollector(context.Background(), "10.1.5.9", 514, 6, false)
+			wantUnsupported(t, err, "AddSyslogCollector")
+			if len(sess.posts) != 0 {
+				t.Errorf("posts = %d, want 0 -- refused before any session I/O", len(sess.posts))
+			}
+		})
+	}
+}
+
+// TestRemoveSyslogCollectorRoundTrip proves the collector's row-status cell
+// is set to "Delete" and the removal reads back gone -- the M4300 XUI
+// row-delete apply, live-verified per webui.Writer.RemoveSyslogCollector's
+// own doc comment.
+func TestRemoveSyslogCollectorRoundTrip(t *testing.T) {
+	sess := newSyslogFakeSession(t)
+	w := mustNewWriter(t, sess, "m4300-24x")
+
+	if err := w.RemoveSyslogCollector(context.Background(), "10.1.5.1", false); err != nil {
+		t.Fatalf("RemoveSyslogCollector: %v", err)
+	}
+	if !sess.removed {
+		t.Fatal("collector row still present after RemoveSyslogCollector")
+	}
+	// The Delete apply must target the ROW's own fields (host, checkbox) --
+	// no index arithmetic on this path.
+	var applyPost *postRecord
+	for i := range sess.posts {
+		if hasSuffixedKey(sess.posts[i].data, "v_2_1_5") {
+			applyPost = &sess.posts[i]
+		}
+	}
+	if applyPost == nil {
+		t.Fatalf("no POST carried v_2_1_5")
+	}
+	if v, ok := valueForSuffixedKey(applyPost.data, "v_2_1_1"); !ok || v != "10.1.5.1" {
+		t.Errorf("apply body's own v_2_1_1 (host) = %q (ok=%v), want \"10.1.5.1\"", v, ok)
+	}
+	if applyPost.data["v_4_3_1"] == "" {
+		t.Errorf("apply body did not click the Delete button (v_4_3_1)")
+	}
+}
+
+// TestRemoveSyslogCollectorUnsupportedOnNonM4300Dialect proves gsm7252ps
+// (XE FASTPATH, not M4300) is refused by name -- only the M4300 pages
+// declare the cell metadata this write depends on.
+func TestRemoveSyslogCollectorUnsupportedOnNonM4300Dialect(t *testing.T) {
+	sess := newXUIFakeSession(map[string]string{
+		"/syslogConfiguration.html": readFixture(t, "gsm7252ps_syslog_configuration.html"),
+	})
+	w := mustNewWriter(t, sess, "gsm7252ps")
+	err := w.RemoveSyslogCollector(context.Background(), "10.1.5.1", false)
+	wantUnsupported(t, err, "RemoveSyslogCollector on gsm7252ps")
+	if len(sess.posts) != 0 {
+		t.Errorf("posts = %d, want 0 -- refused before any session I/O", len(sess.posts))
+	}
+}
+
+// TestRemoveSyslogCollectorRefusesUnknownHost proves a host not in the
+// table is refused as a PRECONDITION failure, with NO POST sent -- never a
+// removal for a row that is not there.
+func TestRemoveSyslogCollectorRefusesUnknownHost(t *testing.T) {
+	sess := newSyslogFakeSession(t)
+	w := mustNewWriter(t, sess, "m4300-24x")
+	err := w.RemoveSyslogCollector(context.Background(), "10.9.9.9", false)
+	if !errors.Is(err, model.ErrHTTPUnexpectedPage) {
+		t.Fatalf("RemoveSyslogCollector(unknown host) error = %v, want wrapping model.ErrHTTPUnexpectedPage", err)
+	}
+	if len(sess.posts) != 0 {
+		t.Errorf("posts = %d, want 0 -- no removal for a row that is not there", len(sess.posts))
+	}
+}
+
+// TestRemoveSyslogCollectorVerificationFailureRaises proves a switch that
+// accepts the POST but leaves the row in place surfaces a
+// *model.WriteVerificationError.
+func TestRemoveSyslogCollectorVerificationFailureRaises(t *testing.T) {
+	sess := newSyslogFakeSession(t)
+	sess.honourWrites = false
+	w := mustNewWriter(t, sess, "m4300-24x")
+	err := w.RemoveSyslogCollector(context.Background(), "10.1.5.1", false)
+	wantVerificationError(t, err, "RemoveSyslogCollector not reflected")
+}
+
+// TestRemoveSyslogCollectorSwitchRefusalStillSurfacesAsVerificationError
+// proves that -- unlike SetPortEnabled/SetPoE -- RemoveSyslogCollector does
+// NOT inspect the page's own err_flag/err_msg fields at all, mirroring
+// Python HttpWriter.remove_syslog_collector exactly: a refusal (err_flag=1,
+// row left in place) is caught ONLY by the generic verify-after-write
+// re-read, surfacing as *model.WriteVerificationError rather than a
+// distinguished "switch refused" model.ErrHTTP.
+func TestRemoveSyslogCollectorSwitchRefusalStillSurfacesAsVerificationError(t *testing.T) {
+	sess := newSyslogFakeSession(t)
+	sess.honourWrites = false
+	sess.errFlag = true
+	w := mustNewWriter(t, sess, "m4300-24x")
+	err := w.RemoveSyslogCollector(context.Background(), "10.1.5.1", false)
+	wantVerificationError(t, err, "RemoveSyslogCollector switch refusal")
+}
+
 // --- GS110EMX: a genuinely different port-admin mechanism -------------------
 
 // gs110emxFakeSession is a hand-built webui.Session for the GS110EMX's

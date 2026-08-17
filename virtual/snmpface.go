@@ -26,6 +26,7 @@ package virtual
 // applied cleanly).
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -304,9 +305,10 @@ func (f *SnmpFace) handleSet(vars []gosnmp.SnmpPDU) (out []gosnmp.SnmpPDU, errSt
 			f.view.RestoreState(snapshot)
 			return echoRequest(vars), gosnmp.NotWritable, uint8(i + 1) //nolint:gosec // a SET PDU carries at most a handful of varbinds, never close to 255
 		}
-		if !applyUncommitted(f.view, oid, fromWireValue(vb)) {
+		status, ok := applyUncommitted(f.view, oid, fromWireValue(vb))
+		if !ok {
 			f.view.RestoreState(snapshot)
-			return echoRequest(vars), gosnmp.WrongValue, uint8(i + 1) //nolint:gosec // see above
+			return echoRequest(vars), status, uint8(i + 1) //nolint:gosec // see above
 		}
 		applied[i] = vb
 	}
@@ -322,20 +324,32 @@ func echoRequest(vars []gosnmp.SnmpPDU) []gosnmp.SnmpPDU {
 }
 
 // applyUncommitted calls view.ApplyWriteUncommitted(oid, value), reporting
-// false instead of letting a panic escape: State.ApplyWrite's int/byte
+// ok=false instead of letting a panic escape: State.ApplyWrite's int/byte
 // coercion helpers (mustInt/asBytes) panic on a value of a shape no real
 // call site should ever pass (D-VIRT §1.7) -- for this face, an
 // attacker-or-bug-controlled SET value reaching that helper is exactly the
 // "apply-uncommitted failure" the dossier maps to a clean wrongValue error
 // status, never a crashed/dropped response.
-func applyUncommitted(v *MibView, oid string, value any) (ok bool) {
+//
+// One panic value is distinguished from every other: State.ApplyWrite
+// raises errSyslogRowCreateRefused for a syslog-host RowStatus SET at an
+// index with no existing collector row, mirroring a real m4300-24x
+// agent's own SMI error-status for that measured refusal
+// (inconsistentValue, not the generic wrongValue every other rejected SET
+// in this mock answers with -- see state.go's RowStatus-column block).
+func applyUncommitted(v *MibView, oid string, value any) (status gosnmp.SNMPError, ok bool) {
 	defer func() {
-		if recover() != nil {
+		if r := recover(); r != nil {
 			ok = false
+			if err, isErr := r.(error); isErr && errors.Is(err, errSyslogRowCreateRefused) {
+				status = gosnmp.InconsistentValue
+			} else {
+				status = gosnmp.WrongValue
+			}
 		}
 	}()
 	v.ApplyWriteUncommitted(oid, value)
-	return true
+	return gosnmp.NoError, true
 }
 
 // toWireValue converts one ViewEntry's (type, value) pair to the gosnmp

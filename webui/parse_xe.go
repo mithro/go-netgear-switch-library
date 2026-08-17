@@ -1421,6 +1421,13 @@ var xuiNavRowRE = regexp.MustCompile(`(?is)<TR\b[^>]*\bclass=["']?deftestme["']?
 // render EMPTY and the firmware tries to apply them to every port).
 var xuiPageFieldRE = regexp.MustCompile(`^v_\d+_\d+_\d+$`)
 
+// xuiTemplateRE mirrors Python parse._XUI_TEMPLATE_RE: the page's blank ADD
+// row, named "v_g_<table>_<tr>_<col>" with NO instance prefix -- e.g.
+// "v_g_2_1_1", not "g_2_1_1", which is why a search for the latter used to
+// read as "this page has no template row" (it cost two rounds of "needs a
+// browser capture" to find, per Python's own doc comment on this field).
+var xuiTemplateRE = regexp.MustCompile(`^v_g_(\d+)_(\d+)_(\d+)$`)
+
 // xuiButtons mirrors Python parse._xui_buttons: the page's button fields ->
 // their labels ("v_2_1_2" -> "APPLY"). Kept even though the inputs are
 // rendered DISABLED (so a browser would not submit them), because the
@@ -1512,18 +1519,23 @@ func ParseXUIListPage(htmlStr, page string) (XuiListPage, error) {
 		}
 	}
 	tokens := make(map[string]string)
+	template := make(map[string]string)
 	for n, v := range formFields {
 		if xuiTokenRE.MatchString(n) {
 			tokens[n] = unescapeHTML(v)
 		}
+		if xuiTemplateRE.MatchString(n) {
+			template[n] = unescapeHTML(v)
+		}
 	}
 	return XuiListPage{
-		Action:  action,
-		Hidden:  hidden,
-		Buttons: xuiButtons(block),
-		Rows:    rows,
-		Tokens:  tokens,
-		Nav:     nav,
+		Action:   action,
+		Hidden:   hidden,
+		Buttons:  xuiButtons(block),
+		Rows:     rows,
+		Tokens:   tokens,
+		Nav:      nav,
+		Template: template,
 	}, nil
 }
 
@@ -1877,6 +1889,23 @@ const (
 	// handle a row-status write addresses. Public for the same reason as
 	// XUISyslogHostAddress above.
 	XUISyslogHostIndex = "2_1_6"
+	// xuiSyslogHostAddressCol is XUISyslogHostAddress in the "v_"-prefixed
+	// bare-column form XuiListPage.RowFor/XuiRow.Field expect (they key off
+	// the FULL row field name, "<prefix>v_2_1_1", never the bare "2_1_1"
+	// ParseXERows uses).
+	xuiSyslogHostAddressCol = "v_" + XUISyslogHostAddress
+	// xuiSyslogHostRowStatus is "v_2_1_5" -- the cell an ADD sets to
+	// "Active" and a DELETE sets to "Delete". NOT xuiSyslogHostStatus
+	// ("2_1_2"), which is the read-only mirror the table displays.
+	xuiSyslogHostRowStatus = "v_2_1_5"
+	// xuiSyslogRowStatusActive/xuiSyslogRowStatusDelete are the row-status
+	// cell's two write-only values, mirroring Python forms.
+	// XUI_ROW_STATUS_ACTIVE/XUI_ROW_STATUS_DELETE.
+	xuiSyslogRowStatusDelete = "Delete"
+	// xuiSyslogDeleteButton is the syslog page's Delete button field name
+	// ("v_4_3_1"), read off a live M4300 fetch (2026-08-05) -- mirroring
+	// Python http_write._XUI_SYSLOG_DELETE.
+	xuiSyslogDeleteButton = "v_4_3_1"
 )
 
 // ParseXUISyslog parses syslogConfiguration.html into model.SyslogConfig,
