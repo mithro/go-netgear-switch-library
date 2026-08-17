@@ -2,9 +2,11 @@ package capabilities
 
 // support.go: the top-level dispatcher -- For/BackendsFor/ForKey/Matrix --
 // ported field-for-field from src/netgear_switch/capabilities.py's
-// support()/backends_for()/matrix() (pin go-port-pin-a9e0ebc, lines
-// 344-414). Any discrepancy between this file and that pin is a bug in this
-// file.
+// support()/backends_for()/matrix() (pin go-port-pin-b26eb1f, lines
+// 692-762). Any discrepancy between this file and that pin is a bug in this
+// file. Unchanged in substance by the b26eb1f refresh -- these three
+// functions are op/operation-table agnostic, so growing the Operations
+// table from 21 to 32 entries required no edits here.
 //
 // Naming: Python's free function support(model, backend, op) cannot be
 // named Support in Go (the type Support already claims that identifier) --

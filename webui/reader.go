@@ -792,7 +792,7 @@ func (r *Reader) GetSensors(ctx context.Context) ([]model.Sensor, error) {
 	return parseSensors(r.spec, html)
 }
 
-// hasSysinfoHostname reports whether spec's dialect's identity page carries
+// HasSysinfoHostname reports whether spec's dialect's identity page carries
 // the switch's host name: true for gs110emx's sysInfo.html (switch_name
 // input), gs105pe's switch_info.cgi, and the GoAhead DeviceBasicInfo section.
 //
@@ -802,8 +802,10 @@ func (r *Reader) GetSensors(ctx context.Context) ([]model.Sensor, error) {
 // firmware 6.0.1.30, 2026-08-03) reading "sw-netgear-gs728tpp", byte-for-byte
 // what SNMP reports through sysName. The FASTPATH/XE and M4300 identity
 // pages really do lack one, so those models still read the name over SNMP or
-// the CLI. Mirrors Python http_read._has_sysinfo_hostname.
-func hasSysinfoHostname(spec *HTTPModelSpec) bool {
+// the CLI. Mirrors Python http_read._has_sysinfo_hostname. Exported (like
+// SupportsSensors above) so the capabilities oracle's HTTP derivation can
+// reuse this exact logic instead of re-deriving it.
+func HasSysinfoHostname(spec *HTTPModelSpec) bool {
 	return spec.SysinfoPath != "" && (isGS110EMXDialect(spec) || isGS105PEDialect(spec) || isGoAheadDialect(spec))
 }
 
@@ -820,7 +822,7 @@ func hasSysinfoHostname(spec *HTTPModelSpec) bool {
 // host name on a switch that has never been named, so it must not double as
 // "this backend cannot tell you".
 func (r *Reader) GetHostname(ctx context.Context) (string, error) {
-	if !hasSysinfoHostname(r.spec) {
+	if !HasSysinfoHostname(r.spec) {
 		return "", unsupportedOp(r.model.Key, "a host name field")
 	}
 	page, err := r.session.GetPage(ctx, r.spec.SysinfoPath)
@@ -903,16 +905,28 @@ func (r *Reader) GetUsers(ctx context.Context) ([]model.SwitchUser, error) {
 	return ParseXUIUsers(html)
 }
 
+// HasServicePaths reports whether spec names all four management-service
+// pages (http/https/ssh/telnet), mirroring Python http_read._service_paths's
+// all-or-nothing membership test. The S3300 is the case that motivates it --
+// its https and telnet pages parse fine, but its httpConfiguration.html
+// carries no admin control and its sshConfiguration.html 404s. Reporting the
+// two that work would read as "this switch has no SSH" -- a confident wrong
+// answer -- where refusing says only what is true: this UI cannot be asked.
+// Exported (like SupportsSensors/HasSysinfoHostname above) so the
+// capabilities oracle's HTTP derivation can reuse this exact logic instead
+// of re-deriving it.
+func HasServicePaths(spec *HTTPModelSpec) bool {
+	return spec.HTTPServicePath != "" && spec.HTTPSServicePath != "" && spec.SSHServicePath != "" && spec.TelnetServicePath != ""
+}
+
 // requireServicePaths returns the (service, path) pairs for spec, in
-// ServiceNames order, or refuses honestly unless ALL FOUR are populated,
-// mirroring Python _require_service_paths/_service_paths (http_read.py:
-// 78-104). All-or-nothing on purpose: the S3300 is the case that motivates
-// it -- its https and telnet pages parse fine, but its
-// httpConfiguration.html carries no admin control and its
-// sshConfiguration.html 404s. Returning the two that work would report a
-// switch with no SSH -- a confident wrong answer -- where refusing says only
-// what is true: this UI cannot be asked.
+// ServiceNames order, or refuses honestly unless ALL FOUR are populated
+// (HasServicePaths), mirroring Python _require_service_paths (http_read.py:
+// 96-104).
 func requireServicePaths(modelKey string, spec *HTTPModelSpec) ([]struct{ Service, Path string }, error) {
+	if !HasServicePaths(spec) {
+		return nil, unsupportedOp(modelKey, "management-service state (http/https/telnet/ssh)")
+	}
 	pathFor := map[string]string{
 		"http":   spec.HTTPServicePath,
 		"https":  spec.HTTPSServicePath,
@@ -921,11 +935,7 @@ func requireServicePaths(modelKey string, spec *HTTPModelSpec) ([]struct{ Servic
 	}
 	out := make([]struct{ Service, Path string }, 0, len(ServiceNames))
 	for _, service := range ServiceNames {
-		path := pathFor[service]
-		if path == "" {
-			return nil, unsupportedOp(modelKey, "management-service state (http/https/telnet/ssh)")
-		}
-		out = append(out, struct{ Service, Path string }{service, path})
+		out = append(out, struct{ Service, Path string }{service, pathFor[service]})
 	}
 	return out, nil
 }

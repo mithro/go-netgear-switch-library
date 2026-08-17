@@ -8,13 +8,13 @@
 // with what dispatch actually does.
 //
 // Ported field-for-field from src/netgear_switch/capabilities.py (pinned
-// worktree go-port-pin-a9e0ebc). Any discrepancy between this package and
+// worktree go-port-pin-b26eb1f). Any discrepancy between this package and
 // that pin is a bug in this package, not a deliberate deviation, unless
 // called out in a comment.
 //
 // types.go: the capability data model -- Support/OperationKind/Operation/
-// Capability plus the fixed 21-entry Operations table, ported field-for-
-// field from capabilities.py lines 62-180.
+// Capability plus the fixed 32-entry Operations table, ported field-for-
+// field from capabilities.py lines 62-372.
 package capabilities
 
 import (
@@ -81,8 +81,8 @@ type Operation struct {
 
 var cliBackends = []model.Backend{model.BackendSSH, model.BackendTelnet, model.BackendConsole}
 
-// ReadOperations are the 10 read-kind operations, in the pinned Python
-// source's exact order (capabilities.py:104-122).
+// ReadOperations are the 14 read-kind operations, in the pinned Python
+// source's exact order (capabilities.py:114-186).
 var ReadOperations = []Operation{
 	{Name: "get_ports", Kind: OperationKindRead, Summary: "Per-port link/admin status"},
 	{Name: "get_stats", Kind: OperationKindRead, Summary: "Per-port octet/packet counters"},
@@ -93,26 +93,83 @@ var ReadOperations = []Operation{
 	{Name: "get_poe", Kind: OperationKindRead, Summary: "Per-port PoE status and power draw"},
 	{Name: "get_sensors", Kind: OperationKindRead, Summary: "Fan/PSU/temperature sensors"},
 	{Name: "get_mgmt_ip", Kind: OperationKindRead, Summary: "Management IP configuration"},
+	{Name: "get_hostname", Kind: OperationKindRead, Summary: "The switch's host name"},
+	// get_users: CLI and HTTP only. SNMP stays out deliberately -- the S3300's
+	// vendor SNMP user table holds ONE account where its own CLI lists two, so
+	// the two backends do not report the same set, and claiming SNMP serves
+	// this would assert an equivalence the hardware contradicts. Mirrors
+	// capabilities.py:127-145.
+	{Name: "get_users", Kind: OperationKindRead, Summary: "Local login accounts and their access level",
+		Backends: []model.Backend{model.BackendHTTP, model.BackendSSH, model.BackendTelnet, model.BackendConsole}},
+	// get_services: CLI and HTTP only; the SNMP/NSDP equivalents remain
+	// unlocated rather than absent. Mirrors capabilities.py:146-161.
+	{Name: "get_services", Kind: OperationKindRead, Summary: "Which management services (http/https/telnet/ssh) are enabled",
+		Backends: []model.Backend{model.BackendHTTP, model.BackendSSH, model.BackendTelnet, model.BackendConsole}},
+	// get_syslog: SNMP, HTTP and the CLI all read this and agree field-for-
+	// field on live hardware; NSDP genuinely has no logging tag (an
+	// exhaustive tag sweep of a live GS110EMX found none). Mirrors
+	// capabilities.py:162-179.
+	{Name: "get_syslog", Kind: OperationKindRead, Summary: "Remote-logging configuration and collectors",
+		Backends: []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendSSH, model.BackendTelnet, model.BackendConsole}},
 	{Name: "nsdp_device", Kind: OperationKindRead, Summary: "Full NSDP device record", Backends: []model.Backend{model.BackendNSDP}},
 }
 
-// WriteOperations are the 11 write-kind operations, in the pinned Python
-// source's exact order (capabilities.py:124-150).
+// WriteOperations are the 18 write-kind operations, in the pinned Python
+// source's exact order (capabilities.py:188-372).
 var WriteOperations = []Operation{
 	{Name: "set_port_enabled", Kind: OperationKindWrite, Summary: "Bring a port up or down"},
 	{Name: "set_poe", Kind: OperationKindWrite, Summary: "Enable or disable PoE on a port"},
 	{Name: "cycle_poe", Kind: OperationKindWrite, Summary: "Power-cycle a PoE port"},
 	{Name: "clear_poe_fault", Kind: OperationKindWrite, Summary: "Clear a latched PoE fault"},
+	// set_port_description: every backend serves this (Backends: nil, "any
+	// backend the model has") -- each grounded separately (SNMP ifAlias, NSDP
+	// tag 0xB000, CLI `description`, HTTP only the GoAhead dialect's
+	// interfaceDescription). Mirrors capabilities.py:193-210.
+	{Name: "set_port_description", Kind: OperationKindWrite, Summary: "Set or clear a port's description"},
+	// set_port_speed: CLI and HTTP only. SNMP/NSDP refuse by name (ifSpeed/
+	// ifHighSpeed report the negotiated rate, not a setting; NSDP's per-port
+	// speed byte is a link-state code). Mirrors capabilities.py:211-233.
+	{Name: "set_port_speed", Kind: OperationKindWrite, Summary: "Force a port's speed/duplex, or restore auto-negotiation",
+		Backends: []model.Backend{model.BackendHTTP, model.BackendSSH, model.BackendTelnet, model.BackendConsole}},
+	// set_flow_control: CLI only. SNMP/NSDP/HTTP all refuse by name -- HTTP is
+	// a MEASURED absence (the GoAhead ports page reports flow control but has
+	// no control for it). Mirrors capabilities.py:234-249.
+	{Name: "set_flow_control", Kind: OperationKindWrite, Summary: "Turn IEEE 802.3x flow control on or off for a port",
+		Backends: cliBackends},
 	{Name: "set_pvid", Kind: OperationKindWrite, Summary: "Set a port's PVID"},
 	{Name: "set_vlan_membership", Kind: OperationKindWrite, Summary: "Set a port tagged/untagged/excluded on a VLAN"},
 	{Name: "create_vlan", Kind: OperationKindWrite, Summary: "Create a VLAN"},
 	{Name: "delete_vlan", Kind: OperationKindWrite, Summary: "Delete a VLAN"},
 	{Name: "set_mgmt_ip", Kind: OperationKindWrite, Summary: "Set the management IP/mask/gateway"},
+	// set_hostname: SNMP (sysName), NSDP (tag 0x0003), the FASTPATH CLI
+	// (`hostname`) and the GoAhead/GS110EMX HTTP dialects, each confirmed
+	// writable against real hardware. Mirrors capabilities.py:250-299.
+	{Name: "set_hostname", Kind: OperationKindWrite, Summary: "Set the switch's host name",
+		Backends: []model.Backend{model.BackendSNMP, model.BackendNSDP, model.BackendHTTP, model.BackendSSH, model.BackendTelnet, model.BackendConsole}},
+	// set_syslog_enabled: SNMP and the CLI only, deliberately narrow -- adding
+	// or removing a COLLECTOR is a separate op that needs a row-status write,
+	// not offered here on the strength of the toggle alone. Mirrors
+	// capabilities.py:300-322.
+	{Name: "set_syslog_enabled", Kind: OperationKindWrite, Summary: "Turn remote logging on or off",
+		Backends: []model.Backend{model.BackendSNMP, model.BackendSSH, model.BackendTelnet, model.BackendConsole}},
+	// add_syslog_collector: CLI only. SNMP refuses (the agent will not create
+	// a row -- five mechanisms, all refused with captured SMI errors); HTTP
+	// refuses (the M4300 page's body posts but the firmware answers "Failed
+	// to Set 'Host Address'"); NSDP has no logging surface at all. Mirrors
+	// capabilities.py:323-340.
+	{Name: "add_syslog_collector", Kind: OperationKindWrite, Summary: "Add a remote syslog collector",
+		Backends: cliBackends},
+	// remove_syslog_collector: CLI, SNMP (RowStatus destroy(6) on the
+	// collector's own sparse table index) and HTTP (M4300 dialect only, via
+	// its row-status "Delete" cell); NSDP refuses (no logging surface).
+	// Mirrors capabilities.py:341-359.
+	{Name: "remove_syslog_collector", Kind: OperationKindWrite, Summary: "Remove a remote syslog collector",
+		Backends: []model.Backend{model.BackendSNMP, model.BackendHTTP, model.BackendSSH, model.BackendTelnet, model.BackendConsole}},
 	{Name: "upload_certificate", Kind: OperationKindWrite, Summary: "Upload an HTTPS certificate over the web UI", Backends: []model.Backend{model.BackendHTTP}},
 	{Name: "upload_certificate_scp", Kind: OperationKindWrite, Summary: "Deploy an HTTPS certificate via FASTPATH copy scp://", Backends: cliBackends},
 }
 
-// Operations is ReadOperations followed by WriteOperations, 21 entries
+// Operations is ReadOperations followed by WriteOperations, 32 entries
 // total, mirroring Python's OPERATIONS = READ_OPERATIONS + WRITE_OPERATIONS.
 var Operations = append(append([]Operation{}, ReadOperations...), WriteOperations...)
 

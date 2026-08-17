@@ -63,6 +63,31 @@ func TestHTMLDialectValues(t *testing.T) {
 	}
 }
 
+// TestDialectHasCSRFHash pins the MEASURED per-dialect fact against Python's
+// protocols.http.endpoints.dialect_has_csrf_hash: only the two Plus `.cgi`
+// dialects (STANDARD, GS105PE) carry an `<input name="hash">` token on their
+// write pages; every other dialect's write pages (probed live on gsm7252ps
+// and gs110emx) carry none.
+func TestDialectHasCSRFHash(t *testing.T) {
+	cases := []struct {
+		dialect webui.HTMLDialect
+		want    bool
+	}{
+		{webui.HTMLDialectStandard, true},
+		{webui.HTMLDialectGS105PE, true},
+		{webui.HTMLDialectGS110EMX, false},
+		{webui.HTMLDialectM4300, false},
+		{webui.HTMLDialectXEFastpath, false},
+		{webui.HTMLDialectS3300, false},
+		{webui.HTMLDialectGoAheadXML, false},
+	}
+	for _, c := range cases {
+		if got := webui.DialectHasCSRFHash(c.dialect); got != c.want {
+			t.Errorf("DialectHasCSRFHash(%s) = %v, want %v", c.dialect, got, c.want)
+		}
+	}
+}
+
 // TestEveryHTTPModelHasASpec mirrors test_endpoints.py::
 // test_every_http_model_has_a_spec: every registry model carrying
 // BackendHTTP must resolve through HTTPSpec without error.

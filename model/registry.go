@@ -17,12 +17,18 @@ import "fmt"
 //   - The vendor-base string form is copied verbatim from Python's _FM /
 //     _SMP constants, which hold the FULL OID ("1.3.6.1.4.1.4526.10" /
 //     ".11"), not a bare suffix -- so the Go constants below do the same.
-//   - Python's SwitchModel dataclass has exactly the 8 fields reproduced on
-//     SwitchModel below (key, display_name, switch_class, port_count,
-//     poe_port_count, backends, snmp_vendor_base, verified) plus the
-//     computed has_mac_table property (ported as the HasMACTable method).
-//     No other fields (no quirk/capability-flag fields) exist on the
-//     Python dataclass.
+//   - Python's SwitchModel dataclass (as of pin b26eb1f) has the 8 fields
+//     reproduced on SwitchModel below (key, display_name, switch_class,
+//     port_count, poe_port_count, backends, snmp_vendor_base, verified),
+//     the computed has_mac_table property (ported as the HasMACTable
+//     method), and one capability-flag field the capabilities oracle reads
+//     directly -- snmp_can_create_vlan, ported as SNMPCanCreateVLAN (see its
+//     own doc comment). Two further Python fields (snmp_vlan_write,
+//     snmp_vlan_split_membership_writes) govern SNMP VLAN-membership write
+//     ENCODING, a mechanism detail the capabilities oracle never reads
+//     (capabilities.py's _snmp_support touches only snmp_can_create_vlan);
+//     they are deliberately NOT ported here -- porting them is unrelated
+//     follow-up work for whichever package implements that encoding.
 //   - Python's backends field is a frozenset[Backend] (membership only, no
 //     order). The Go Backends field is a slice for a concrete, orderable
 //     Go type; the per-model order chosen below is arbitrary (matches the
@@ -99,6 +105,22 @@ type SwitchModel struct {
 	// standard-MIB/CGI reads should still work. Mirrors Python
 	// SwitchModel.verified; do not flip to true without a real capture.
 	Verified bool
+	// SNMPCanCreateVLAN reports whether this model's SNMP agent can CREATE a
+	// VLAN (a dot1qVlanStaticTable row), mirroring Python
+	// SwitchModel.snmp_can_create_vlan. True (the default -- set explicitly
+	// on every model below, so a future addition cannot silently inherit
+	// Go's zero-value false) for every model except gs728tpp: every
+	// documented RowStatus creation mechanism against its real agent
+	// (createAndGo alone; createAndGo+name in one PDU; createAndWait->
+	// name->active; the name column alone; createAndGo+an empty egress
+	// PortList) is answered inconsistentValue -- measured 2026-08-03 on
+	// sw-netgear-gs728tpp.monarto.mithis.com/10.2.5.10, firmware 6.0.1.30.
+	// Membership, PVID and delete all DO work over SNMP on that same
+	// switch; only row CREATION is refused, which is exactly why the
+	// capabilities oracle routes create_vlan to the HTTP backend there
+	// instead (support_snmp.go) rather than treating this as "no SNMP VLAN
+	// support" wholesale.
+	SNMPCanCreateVLAN bool
 }
 
 // HasBackend reports whether m supports the given backend.
@@ -126,34 +148,37 @@ func (m *SwitchModel) HasMACTable() bool {
 // on it staying fixed.
 var models = []SwitchModel{
 	{
-		Key:            "m4300-24x",
-		DisplayName:    "M4300-24X (XSM4324CS)",
-		Class:          ClassFullyManaged,
-		PortCount:      28,
-		PoEPortCount:   0,
-		Backends:       []Backend{BackendSNMP, BackendHTTP, BackendSSH, BackendTelnet},
-		SNMPVendorBase: vendorBaseFullyManaged,
-		Verified:       true,
+		Key:               "m4300-24x",
+		DisplayName:       "M4300-24X (XSM4324CS)",
+		Class:             ClassFullyManaged,
+		PortCount:         28,
+		PoEPortCount:      0,
+		Backends:          []Backend{BackendSNMP, BackendHTTP, BackendSSH, BackendTelnet},
+		SNMPVendorBase:    vendorBaseFullyManaged,
+		Verified:          true,
+		SNMPCanCreateVLAN: true,
 	},
 	{
-		Key:            "m4300-16x",
-		DisplayName:    "M4300-16X (XSM4316)",
-		Class:          ClassFullyManaged,
-		PortCount:      16,
-		PoEPortCount:   16,
-		Backends:       []Backend{BackendSNMP, BackendHTTP, BackendSSH, BackendTelnet},
-		SNMPVendorBase: vendorBaseFullyManaged,
-		Verified:       true,
+		Key:               "m4300-16x",
+		DisplayName:       "M4300-16X (XSM4316)",
+		Class:             ClassFullyManaged,
+		PortCount:         16,
+		PoEPortCount:      16,
+		Backends:          []Backend{BackendSNMP, BackendHTTP, BackendSSH, BackendTelnet},
+		SNMPVendorBase:    vendorBaseFullyManaged,
+		Verified:          true,
+		SNMPCanCreateVLAN: true,
 	},
 	{
-		Key:            "gsm7252ps",
-		DisplayName:    "GSM7252PS",
-		Class:          ClassFullyManaged,
-		PortCount:      52,
-		PoEPortCount:   48,
-		Backends:       []Backend{BackendSNMP, BackendHTTP, BackendSSH, BackendTelnet},
-		SNMPVendorBase: vendorBaseFullyManaged,
-		Verified:       true,
+		Key:               "gsm7252ps",
+		DisplayName:       "GSM7252PS",
+		Class:             ClassFullyManaged,
+		PortCount:         52,
+		PoEPortCount:      48,
+		Backends:          []Backend{BackendSNMP, BackendHTTP, BackendSSH, BackendTelnet},
+		SNMPVendorBase:    vendorBaseFullyManaged,
+		Verified:          true,
+		SNMPCanCreateVLAN: true,
 	},
 	{
 		// VERIFIED 2026-07-30 against real hardware: the S3300-52X-PoE+
@@ -177,34 +202,37 @@ var models = []SwitchModel{
 		// tcpConnTable shows only 80/443/60000). Mirrors Python
 		// registry.py's gsm7228ps _model(...) call exactly -- do not
 		// re-add BackendSSH here without a NEW live capture proving it.
-		Key:            "gsm7228ps",
-		DisplayName:    "GSM7228PS (S3300)",
-		Class:          ClassSmartManagedPro,
-		PortCount:      52,
-		PoEPortCount:   48,
-		Backends:       []Backend{BackendSNMP, BackendHTTP, BackendTelnet},
-		SNMPVendorBase: vendorBaseSmartManagedPro,
-		Verified:       true,
+		Key:               "gsm7228ps",
+		DisplayName:       "GSM7228PS (S3300)",
+		Class:             ClassSmartManagedPro,
+		PortCount:         52,
+		PoEPortCount:      48,
+		Backends:          []Backend{BackendSNMP, BackendHTTP, BackendTelnet},
+		SNMPVendorBase:    vendorBaseSmartManagedPro,
+		Verified:          true,
+		SNMPCanCreateVLAN: true,
 	},
 	{
-		Key:            "gs110emx",
-		DisplayName:    "GS110EMX",
-		Class:          ClassPlus,
-		PortCount:      10,
-		PoEPortCount:   0,
-		Backends:       []Backend{BackendNSDP, BackendHTTP},
-		SNMPVendorBase: "",
-		Verified:       true,
+		Key:               "gs110emx",
+		DisplayName:       "GS110EMX",
+		Class:             ClassPlus,
+		PortCount:         10,
+		PoEPortCount:      0,
+		Backends:          []Backend{BackendNSDP, BackendHTTP},
+		SNMPVendorBase:    "",
+		Verified:          true,
+		SNMPCanCreateVLAN: true, // irrelevant: this model has no SNMP backend
 	},
 	{
-		Key:            "gs305ep",
-		DisplayName:    "GS305EP",
-		Class:          ClassPlus,
-		PortCount:      5,
-		PoEPortCount:   4,
-		Backends:       []Backend{BackendNSDP, BackendHTTP},
-		SNMPVendorBase: "",
-		Verified:       true,
+		Key:               "gs305ep",
+		DisplayName:       "GS305EP",
+		Class:             ClassPlus,
+		PortCount:         5,
+		PoEPortCount:      4,
+		Backends:          []Backend{BackendNSDP, BackendHTTP},
+		SNMPVendorBase:    "",
+		Verified:          true,
+		SNMPCanCreateVLAN: true, // irrelevant: this model has no SNMP backend
 	},
 	{
 		// UNVERIFIED-pending-capture: no device capture exists (registered
@@ -213,14 +241,15 @@ var models = []SwitchModel{
 		// actually deployed is unverified. Same FASTPATH fully-managed
 		// lineage as M4300, so the fully-managed vendor subtree is the
 		// best spec-guess, itself unverified.
-		Key:            "m7300",
-		DisplayName:    "M7300-24XF",
-		Class:          ClassFullyManaged,
-		PortCount:      24,
-		PoEPortCount:   0,
-		Backends:       []Backend{BackendSNMP},
-		SNMPVendorBase: vendorBaseFullyManaged,
-		Verified:       false,
+		Key:               "m7300",
+		DisplayName:       "M7300-24XF",
+		Class:             ClassFullyManaged,
+		PortCount:         24,
+		PoEPortCount:      0,
+		Backends:          []Backend{BackendSNMP},
+		SNMPVendorBase:    vendorBaseFullyManaged,
+		Verified:          false,
+		SNMPCanCreateVLAN: true,
 	},
 	{
 		// UNVERIFIED-pending-capture: 48x 10G copper (+ SFP+ combo),
@@ -228,14 +257,15 @@ var models = []SwitchModel{
 		// Smart Managed Pro switch but is deliberately OMITTED (not just
 		// unverified) to avoid implying a web-UI integration that does
 		// not exist in this codebase.
-		Key:            "xs748t",
-		DisplayName:    "XS748T",
-		Class:          ClassSmartManagedPro,
-		PortCount:      48,
-		PoEPortCount:   0,
-		Backends:       []Backend{BackendSNMP},
-		SNMPVendorBase: vendorBaseSmartManagedPro,
-		Verified:       false,
+		Key:               "xs748t",
+		DisplayName:       "XS748T",
+		Class:             ClassSmartManagedPro,
+		PortCount:         48,
+		PoEPortCount:      0,
+		Backends:          []Backend{BackendSNMP},
+		SNMPVendorBase:    vendorBaseSmartManagedPro,
+		Verified:          false,
+		SNMPCanCreateVLAN: true,
 	},
 	{
 		// GS728TPP: 24x Gigabit PoE+ + 4x SFP combo = 28 total ports, 24
@@ -254,6 +284,12 @@ var models = []SwitchModel{
 		Backends:       []Backend{BackendSNMP, BackendHTTP},
 		SNMPVendorBase: "",
 		Verified:       true,
+		// Its SNMP agent cannot CREATE a VLAN -- measured, with the device's
+		// own inconsistentValue for every documented RowStatus mechanism;
+		// see SNMPCanCreateVLAN's doc comment. Everything else in the VLAN
+		// surface (membership, PVID, destroy) works over SNMP, and creation
+		// works over HTTP.
+		SNMPCanCreateVLAN: false,
 	},
 	{
 		// GS105PE: a real, distinct SKU from gs305ep -- a 5-port Gigabit
@@ -263,14 +299,15 @@ var models = []SwitchModel{
 		// unverified): the web UI's PoE-status page 404s on the real
 		// unit -- the product's PoE-passthrough capability is not a PSE
 		// claim.
-		Key:            "gs105pe",
-		DisplayName:    "GS105PE",
-		Class:          ClassPlus,
-		PortCount:      5,
-		PoEPortCount:   0,
-		Backends:       []Backend{BackendNSDP, BackendHTTP},
-		SNMPVendorBase: "",
-		Verified:       true,
+		Key:               "gs105pe",
+		DisplayName:       "GS105PE",
+		Class:             ClassPlus,
+		PortCount:         5,
+		PoEPortCount:      0,
+		Backends:          []Backend{BackendNSDP, BackendHTTP},
+		SNMPVendorBase:    "",
+		Verified:          true,
+		SNMPCanCreateVLAN: true, // irrelevant: this model has no SNMP backend
 	},
 }
 
