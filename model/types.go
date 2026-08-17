@@ -355,6 +355,17 @@ type SyslogServer struct {
 	Index *int `json:"index"`
 }
 
+// DefaultSyslogPort/DefaultSyslogSeverity are the UDP port and severity
+// AddSyslogCollector uses on a real switch when a caller does not have a
+// reason to pick something else, mirroring Python's
+// `add_syslog_collector(self, host, *, port=514, severity=6, ...)` keyword
+// defaults -- Go has no keyword-default parameters, so callers reference
+// these constants explicitly instead of relying on an implicit default.
+const (
+	DefaultSyslogPort     = 514
+	DefaultSyslogSeverity = 6
+)
+
 // SyslogSeverityNames maps syslog severity names, as the switches PRINT
 // them, to the standard numbers the SNMP columns carry. Netgear spells the
 // same value differently depending on which face you ask, so this is

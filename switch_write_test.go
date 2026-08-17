@@ -71,6 +71,15 @@ type fakeWriter struct {
 	setSyslogEnabledCall *struct {
 		enabled, force bool
 	}
+	addSyslogCollectorCall *struct {
+		host           string
+		port, severity int
+		force          bool
+	}
+	removeSyslogCollectorCall *struct {
+		host  string
+		force bool
+	}
 	cyclePoECall *struct {
 		port     int
 		timeouts snmp.PoeCycleTimeouts
@@ -204,6 +213,27 @@ func (f *fakeWriter) SetSyslogEnabled(_ context.Context, enabled bool, force boo
 	f.setSyslogEnabledCall = &struct {
 		enabled, force bool
 	}{enabled, force}
+	return f.err
+}
+
+func (f *fakeWriter) AddSyslogCollector(_ context.Context, host string, port, severity int, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.addSyslogCollectorCall = &struct {
+		host           string
+		port, severity int
+		force          bool
+	}{host, port, severity, force}
+	return f.err
+}
+
+func (f *fakeWriter) RemoveSyslogCollector(_ context.Context, host string, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removeSyslogCollectorCall = &struct {
+		host  string
+		force bool
+	}{host, force}
 	return f.err
 }
 

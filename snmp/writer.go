@@ -407,6 +407,108 @@ func (w *Writer) SetSyslogEnabled(ctx context.Context, enabled bool, _ bool) err
 	return nil
 }
 
+// AddSyslogCollector always returns an error wrapping
+// model.ErrUnsupportedCapability: this agent will not CREATE a syslog host
+// row. MEASURED, not assumed.
+//
+// Probed on m4300-24x 10.1.5.13 (FASTPATH 12.0.13.8, 2026-08-05) with the
+// Read/Write community, against a free index. Five mechanisms, five
+// refusals, with the agent's own SMI error-status:
+//
+//	createAndGo(4) + every column, one PDU -> inconsistentValue
+//	createAndWait(5) alone                 -> inconsistentValue
+//	createAndGo(4) alone                   -> inconsistentValue
+//	the value columns alone (auto-create?) -> commitFailed
+//	active(1) at a row that does not exist -> commitFailed
+//
+// The same agent ACCEPTS a SET of every column of an EXISTING row, and
+// accepts destroy -- see RemoveSyslogCollector -- so this is the agent
+// declining row creation specifically, not a permissions problem.
+//
+// Same shape as the GS728TPP's refusal to create a VLAN row. Add over a CLI
+// backend, where the command is the device's own running-config line.
+// Every parameter is accepted-but-unused, purely so this method's signature
+// matches every other writer.
+func (w *Writer) AddSyslogCollector(_ context.Context, _ string, _, _ int, _ bool) error {
+	return fmt.Errorf(
+		"model %q: this agent refuses to create a syslog host row (measured: createAndGo/createAndWait -> inconsistentValue, value-columns-only -> commitFailed); add it over a CLI backend: %w",
+		w.model.Key, model.ErrUnsupportedCapability,
+	)
+}
+
+// RemoveSyslogCollector removes a collector by writing RowStatus destroy(6)
+// to its row, mirroring Python SnmpWriter.remove_syslog_collector
+// (snmp_write.py:870-914).
+//
+// LIVE-VERIFIED on m4300-24x 10.1.5.13 (2026-08-05): a throwaway collector
+// added over the CLI was destroyed with a single SET of
+// "<base>.14.1.4.5.1.7.<index> = 6", and the switch's own "show logging
+// hosts" confirmed the row was gone.
+//
+// Note the asymmetry, which is the agent's and not this library's: it
+// DESTROYS rows but refuses to CREATE them (see AddSyslogCollector).
+//
+// index is the table's own row index -- the OID instance, which GetSyslog
+// surfaces as SyslogServer.Index. It is SPARSE, so it is read fresh here
+// (never derived from a row's position) and never cached; deriving it
+// addresses the wrong row, and the agent accepts that as a silent no-op.
+//
+// force is accepted-but-unused: redirecting logs cannot strand a switch.
+func (w *Writer) RemoveSyslogCollector(ctx context.Context, host string, _ bool) error {
+	if !HasVendorOids(w.model) {
+		return fmt.Errorf(
+			"model %q registers no Netgear vendor OID subtree, and the logging columns are vendor-only: %w",
+			w.model.Key, model.ErrUnsupportedCapability,
+		)
+	}
+	vendor, err := GetVendorOids(w.model)
+	if err != nil {
+		return err
+	}
+	before, err := w.reader.GetSyslog(ctx)
+	if err != nil {
+		return err
+	}
+	var row *model.SyslogServer
+	for i := range before.Servers {
+		if before.Servers[i].Host == host {
+			row = &before.Servers[i]
+			break
+		}
+	}
+	if row == nil {
+		// A PRECONDITION failure, not a capability limit -- the backend can
+		// serve this op, the switch simply has no such row.
+		return errSNMP("no syslog collector for %q to remove", host)
+	}
+	if row.Index == nil {
+		// The SNMP reader always fills Index; a SyslogServer from another
+		// backend landing here would not.
+		return errSNMP("the syslog collector for %q carries no table index", host)
+	}
+	vb, err := NewSetVarbind(fmt.Sprintf("%s.%d", vendor.SyslogHostStatus, *row.Index), RowStatusDestroy, "i")
+	if err != nil {
+		return err
+	}
+	if err := w.client.Set(ctx, vb); err != nil {
+		return err
+	}
+	after, err := w.reader.GetSyslog(ctx)
+	if err != nil {
+		return err
+	}
+	for _, s := range after.Servers {
+		if s.Host == host {
+			return &model.WriteVerificationError{
+				Msg:    fmt.Sprintf("syslog collector %q is still configured after destroy", host),
+				Before: before.Servers,
+				After:  after.Servers,
+			}
+		}
+	}
+	return nil
+}
+
 // SetPortSpeed always returns an error wrapping
 // model.ErrUnsupportedCapability: this backend cannot configure a port's
 // speed. Mirrors Python's SnmpWriter.set_port_speed.

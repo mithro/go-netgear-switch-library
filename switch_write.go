@@ -314,6 +314,46 @@ func (s *Switch) SetSyslogEnabled(ctx context.Context, enabled bool, o Write) er
 	})
 }
 
+// AddSyslogCollector adds a remote syslog collector for host, dispatched
+// through the resolved backend (o.Backend, or this Switch's default), and
+// reads it back to confirm.
+//
+// Served ONLY over the FASTPATH CLI (`logging host "<addr>" <kind> <port>
+// <severity>`); severity is the standard syslog number (0 emergency .. 7
+// debug; model.DefaultSyslogSeverity is the usual 6/info, model.
+// DefaultSyslogPort the usual 514) and the switch forwards messages at or
+// above it. Refuses if a collector for host already exists, because the
+// firmware would otherwise add a SECOND row for the same address and
+// silently duplicate delivery -- a precondition failure, so no command is
+// sent. SNMP, the HTTP web UI and NSDP all refuse this op by name (wrapping
+// model.ErrUnsupportedCapability): every refusal is a MEASURED hardware
+// finding (see BackendWriter's doc comment), not an assumption. Not
+// force-gated: o.Force is forwarded unchanged, but no backend consults it.
+func (s *Switch) AddSyslogCollector(ctx context.Context, host string, port, severity int, o Write) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
+		return w.AddSyslogCollector(ctx, host, port, severity, o.Force)
+	})
+}
+
+// RemoveSyslogCollector removes the remote syslog collector for host,
+// dispatched through the resolved backend (o.Backend, or this Switch's
+// default), and reads back to confirm it is gone.
+//
+// Served over the FASTPATH CLI (`logging host remove <index>`, a
+// SUBCOMMAND, never a negation), SNMP (RowStatus destroy(6) written to the
+// collector's OWN sparse table index -- re-read fresh from GetSyslog
+// immediately before the write and NEVER derived from a row's position) and
+// the HTTP web UI (M4300 dialect only: the syslog page's row-status cell
+// set to "Delete"); NSDP refuses by name (no logging surface). Refuses if
+// no collector for host is configured, rather than removing a row that is
+// not there. Not force-gated: o.Force is forwarded unchanged, but no
+// backend consults it -- redirecting logs cannot strand a switch.
+func (s *Switch) RemoveSyslogCollector(ctx context.Context, host string, o Write) error {
+	return s.writeVia(ctx, o.Backend, func(w BackendWriter) error {
+		return w.RemoveSyslogCollector(ctx, host, o.Force)
+	})
+}
+
 // SetMgmtIP sets the switch's own management IP (address/netmask/gateway),
 // dispatched through the resolved backend (o.Backend, or this Switch's
 // default). The unconditional force-gate (force=false ALWAYS refuses,

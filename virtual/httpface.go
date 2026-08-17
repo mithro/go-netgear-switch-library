@@ -216,14 +216,21 @@ func httpSpecPathFields(spec *webui.HTTPModelSpec) []string {
 }
 
 // xuiWriteHTTPPaths returns {"<page>.html/a1": "<page>.html"} for every XUI
-// write page (PortConfigPath/PoEConfigPath/MgmtIPPath), mirroring Python's
-// _xui_write_paths: on real managed-model firmware every one of these pages
-// GETs at "<page>.html" and POSTs to "<page>.html/a1" (its second form's
-// ACTION), so the mock must serve both paths or a faithful writer's apply
-// would 404 against it while working on hardware.
+// write page (PortConfigPath/PoEConfigPath/MgmtIPPath/SyslogPath -- the
+// syslog page posts collector row add/delete to its own /a1), mirroring
+// Python's _xui_write_paths: on real managed-model firmware every one of
+// these pages GETs at "<page>.html" and POSTs to "<page>.html/a1" (its
+// second form's ACTION), so the mock must serve both paths or a faithful
+// writer's apply would 404 against it while working on hardware. Included
+// unconditionally, regardless of dialect, mirroring
+// _XUI_WRITE_PATH_FIELDS: a non-M4300 model with a SyslogPath (gsm7252ps,
+// gsm7228ps) still gets the alias registered as "known", even though
+// renderFastpathXUIPage refuses to apply through it for any dialect but
+// M4300 -- the outcome (404) is unchanged either way, since webui.Writer's
+// own dialect gate never lets a POST reach here for those models.
 func xuiWriteHTTPPaths(spec *webui.HTTPModelSpec) map[string]string {
 	out := map[string]string{}
-	for _, p := range []string{spec.PortConfigPath, spec.PoEConfigPath, spec.MgmtIPPath} {
+	for _, p := range []string{spec.PortConfigPath, spec.PoEConfigPath, spec.MgmtIPPath, spec.SyslogPath} {
 		if p != "" {
 			out[p+"/a1"] = p
 		}
@@ -1023,6 +1030,19 @@ func (f *HTTPFace) renderFastpathXUIPage(path string, form map[string]string) (s
 	if orig, aliased := xuiWriteHTTPPaths(f.spec)[path]; aliased {
 		pagePath = orig
 	}
+	if pagePath == f.spec.SyslogPath && f.spec.SyslogPath != "" {
+		// Collector row add/delete. Only the M4300 pages carry the metadata
+		// the writer depends on, and webui.Writer refuses the other
+		// dialects, so the fake must not accept them either -- fall
+		// through (ok=false) to the per-dialect GET-only renderer
+		// (renderS3300Page/renderXEPage), or 404 on a POST no writer ever
+		// issues.
+		if f.spec.HTMLDialect != webui.HTMLDialectM4300 {
+			return "", false
+		}
+		errMsg := ApplyXUISyslogRows(f.state, form)
+		return RenderXUISyslog(f.state, pagePath, errMsg), true
+	}
 	if pagePath != f.spec.PortConfigPath && pagePath != f.spec.PoEConfigPath && pagePath != f.spec.MgmtIPPath {
 		return "", false
 	}
@@ -1114,8 +1134,10 @@ func (f *HTTPFace) renderM4300Page(path string) (string, bool) {
 		return RenderM4300Sysinfo(f.state), true
 	case spec.UsersPath != "" && path == spec.UsersPath:
 		return RenderXUIUsers(f.state, path), true
-	case spec.SyslogPath != "" && path == spec.SyslogPath:
-		return RenderXUISyslog(f.state, path), true
+		// SyslogPath is deliberately NOT a case here: renderFastpathXUIPage
+		// (checked before this function in dispatchRender/dispatchApplyAndRender)
+		// already intercepts it for the M4300 dialect, both GET and POST -- see
+		// that function's own doc comment.
 	}
 	// The M4300 serves http/https as PLAIN named forms and ssh/telnet as
 	// XUI -- measured, see xeServiceFormFields.
@@ -1174,7 +1196,7 @@ func (f *HTTPFace) renderS3300Page(path string) (string, bool) {
 	case spec.SysinfoPath:
 		return RenderS3300Sysinfo(f.state), true
 	case spec.SyslogPath:
-		return RenderXUISyslog(f.state, path), true
+		return RenderXUISyslog(f.state, path, ""), true
 	default:
 		return "", false
 	}
@@ -1205,7 +1227,7 @@ func (f *HTTPFace) renderXEPage(path string) (string, bool) {
 	case spec.UsersPath:
 		return RenderXUIUsers(f.state, path), true
 	case spec.SyslogPath:
-		return RenderXUISyslog(f.state, path), true
+		return RenderXUISyslog(f.state, path, ""), true
 	}
 	// gsm7252ps renders ALL FOUR service pages as XUI (unlike the M4300).
 	if service, ok := f.serviceFor(path); ok {

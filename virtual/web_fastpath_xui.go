@@ -44,6 +44,7 @@ package virtual
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -558,8 +559,10 @@ func fastpathXUICell(inst, xid, value string, text bool) string {
 // mirroring Python web_fastpath_xui.render_syslog. Counters (Messages
 // Received/Relayed/Ignored) are rendered as the live pages do but are NOT
 // part of model.SyslogConfig; they exist so the page the mock serves has
-// the same field set as the real one.
-func RenderXUISyslog(state *State, path string) string {
+// the same field set as the real one. errMsg ("" = ok) renders the write
+// refusal the way the firmware does -- HTTP 200 with err_flag=1 -- exactly
+// like every other fastpathPage caller; see ApplyXUISyslogRows.
+func RenderXUISyslog(state *State, path, errMsg string) string {
 	sim := state.Syslog
 	adminWord := "Disable"
 	if sim.AdminMode == 1 {
@@ -619,5 +622,64 @@ func RenderXUISyslog(state *State, path string) string {
 			{XID: "4_4_1", Label: "Cancel"},
 			{XID: "4_2_1", Label: "Apply"},
 		},
-		"", "NetGear - Syslog Configuration")
+		errMsg, "NetGear - Syslog Configuration")
+}
+
+// ApplyXUISyslogRows applies a syslog-page row ADD or DELETE, returning
+// errMsg ("" = ok), mirroring Python web_fastpath_xui.apply_syslog_rows.
+//
+// Reproduces what the live M4300 page does, both halves:
+//
+//   - ADD -- the v_g_2_1_* template row with its write-only row-status
+//     (v_g_2_1_5) set to "Active". THE ADD IS REFUSED, and the fake must
+//     refuse it too: driven live against m4300-24x 10.1.5.13 on 2026-08-05,
+//     the firmware answers a filled template row with HTTP 200 and
+//     "Error! Failed to Set 'Host Address' with '<addr>'", leaving the
+//     table unchanged (verified through the switch's own CLI). A fake that
+//     accepted the add would make webui.Writer's refusal look like a
+//     library limitation rather than the device's answer.
+//   - DELETE -- a data row whose own v_2_1_5 is set to "Delete". Addressed
+//     by the row's OWN v_2_1_1 (Host Address) field, not its index -- no
+//     index arithmetic is involved on this path, unlike the CLI/SNMP
+//     routes.
+//
+// A template row submitted WITHOUT the row-status is ignored, exactly as
+// the firmware ignores a blank global row that was never activated.
+func ApplyXUISyslogRows(state *State, form map[string]string) string {
+	address := strings.TrimSpace(form["v_g_2_1_1"])
+	if address != "" {
+		return fmt.Sprintf("Error! Failed to Set 'Host Address' with '%s'", address)
+	}
+
+	// DELETE: an instance-prefixed row whose row-status cell says so. Keys
+	// are visited in SORTED order for deterministic behavior even though a
+	// real single-row apply (XuiRowApplyForm) never carries more than one
+	// such key.
+	names := make([]string, 0, len(form))
+	for name := range form {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if !strings.HasSuffix(name, ".v_2_1_5") || strings.TrimSpace(form[name]) != "Delete" {
+			continue
+		}
+		prefix := strings.TrimSuffix(name, "v_2_1_5")
+		target := strings.TrimSpace(form[prefix+"v_2_1_1"])
+		pos := -1
+		for i, c := range state.Syslog.Collectors {
+			if c.Host == target {
+				pos = i
+				break
+			}
+		}
+		if pos < 0 {
+			return fmt.Sprintf("Error! Logging Host %s is non-existent.", target)
+		}
+		// Survivors KEEP their index -- that is what makes the table
+		// sparse.
+		state.Syslog.Collectors = append(state.Syslog.Collectors[:pos], state.Syslog.Collectors[pos+1:]...)
+		return ""
+	}
+	return ""
 }

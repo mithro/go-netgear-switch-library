@@ -33,6 +33,7 @@ package fastpath
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 
@@ -192,6 +193,22 @@ type CliModelSpec struct {
 	// override exists in commands.py).
 	LoggingSyslogCmd   string
 	LoggingNoSyslogCmd string
+	// LoggingHostAddCmd/LoggingHostRemoveCmd are the global-config remote-
+	// logging collector add/remove commands (add_syslog_collector/
+	// remove_syslog_collector). LoggingHostAddCmd is VERBATIM from every
+	// switch's own `show running-config` (all four FASTPATH models print
+	// `logging host "10.1.5.1" ipv4 514 info`, read 2026-08-05): the address
+	// is QUOTED, the address-kind token (ipv4/ipv6/dns, see addressKind) is
+	// explicit, and the severity travels as a WORD
+	// (model.SyslogSeverityWord). LoggingHostRemoveCmd is a SUBCOMMAND, NOT
+	// a negation -- `no logging host <index>` is REJECTED by the device
+	// ("% Invalid input detected at '^' marker.", measured on a live
+	// gsm7252ps, 2026-08-05); the device's own `logging host ?` lists
+	// `remove`/`reconfigure` as subcommands, taking the 1-based Index from
+	// `show logging hosts`. Constant across every FASTPATH model (no
+	// per-model override exists in commands.py).
+	LoggingHostAddCmd    string
+	LoggingHostRemoveCmd string
 	// MgmtIPExecCmds / MgmtIPConfigCmds: exactly one is non-empty per model
 	// (commands.py:167) -- the two management-IP write dialects (privileged
 	// EXEC "network parms ..." vs global-config "ip management address ..."
@@ -383,6 +400,54 @@ func (s *CliModelSpec) LoggingSyslog(enabled bool) string {
 	return s.LoggingNoSyslogCmd
 }
 
+// addressKind returns the address-KIND token a `logging host` line carries:
+// ipv4/ipv6/dns, mirroring Python's module-level address_kind
+// (commands.py:62-75). The live line is `logging host "10.1.5.1" ipv4 514
+// info` -- the kind is an explicit argument, not something the firmware
+// infers, so it is derived here from the address. Dispatches on whether
+// address contains a colon FIRST (mirroring Python's ipaddress.ip_address,
+// which picks its parser family the same way) rather than trying
+// net.ParseIP alone: an IPv4-mapped IPv6 literal like "::ffff:1.2.3.4"
+// parses successfully as an IPv4 address via net.ParseIP.To4(), which would
+// silently disagree with Python's ipv6 answer for the identical string.
+// Anything that does not parse as a literal IP -- including a bare hostname
+// -- is "dns", matching the host table's own column header ("IP
+// Address/Hostname").
+func addressKind(address string) string {
+	if strings.Contains(address, ":") {
+		if net.ParseIP(address) != nil {
+			return "ipv6"
+		}
+		return "dns"
+	}
+	if net.ParseIP(address) != nil {
+		return "ipv4"
+	}
+	return "dns"
+}
+
+// LoggingHostAdd returns LoggingHostAddCmd with {address}/{kind}/{port}/
+// {severity} filled in, mirroring Python CliModelSpec.logging_host_add
+// (commands.py:376-384). severity must be 0-7; anything else returns the
+// same error model.SyslogSeverityWord raises, naming the value rather than
+// sending a command built from an out-of-range integer.
+func (s *CliModelSpec) LoggingHostAdd(address string, port, severity int) (string, error) {
+	word, err := model.SyslogSeverityWord(severity)
+	if err != nil {
+		return "", err
+	}
+	out := formatOne(s.LoggingHostAddCmd, "address", address)
+	out = formatOne(out, "kind", addressKind(address))
+	out = formatOne(out, "port", strconv.Itoa(port))
+	return formatOne(out, "severity", word), nil
+}
+
+// LoggingHostRemove returns LoggingHostRemoveCmd with {index} filled in,
+// mirroring Python CliModelSpec.logging_host_remove (commands.py:385-387).
+func (s *CliModelSpec) LoggingHostRemove(index int) string {
+	return formatOne(s.LoggingHostRemoveCmd, "index", strconv.Itoa(index))
+}
+
 // MgmtIP returns (execCmds, configCmds) with {address}/{netmask}/{gateway}
 // filled in on every entry of MgmtIPExecCmds/MgmtIPConfigCmds, mirroring
 // Python CliModelSpec.mgmt_ip (commands.py:221-233). Exactly one of the two
@@ -507,6 +572,8 @@ func newCliModelSpec(modelKey string, captured, readsVerified bool) CliModelSpec
 		HostnameConfigCmd:      "hostname {name}",
 		LoggingSyslogCmd:       "logging syslog",
 		LoggingNoSyslogCmd:     "no logging syslog",
+		LoggingHostAddCmd:      `logging host "{address}" {kind} {port} {severity}`,
+		LoggingHostRemoveCmd:   "logging host remove {index}",
 		MgmtIPExecCmds:         []string{"network parms {address} {netmask} {gateway}"},
 		MgmtIPConfigCmds:       nil, // ()
 		ReloadCmd:              "reload",

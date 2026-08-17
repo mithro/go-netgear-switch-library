@@ -52,6 +52,7 @@ import (
 	"strings"
 
 	"github.com/mithro/go-netgear-switch-library/fastpath"
+	"github.com/mithro/go-netgear-switch-library/model"
 )
 
 // --- Command regexes (dossier §3.2, quoted verbatim) -----------------------
@@ -113,6 +114,25 @@ var (
 	// disable (set_syslog_enabled): `logging syslog` / `no logging
 	// syslog`.
 	cliLoggingSyslogRE = regexp.MustCompile(`^(no )?logging syslog$`)
+	// cliLoggingHostAddRE mirrors the global-config remote-logging
+	// collector-add line, VERBATIM from every FASTPATH switch's own
+	// running-config (read 2026-08-05): `logging host "10.1.5.1" ipv4 514
+	// info`. The address-kind token (ipv4/ipv6/dns) is captured but unused
+	// here, exactly as Python's `_kind` -- the mock does not validate it
+	// against the address.
+	cliLoggingHostAddRE = regexp.MustCompile(`^logging host "([^"]+)" (ipv4|ipv6|dns) (\d+) (\w+)$`)
+	// cliLoggingHostNegationRE mirrors `no logging host ...` in EVERY
+	// spelling -- MEASURED as rejected on a live gsm7252ps (10.1.5.22,
+	// 2026-08-05, "% Invalid input detected at '^' marker." in every
+	// spelling tried: bare index, quoted address, unquoted address, both
+	// with a trailing `ipv4`). Matched explicitly so the mock answers it
+	// the way the device does, rather than falling through to the generic
+	// "Command not found" and being merely accidentally-not-wrong.
+	cliLoggingHostNegationRE = regexp.MustCompile(`^no logging host\b.*$`)
+	// cliLoggingHostRemoveRE mirrors the removal SUBCOMMAND (NOT a
+	// negation) -- `logging host remove <index>`, addressed by the table's
+	// own 1-based Index column from `show logging hosts`.
+	cliLoggingHostRemoveRE = regexp.MustCompile(`^logging host remove (\d+)$`)
 )
 
 // Mode names for CliFace.modes (dossier §3.3).
@@ -570,6 +590,65 @@ func (f *CliFace) configCommand(c string) (string, bool) {
 			} else {
 				f.state.Syslog.AdminMode = 2
 			}
+			return cliAccepted, true
+		}
+		if m := cliLoggingHostAddRE.FindStringSubmatch(c); m != nil {
+			address, word := m[1], m[4]
+			severity, err := model.SyslogSeverity(word)
+			if err != nil {
+				return cliInvalid, true // a word this firmware would not accept
+			}
+			port, convErr := strconv.Atoi(m[3])
+			if convErr != nil {
+				return cliInvalid, true
+			}
+			// A real switch appends a SECOND row for an address it already
+			// has rather than replacing the first -- which is exactly why
+			// fastpath.Writer.AddSyslogCollector refuses a duplicate before
+			// sending anything. The mock reproduces the append so that
+			// refusal has something real to prevent.
+			//
+			// A NEW index, never a renumbering: real FASTPATH hands out the
+			// next free slot and leaves existing rows where they are,
+			// which is how the table becomes sparse after a removal.
+			next := 0
+			for _, col := range f.state.Syslog.Collectors {
+				if col.Index > next {
+					next = col.Index
+				}
+			}
+			next++
+			f.state.Syslog.Collectors = append(f.state.Syslog.Collectors, SyslogCollectorSim{
+				Host:     address,
+				Port:     port,
+				Severity: severity,
+				Status:   1,
+				Index:    next,
+			})
+			return cliAccepted, true
+		}
+		if cliLoggingHostNegationRE.MatchString(c) {
+			return cliInvalid, true // removal is a subcommand, not a negation
+		}
+		if m := cliLoggingHostRemoveRE.FindStringSubmatch(c); m != nil {
+			index, convErr := strconv.Atoi(m[1])
+			if convErr != nil {
+				return cliInvalid, true
+			}
+			pos := -1
+			for i, col := range f.state.Syslog.Collectors {
+				if col.Index == index {
+					pos = i
+					break
+				}
+			}
+			if pos < 0 {
+				// The device's own words, measured on 10.1.5.13.
+				return fmt.Sprintf("Error! Logging Host with index of %d is non-existent.", index), true
+			}
+			// Survivors KEEP their index -- that is what makes the table
+			// sparse, and what a position-based remover gets wrong.
+			f.state.Syslog.Collectors = append(f.state.Syslog.Collectors[:pos], f.state.Syslog.Collectors[pos+1:]...)
 			return cliAccepted, true
 		}
 		if m := cliInterfaceRE.FindStringSubmatch(c); m != nil {

@@ -47,8 +47,31 @@ import (
 // SnmpWriter/CliWriter.set_syslog_enabled (served) and
 // HttpWriter/NsdpWriter.set_syslog_enabled (refused) exactly. Not
 // force-gated by any backend: toggling log delivery cannot strand a switch
-// and is reversible by writing the old value back. Adding or removing a
-// COLLECTOR is a separate, unbuilt operation (a later slice).
+// and is reversible by writing the old value back.
+//
+// AddSyslogCollector is served ONLY over the FASTPATH CLI
+// (`logging host "<addr>" <ipv4|ipv6|dns> <port> <severity-word>`), mirroring
+// Python CliWriter.add_syslog_collector. Every other backend refuses by
+// name, wrapping model.ErrUnsupportedCapability, and every refusal is a
+// MEASURED hardware finding, not an assumption: SNMP's agent answers
+// inconsistentValue/commitFailed to every row-creation mechanism tried
+// (SnmpWriter.add_syslog_collector); the HTTP web UI answers HTTP 200 with
+// "Failed to Set 'Host Address'" and leaves the table unchanged
+// (HttpWriter.add_syslog_collector); NSDP has no logging surface at all
+// (NsdpWriter.add_syslog_collector). Not force-gated: refuses a duplicate
+// host up front as a precondition failure rather than sending a command
+// that would silently add a second row for the same address.
+//
+// RemoveSyslogCollector is served over the FASTPATH CLI (`logging host
+// remove <index>`, a SUBCOMMAND, never a negation), SNMP (RowStatus
+// destroy(6) written to the collector's OWN sparse table index -- NEVER a
+// row position, re-read fresh from GetSyslog immediately before the write)
+// and the HTTP web UI (M4300 dialect only: the syslog page's row-status
+// cell set to "Delete"); NSDP refuses by name (no logging surface). Not
+// force-gated by any backend: redirecting logs cannot strand a switch. Every
+// backend refuses up front, as a precondition failure, if no collector for
+// the requested host is configured, rather than sending a removal for a row
+// that is not there.
 type BackendWriter interface {
 	SetPoE(ctx context.Context, port int, on bool, force bool) error
 	SetPortEnabled(ctx context.Context, port int, enabled bool, force bool) error
@@ -64,6 +87,8 @@ type BackendWriter interface {
 	ClearPoEFault(ctx context.Context, port int, timeouts snmp.PoeCycleTimeouts, force bool) error
 	SetHostname(ctx context.Context, name string, force bool) error
 	SetSyslogEnabled(ctx context.Context, enabled bool, force bool) error
+	AddSyslogCollector(ctx context.Context, host string, port, severity int, force bool) error
+	RemoveSyslogCollector(ctx context.Context, host string, force bool) error
 }
 
 // WriteBackendBuilder constructs the BackendWriter for one backend, given

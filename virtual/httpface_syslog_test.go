@@ -124,6 +124,85 @@ func TestHTTPFaceSyslogAgreesWithSNMP(t *testing.T) {
 	}
 }
 
+// httpSyslogWriter is httpSyslogReader's write-side twin: a logged-in
+// webui.Writer bound to a freshly-started HTTPFace over st.
+func httpSyslogWriter(t *testing.T, key string, st *State) *webui.Writer {
+	t.Helper()
+	m, err := model.GetModel(key)
+	if err != nil {
+		t.Fatalf("model.GetModel(%q): %v", key, err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec(%q): %v", key, err)
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter(%q): %v", key, err)
+	}
+	return writer
+}
+
+// TestHTTPFaceRemoveSyslogCollectorRoundTrip proves the M4300 XUI
+// row-status "Delete" apply removes the seeded collector and GetSyslog no
+// longer reports it -- live-verified per webui.Writer.RemoveSyslogCollector's
+// own doc comment, exercised here against the real HTTPFace/httptest server
+// (not a hand-built fake session).
+func TestHTTPFaceRemoveSyslogCollectorRoundTrip(t *testing.T) {
+	st := seedByKey(t, "m4300-24x")
+	if len(st.Syslog.Collectors) == 0 {
+		t.Fatal("fixture precondition: m4300-24x's seed must carry at least one collector")
+	}
+	host := st.Syslog.Collectors[0].Host
+	writer := httpSyslogWriter(t, "m4300-24x", st)
+
+	if err := writer.RemoveSyslogCollector(context.Background(), host, false); err != nil {
+		t.Fatalf("RemoveSyslogCollector(%q): %v", host, err)
+	}
+
+	reader := httpSyslogReader(t, "m4300-24x", st)
+	after, err := reader.GetSyslog(context.Background())
+	if err != nil {
+		t.Fatalf("GetSyslog (after remove): %v", err)
+	}
+	for _, s := range after.Servers {
+		if s.Host == host {
+			t.Errorf("Servers after remove still contains %q", host)
+		}
+	}
+}
+
+// TestHTTPFaceAddSyslogCollectorUnsupported proves the M4300 web UI still
+// refuses a collector ADD by name -- MEASURED (see
+// webui.Writer.AddSyslogCollector's own doc comment) -- even against the
+// real HTTPFace, issuing no page write.
+func TestHTTPFaceAddSyslogCollectorUnsupported(t *testing.T) {
+	st := seedByKey(t, "m4300-24x")
+	writer := httpSyslogWriter(t, "m4300-24x", st)
+	err := writer.AddSyslogCollector(context.Background(), "192.0.2.1", 514, 6, false)
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("AddSyslogCollector() error = %v, want errors.Is(..., model.ErrUnsupportedCapability)", err)
+	}
+}
+
+// TestHTTPFaceRemoveSyslogCollectorUnsupportedOnNonM4300 proves gsm7252ps
+// (XE FASTPATH, not M4300) is refused by name -- only the M4300 pages
+// declare the cell metadata this write depends on.
+func TestHTTPFaceRemoveSyslogCollectorUnsupportedOnNonM4300(t *testing.T) {
+	st := seedByKey(t, "gsm7252ps")
+	writer := httpSyslogWriter(t, "gsm7252ps", st)
+	err := writer.RemoveSyslogCollector(context.Background(), "10.1.5.1", false)
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("RemoveSyslogCollector() error = %v, want errors.Is(..., model.ErrUnsupportedCapability)", err)
+	}
+}
+
 // TestHTTPFaceSyslogUnsupportedOnGS305EP mirrors Python's
 // test_a_model_with_no_syslog_page_refuses_by_name: the Plus/GoAhead UIs
 // have no such page -- that must raise, not read empty.

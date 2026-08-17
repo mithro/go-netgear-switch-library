@@ -725,6 +725,315 @@ func TestWriterSetSyslogEnabledPropagatesErrorFromAfterRead(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// AddSyslogCollector / RemoveSyslogCollector -- `logging host "<addr>"
+// <kind> <port> <severity>` / `logging host remove <index>` (a SUBCOMMAND,
+// never a negation)
+// ---------------------------------------------------------------------
+
+// emptySyslogHosts/oneSyslogHost/sparseSyslogHosts are "show logging hosts"
+// fixture text, mirroring parse_syslog_test.go's own fixture shape.
+const (
+	emptySyslogHosts = "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----"
+	oneSyslogHost = "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----\n" +
+		"1     10.1.5.1                 info       514    Active    udp"
+	twoSyslogHostAdded = "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----\n" +
+		"1     10.1.5.1                 info       514    Active    udp\n" +
+		"2     10.1.5.9                 info       514    Active    udp"
+	// sparseSyslogHosts holds Index 1 and Index 3, nothing at 2 -- the exact
+	// shape measured on m4300-24x 10.1.5.13 (2026-08-05).
+	sparseSyslogHosts = "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----\n" +
+		"1     10.1.5.1                 info       514    Active    udp\n" +
+		"3     10.1.5.3                 error      601    Active    udp"
+	// sparseSyslogHostsIndex3Removed is sparseSyslogHosts with ONLY index 3
+	// gone -- index 1 survives untouched, proving the removal addressed the
+	// index-3 row and not a position.
+	sparseSyslogHostsIndex3Removed = "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----\n" +
+		"1     10.1.5.1                 info       514    Active    udp"
+)
+
+// TestAddressKind proves the address-kind token dispatches ipv4/ipv6/dns
+// the way Python's ipaddress.ip_address-based address_kind does: colon
+// presence selects the IPv6 parser family FIRST (so a string with a colon
+// that fails to parse is "dns", never silently retried as IPv4), mirroring
+// commands.py's own dispatch rather than a bare net.ParseIP().To4() check
+// (which would misclassify an IPv4-mapped IPv6 literal).
+func TestAddressKind(t *testing.T) {
+	cases := []struct {
+		address, want string
+	}{
+		{"10.1.5.1", "ipv4"},
+		{"::1", "ipv6"},
+		{"2001:db8::1", "ipv6"},
+		{"switch.example.com", "dns"},
+		{"not:a:valid:ipv6:address:at:all:either", "dns"},
+	}
+	for _, c := range cases {
+		if got := addressKind(c.address); got != c.want {
+			t.Errorf("addressKind(%q) = %q, want %q", c.address, got, c.want)
+		}
+	}
+}
+
+func TestWriterAddSyslogCollectorWritesAndVerifies(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	spec := mustCLISpec(t, m)
+	syslogDisabled := "Syslog Logging                      : disabled\n" +
+		"Logging Client Local Port           : 514"
+
+	sess := newQueuedSession(
+		ok(syslogDisabled), ok(oneSyslogHost), // before := GetSyslog()
+		ok(""),                                     // enter: configure
+		ok(""),                                     // logging host "10.1.5.9" ipv4 514 info
+		ok(""),                                     // unwind: exit
+		ok(syslogDisabled), ok(twoSyslogHostAdded), // after := GetSyslog()
+	)
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.AddSyslogCollector(context.Background(), "10.1.5.9", 514, 6, false); err != nil {
+		t.Fatalf("AddSyslogCollector: %v", err)
+	}
+	cmd, err := spec.LoggingHostAdd("10.1.5.9", 514, 6)
+	if err != nil {
+		t.Fatalf("LoggingHostAdd: %v", err)
+	}
+	if cmd != `logging host "10.1.5.9" ipv4 514 info` {
+		t.Errorf("LoggingHostAdd = %q, want the exact running-config line", cmd)
+	}
+	wantCmds := []string{
+		spec.LoggingCmd, spec.LoggingHostsCmd,
+		spec.ConfigureCmd, cmd, spec.ExitCmd,
+		spec.LoggingCmd, spec.LoggingHostsCmd,
+	}
+	assertCommands(t, sess, wantCmds)
+}
+
+// TestWriterAddSyslogCollectorRefusesDuplicateHost proves a host already in
+// the table is refused as a PRECONDITION failure, with NO command sent --
+// the firmware would otherwise add a second row and silently duplicate
+// delivery.
+func TestWriterAddSyslogCollectorRefusesDuplicateHost(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	enabled := "Syslog Logging                      : enabled\n" +
+		"Logging Client Local Port           : 514"
+	sess := newQueuedSession(ok(enabled), ok(oneSyslogHost))
+	w := mustNewWriter(t, sess, m)
+
+	err := w.AddSyslogCollector(context.Background(), "10.1.5.1", 514, 6, false)
+	if !errors.Is(err, ErrCliCommandRejected) {
+		t.Fatalf("AddSyslogCollector(duplicate) error = %v, want wrapping ErrCliCommandRejected", err)
+	}
+	if len(sess.calls) != 2 {
+		t.Fatalf("commands = %v, want exactly the 2 before-read commands -- no write for a refused precondition", sess.calls)
+	}
+}
+
+// TestWriterAddSyslogCollectorNotForceGated proves force=false succeeds --
+// mirrors SetSyslogEnabled's own not-force-gated rationale.
+func TestWriterAddSyslogCollectorNotForceGated(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	disabled := "Syslog Logging                      : disabled\n" +
+		"Logging Client Local Port           : 514"
+	sess := newQueuedSession(
+		ok(disabled), ok(emptySyslogHosts),
+		ok(""), ok(""), ok(""),
+		ok(disabled), ok(oneSyslogHost),
+	)
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.AddSyslogCollector(context.Background(), "10.1.5.1", 514, 6, false); err != nil {
+		t.Fatalf("AddSyslogCollector(force=false) = %v, want success (not force-gated)", err)
+	}
+}
+
+// TestWriterAddSyslogCollectorVerificationFailureRaises proves a switch
+// that accepts the command but does not add the row (or adds it with the
+// wrong port/severity) surfaces a *model.WriteVerificationError, never a
+// silent success.
+func TestWriterAddSyslogCollectorVerificationFailureRaises(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	enabled := "Syslog Logging                      : enabled\n" +
+		"Logging Client Local Port           : 514"
+	sess := newQueuedSession(
+		ok(enabled), ok(emptySyslogHosts),
+		ok(""), ok(""), ok(""),
+		ok(enabled), ok(emptySyslogHosts), // device ignored the write
+	)
+	w := mustNewWriter(t, sess, m)
+
+	err := w.AddSyslogCollector(context.Background(), "10.1.5.9", 514, 6, false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("AddSyslogCollector error = %v, want *model.WriteVerificationError", err)
+	}
+}
+
+// TestWriterAddSyslogCollectorInvalidSeverityPropagatesBeforeAnyWrite
+// proves an out-of-range severity is rejected by LoggingHostAdd itself
+// (model.SyslogSeverityWord), with no command sent.
+func TestWriterAddSyslogCollectorInvalidSeverityPropagatesBeforeAnyWrite(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	enabled := "Syslog Logging                      : enabled\n" +
+		"Logging Client Local Port           : 514"
+	sess := newQueuedSession(ok(enabled), ok(emptySyslogHosts))
+	w := mustNewWriter(t, sess, m)
+
+	err := w.AddSyslogCollector(context.Background(), "10.1.5.9", 514, 8, false)
+	if err == nil {
+		t.Fatal("AddSyslogCollector(severity=8): want error, got nil")
+	}
+	if len(sess.calls) != 2 {
+		t.Fatalf("commands = %v, want exactly the 2 before-read commands -- no write for an invalid severity", sess.calls)
+	}
+}
+
+// TestWriterAddSyslogCollectorPropagatesErrorFromBeforeRead proves a
+// session failure on the very first (before-read) command short-circuits
+// the write before any config-mode command is ever issued.
+func TestWriterAddSyslogCollectorPropagatesErrorFromBeforeRead(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	wantErr := errors.New("boom")
+	sess := newQueuedSession(queuedStep{err: wantErr})
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.AddSyslogCollector(context.Background(), "10.1.5.9", 514, 6, false); !errors.Is(err, wantErr) {
+		t.Errorf("AddSyslogCollector() error = %v, want wrapping %v", err, wantErr)
+	}
+}
+
+func TestWriterRemoveSyslogCollectorWritesAndVerifies(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	spec := mustCLISpec(t, m)
+
+	sess := newQueuedSession(
+		ok("Syslog Logging                      : enabled\nLogging Client Local Port           : 514"), ok(oneSyslogHost), // before
+		ok(""), // enter: configure
+		ok(""), // logging host remove 1
+		ok(""), // unwind: exit
+		ok("Syslog Logging                      : enabled\nLogging Client Local Port           : 514"), ok(emptySyslogHosts), // after
+	)
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.RemoveSyslogCollector(context.Background(), "10.1.5.1", false); err != nil {
+		t.Fatalf("RemoveSyslogCollector: %v", err)
+	}
+	wantCmds := []string{
+		spec.LoggingCmd, spec.LoggingHostsCmd,
+		spec.ConfigureCmd, spec.LoggingHostRemove(1), spec.ExitCmd,
+		spec.LoggingCmd, spec.LoggingHostsCmd,
+	}
+	assertCommands(t, sess, wantCmds)
+}
+
+// TestWriterRemoveSyslogCollectorAddressesSparseIndexNotPosition is THE
+// sparse-index crux test: a table with collectors at Index 1 and Index 3
+// (nothing at 2, the exact shape measured on m4300-24x 10.1.5.13,
+// 2026-08-05) -- removing the Index-3 host ("10.1.5.3", the SECOND row by
+// POSITION) must send `logging host remove 3`, never `logging host remove
+// 2` (position-derived) and never `logging host remove 1` (the wrong row).
+// Index-1's own collector ("10.1.5.1") must survive untouched.
+func TestWriterRemoveSyslogCollectorAddressesSparseIndexNotPosition(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	spec := mustCLISpec(t, m)
+	logging := "Syslog Logging                      : enabled\nLogging Client Local Port           : 514"
+
+	sess := newQueuedSession(
+		ok(logging), ok(sparseSyslogHosts), // before
+		ok(""),                                          // enter: configure
+		ok(""),                                          // logging host remove 3 -- NEVER "remove 2"
+		ok(""),                                          // unwind: exit
+		ok(logging), ok(sparseSyslogHostsIndex3Removed), // after
+	)
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.RemoveSyslogCollector(context.Background(), "10.1.5.3", false); err != nil {
+		t.Fatalf("RemoveSyslogCollector: %v", err)
+	}
+	if got := spec.LoggingHostRemove(3); got != "logging host remove 3" {
+		t.Fatalf("LoggingHostRemove(3) = %q, want %q", got, "logging host remove 3")
+	}
+	wantCmds := []string{
+		spec.LoggingCmd, spec.LoggingHostsCmd,
+		spec.ConfigureCmd, "logging host remove 3", spec.ExitCmd,
+		spec.LoggingCmd, spec.LoggingHostsCmd,
+	}
+	assertCommands(t, sess, wantCmds)
+}
+
+// TestWriterRemoveSyslogCollectorRefusesUnknownHost proves a host not in
+// the table is refused as a PRECONDITION failure, with NO command sent --
+// never a removal for a row that is not there.
+func TestWriterRemoveSyslogCollectorRefusesUnknownHost(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	enabled := "Syslog Logging                      : enabled\nLogging Client Local Port           : 514"
+	sess := newQueuedSession(ok(enabled), ok(emptySyslogHosts))
+	w := mustNewWriter(t, sess, m)
+
+	err := w.RemoveSyslogCollector(context.Background(), "10.9.9.9", false)
+	if !errors.Is(err, ErrCliCommandRejected) {
+		t.Fatalf("RemoveSyslogCollector(unknown host) error = %v, want wrapping ErrCliCommandRejected", err)
+	}
+	if len(sess.calls) != 2 {
+		t.Fatalf("commands = %v, want exactly the 2 before-read commands -- no write for a refused precondition", sess.calls)
+	}
+}
+
+// TestWriterRemoveSyslogCollectorNotForceGated proves force=false succeeds
+// -- redirecting logs cannot strand a switch.
+func TestWriterRemoveSyslogCollectorNotForceGated(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	enabled := "Syslog Logging                      : enabled\nLogging Client Local Port           : 514"
+	sess := newQueuedSession(
+		ok(enabled), ok(oneSyslogHost),
+		ok(""), ok(""), ok(""),
+		ok(enabled), ok(emptySyslogHosts),
+	)
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.RemoveSyslogCollector(context.Background(), "10.1.5.1", false); err != nil {
+		t.Fatalf("RemoveSyslogCollector(force=false) = %v, want success (not force-gated)", err)
+	}
+}
+
+// TestWriterRemoveSyslogCollectorVerificationFailureRaises proves a switch
+// that accepts the command but leaves the row in place surfaces a
+// *model.WriteVerificationError, never a silent success.
+func TestWriterRemoveSyslogCollectorVerificationFailureRaises(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	enabled := "Syslog Logging                      : enabled\nLogging Client Local Port           : 514"
+	sess := newQueuedSession(
+		ok(enabled), ok(oneSyslogHost),
+		ok(""), ok(""), ok(""),
+		ok(enabled), ok(oneSyslogHost), // device ignored the removal
+	)
+	w := mustNewWriter(t, sess, m)
+
+	err := w.RemoveSyslogCollector(context.Background(), "10.1.5.1", false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("RemoveSyslogCollector error = %v, want *model.WriteVerificationError", err)
+	}
+}
+
+// TestWriterRemoveSyslogCollectorPropagatesErrorFromBeforeRead proves a
+// session failure on the very first (before-read) command short-circuits
+// the write before any config-mode command is ever issued.
+func TestWriterRemoveSyslogCollectorPropagatesErrorFromBeforeRead(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	wantErr := errors.New("boom")
+	sess := newQueuedSession(queuedStep{err: wantErr})
+	w := mustNewWriter(t, sess, m)
+
+	if err := w.RemoveSyslogCollector(context.Background(), "10.1.5.1", false); !errors.Is(err, wantErr) {
+		t.Errorf("RemoveSyslogCollector() error = %v, want wrapping %v", err, wantErr)
+	}
+}
+
+// ---------------------------------------------------------------------
 // SetMgmtIP (dossier §4.8) -- unconditional force + first-mismatch verify
 // ---------------------------------------------------------------------
 
