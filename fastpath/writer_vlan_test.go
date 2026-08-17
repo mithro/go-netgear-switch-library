@@ -553,32 +553,49 @@ func TestWriterSetVLANMembershipRejectedBodyCommandUnwinds(t *testing.T) {
 // SetPVID (dossier §4.5)
 // ---------------------------------------------------------------------
 
+// vlan90ExistsSteps returns the queued (VlanBriefCmd, VlanDetail(90))
+// responses SetPVID's VLAN-existence precondition (w.vlan) now issues
+// BEFORE its own GetPVIDs/write/verify sequence, and the matching leading
+// commands for wantCmds -- shared by every SetPVID test below whose target
+// VLAN is 90 and must exist for the write to proceed at all (GAP-1 fix,
+// parity with Python commit 98fb935).
+func vlan90ExistsSteps() []queuedStep {
+	return []queuedStep{
+		ok(vlanBriefFixture([2]string{"90", "iot"})),
+		ok(vlanDetailFixture(90, "iot")),
+	}
+}
+
+func vlan90ExistsCmds(spec *CliModelSpec) []string {
+	return []string{spec.VlanBriefCmd, spec.VlanDetail(90)}
+}
+
 func TestWriterSetPVIDFullSequence(t *testing.T) {
 	m := mustGetModel(t, "m4300-24x")
 	spec := mustCLISpec(t, m)
 	before := pvidFixture(pvidRow(5, 1))
 	after := pvidFixture(pvidRow(5, 90))
 
-	sess := newQueuedSession(
+	sess := newQueuedSession(append(vlan90ExistsSteps(),
 		ok(before),     // before GetPVIDs
 		ok(""), ok(""), // enter: configure, interface
 		ok(""), ok(""), // body: switchport mode general, vlan pvid 90
 		ok(""), ok(""), // unwind: exit x2
 		ok(after), // after GetPVIDs
-	)
+	)...)
 	w := mustNewWriter(t, sess, m)
 
 	if err := w.SetPVID(context.Background(), 5, 90, false); err != nil {
 		t.Fatalf("SetPVID: %v", err)
 	}
-	wantCmds := []string{
+	wantCmds := append(vlan90ExistsCmds(spec),
 		spec.PvidCmd,
 		spec.ConfigureCmd, spec.Interface(5),
 		spec.SwitchportGeneralCmd,
 		spec.VlanPvid(90),
 		spec.ExitCmd, spec.ExitCmd,
 		spec.PvidCmd,
-	}
+	)
 	assertCommands(t, sess, wantCmds)
 }
 
@@ -588,25 +605,25 @@ func TestWriterSetPVIDNoSwitchportGeneralOnGSM7252PS(t *testing.T) {
 	before := pvidFixture(pvidRow(5, 1))
 	after := pvidFixture(pvidRow(5, 90))
 
-	sess := newQueuedSession(
+	sess := newQueuedSession(append(vlan90ExistsSteps(),
 		ok(before),
 		ok(""), ok(""), // enter
 		ok(""),         // body: vlan pvid 90 only (NO switchport mode general)
 		ok(""), ok(""), // unwind
 		ok(after),
-	)
+	)...)
 	w := mustNewWriter(t, sess, m)
 
 	if err := w.SetPVID(context.Background(), 5, 90, false); err != nil {
 		t.Fatalf("SetPVID: %v", err)
 	}
-	wantCmds := []string{
+	wantCmds := append(vlan90ExistsCmds(spec),
 		spec.PvidCmd,
 		spec.ConfigureCmd, spec.Interface(5),
 		spec.VlanPvid(90),
 		spec.ExitCmd, spec.ExitCmd,
 		spec.PvidCmd,
-	}
+	)
 	assertCommands(t, sess, wantCmds)
 }
 
@@ -626,12 +643,12 @@ func TestWriterSetPVIDGuard(t *testing.T) {
 	// force=true bypasses the guard and the write proceeds to completion.
 	before := pvidFixture(pvidRow(5, 1))
 	after := pvidFixture(pvidRow(5, 90))
-	sess2 := newQueuedSession(
+	sess2 := newQueuedSession(append(vlan90ExistsSteps(),
 		ok(before),
 		ok(""), ok(""), ok(""), ok(""),
 		ok(""), ok(""),
 		ok(after),
-	)
+	)...)
 	w2 := mustNewWriter(t, sess2, m, WithProtectedPorts(5))
 	if err := w2.SetPVID(context.Background(), 5, 90, true); err != nil {
 		t.Fatalf("SetPVID with force=true: %v", err)
@@ -643,12 +660,12 @@ func TestWriterSetPVIDVerificationMismatch(t *testing.T) {
 	before := pvidFixture(pvidRow(5, 1))
 	after := before // unchanged -- the write silently didn't take.
 
-	sess := newQueuedSession(
+	sess := newQueuedSession(append(vlan90ExistsSteps(),
 		ok(before),
 		ok(""), ok(""), ok(""), ok(""),
 		ok(""), ok(""),
 		ok(after),
-	)
+	)...)
 	w := mustNewWriter(t, sess, m)
 
 	err := w.SetPVID(context.Background(), 5, 90, false)
@@ -658,34 +675,29 @@ func TestWriterSetPVIDVerificationMismatch(t *testing.T) {
 	}
 }
 
-func TestWriterSetPVIDVLANDoesNotPreExistIsDeviceRejection(t *testing.T) {
-	// dossier §4.5: whether the target VLAN must pre-exist is DELIBERATELY
-	// left to the switch -- no library-side existence check, unlike
-	// SetVLANMembership. Model this as the device rejecting `vlan pvid
-	// <vid>` outright.
+// TestWriterSetPVIDMissingVLANIsPrecondition pins the GAP-1 fix (parity
+// with Python commit 98fb935): whether the target VLAN must pre-exist used
+// to be DELIBERATELY left to the switch (no library-side existence check,
+// unlike SetVLANMembership), on the assumption an unknown vlan would come
+// back as a command rejection. That assumption does not hold generally --
+// MEASURED on a GS728TPP (10.2.5.10, firmware 6.0.1.30) over HTTP/SNMP, the
+// equivalent write is silently ACCEPTED and reads back, leaving the port
+// pointing at nothing. SetPVID now refuses up front, exactly like
+// SetVLANMembership already does, issuing ZERO commands beyond the
+// existence check itself.
+func TestWriterSetPVIDMissingVLANIsPrecondition(t *testing.T) {
 	m := mustGetModel(t, "m4300-24x")
 	spec := mustCLISpec(t, m)
-	before := pvidFixture(pvidRow(5, 1))
-
-	sess := newQueuedSession(
-		ok(before),
-		ok(""), ok(""), // enter
-		ok(""),                      // switchport mode general
-		ok("% VLAN does not exist"), // vlan pvid 999 -- REJECTED by the device
-		ok(""), ok(""),              // unwind
-	)
+	sess := newQueuedSession(ok(vlanBriefFixture())) // no VLANs -> 999 absent
 	w := mustNewWriter(t, sess, m)
 
 	err := w.SetPVID(context.Background(), 5, 999, false)
 	if !errors.Is(err, ErrCliCommandRejected) {
 		t.Fatalf("SetPVID error = %v, want ErrCliCommandRejected", err)
 	}
-	wantCmds := []string{
-		spec.PvidCmd,
-		spec.ConfigureCmd, spec.Interface(5),
-		spec.SwitchportGeneralCmd,
-		spec.VlanPvid(999),
-		spec.ExitCmd, spec.ExitCmd,
+	var verr *model.WriteVerificationError
+	if errors.As(err, &verr) {
+		t.Fatalf("SetPVID error is a *model.WriteVerificationError, want a precondition error instead")
 	}
-	assertCommands(t, sess, wantCmds)
+	assertCommands(t, sess, []string{spec.VlanBriefCmd})
 }

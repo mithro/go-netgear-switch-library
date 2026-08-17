@@ -887,24 +887,50 @@ func SeedGS728TPP() *State {
 		27: {Name: "g27", Admin: true, Link: false, Speed: 1000},
 		28: {Name: "g28", Admin: true, Link: true, Speed: 1000},
 	}
+	// The eight LAG pseudo-interfaces, MEASURED 2026-08-02 on the live switch:
+	// ifName "po 1".."po 8" at ifIndex 1000-1007, ifType 161 (ieee8023adLag).
+	// dot1dBasePortIfIndex is identity-mapped there, so those same numbers are
+	// the Q-BRIDGE PortList bit positions. Seeded because they are what the
+	// bitmaps actually contain: without them the mock cannot reproduce the
+	// phantom "member port 1000" SNMP GetVLANs used to report (snmp.ParseVlans).
+	for idx := 1000; idx <= 1007; idx++ {
+		ports[idx] = &PortSim{Name: fmt.Sprintf("po %d", idx-999), Admin: true, Link: false, Speed: 0, IfType: 161}
+	}
 
+	// VLAN 1 is untagged on the access ports; every other VLAN is carried
+	// tagged on the trunk set, except the untagged sets captured below.
+	//
+	// LAG membership is MEASURED (2026-08-02): VLAN 1's current-table bitmap
+	// sets all eight LAG bits, while every configured VLAN's static bitmap
+	// sets bit 1000 alone. VLAN 1 also has NO dot1qVlanStaticTable row on
+	// this switch -- NoStaticRow=true -- which is precisely the VLAN a
+	// static-table-only reader lost.
 	vlans := map[int]*VlanSim{
-		1:  {Name: "", Member: portSetFromSlice([]int{2, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 27}), Untagged: portSetFromSlice([]int{2, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 27})},
-		2:  {Name: "Voice VLAN", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27}), Untagged: portSetFromSlice([]int{})},
-		3:  {Name: "Auto Video VLAN", Member: portSetFromSlice([]int{}), Untagged: portSetFromSlice([]int{})},
-		5:  {Name: "net", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27}), Untagged: portSetFromSlice([]int{3, 5, 12, 23})},
-		6:  {Name: "pwr", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27}), Untagged: portSetFromSlice([]int{})},
-		7:  {Name: "store", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27}), Untagged: portSetFromSlice([]int{})},
-		10: {Name: "int", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27}), Untagged: portSetFromSlice([]int{1})},
-		20: {Name: "roam", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27}), Untagged: portSetFromSlice([]int{})},
-		31: {Name: "fpgas", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27}), Untagged: portSetFromSlice([]int{})},
-		41: {Name: "sm", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27}), Untagged: portSetFromSlice([]int{})},
-		90: {Name: "iot", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27}), Untagged: portSetFromSlice([]int{})},
-		99: {Name: "guest", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27}), Untagged: portSetFromSlice([]int{})},
+		1: {Name: "", Member: portSetFromSlice([]int{2, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 27, 1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007}), Untagged: portSetFromSlice([]int{2, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 27, 1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007}), NoStaticRow: true},
+		2: {Name: "Voice VLAN", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 1000}), Untagged: portSetFromSlice([]int{})},
+		// Bit 1000 alone: the live static bitmap for VLAN 3 is all-zero
+		// except that LAG bit, i.e. a VLAN whose ONLY member is a LAG.
+		3:  {Name: "Auto Video VLAN", Member: portSetFromSlice([]int{1000}), Untagged: portSetFromSlice([]int{})},
+		5:  {Name: "net", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 1000}), Untagged: portSetFromSlice([]int{3, 5, 12, 23})},
+		6:  {Name: "pwr", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 1000}), Untagged: portSetFromSlice([]int{})},
+		7:  {Name: "store", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 1000}), Untagged: portSetFromSlice([]int{})},
+		10: {Name: "int", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 1000}), Untagged: portSetFromSlice([]int{1})},
+		20: {Name: "roam", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 1000}), Untagged: portSetFromSlice([]int{})},
+		31: {Name: "fpgas", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 1000}), Untagged: portSetFromSlice([]int{})},
+		41: {Name: "sm", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 1000}), Untagged: portSetFromSlice([]int{})},
+		90: {Name: "iot", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 1000}), Untagged: portSetFromSlice([]int{})},
+		99: {Name: "guest", Member: portSetFromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 1000}), Untagged: portSetFromSlice([]int{})},
 	}
 
 	pvids := map[int]int{
 		1: 10, 2: 1, 3: 5, 4: 1, 5: 5, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 1, 12: 5, 13: 1, 14: 1, 15: 1, 16: 1, 17: 1, 18: 1, 19: 1, 20: 1, 21: 1, 22: 1, 23: 5, 24: 1, 25: 1, 26: 1, 27: 1, 28: 1,
+	}
+	// The real dot1qPvid walk returns 36 rows, not 28: the eight LAGs carry a
+	// PVID too (all 1, measured 2026-08-02). snmp.ParsePvids already filters
+	// them out by ifType; seeding them keeps that filter honest work rather
+	// than a no-op against a mock that never presents the case.
+	for idx := 1000; idx <= 1007; idx++ {
+		pvids[idx] = 1
 	}
 
 	poe := map[int]*PoeSim{
@@ -1010,6 +1036,13 @@ func SeedGS728TPP() *State {
 	s.SysDescr = "Netgear GS728TPP ProSafe Smart Managed Pro Switch"
 
 	s.SysObjectID = "1.3.6.1.4.1.4526.100.4.27"
+
+	// The device's REAL PortList width, measured off the wire 2026-08-02:
+	// every dot1qVlanStatic/Current bitmap is 126 bytes (1008 bits), which
+	// is what makes room for the LAG bits at 1000-1007. Seeded, never
+	// derived -- a mock that recomputed it with the writer's own formula
+	// could only ever agree with the writer (D-REC Topic B / principle 5).
+	s.VLANPortListWidth = model.Ptr(126)
 
 	return s
 }

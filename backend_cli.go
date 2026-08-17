@@ -35,6 +35,7 @@ package netgearswitch
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/mithro/go-netgear-switch-library/fastpath"
@@ -387,4 +388,77 @@ func (l *lazyCLISession) Close() error {
 	err := l.session.Close()
 	l.session = nil
 	return err
+}
+
+// defaultCLITransportKind picks the CLI transport UploadCertificateSCP dials
+// for m, mirroring Python's build_sync_cli_client transport branch exactly
+// (_dispatch.py:257-265): telnet ONLY when m declares TELNET but not SSH
+// (today, only gsm7228ps -- the S3300/FASTPATH-Lite line, whose CLI has no
+// SSH listener at all); SSH otherwise. Every model with a real copy-scp
+// SSL-certificate profile (fastpath.ScpProfile) declares BOTH transports
+// today, so this only decides gsm7228ps's session build -- which
+// fastpath.ScpProfile refuses anyway, since gsm7228ps has no SCP cert
+// profile (its cert upload is the separate HTTP-multipart mechanism,
+// Switch.UploadCertificate).
+func defaultCLITransportKind(m *model.SwitchModel) cliTransportKind {
+	if m.HasBackend(model.BackendTelnet) && !m.HasBackend(model.BackendSSH) {
+		return cliTransportTelnet
+	}
+	return cliTransportSSH
+}
+
+// UploadCertificateSCP deploys an HTTPS SSL server certificate (and,
+// optionally, its CA root chain) to this switch over an interactive `copy
+// scp://...` FASTPATH-CLI session, mirroring Python's
+// SyncSwitch.upload_certificate_scp (sync_api.py:828-885) for its parameters
+// and routing to the same mechanism fastpath.DeployCertificateSCP
+// (cert_scp.go) already implements -- the Go port of that same Python file's
+// module-level deploy_certificate_scp.
+//
+// The CALLER must have already staged the PEM(s) on scpSource (a
+// "user@host[:port]" string) under remoteDir (an ABSOLUTE path) -- this
+// method only SENDS the copy commands, it never runs the staging SCP server
+// itself. The filename prefix the switch pulls (<base>-server.pem, and when
+// chain is true, <base>-root.pem) is derived from s.Host() with every "."
+// replaced by "-", exactly mirroring Python's
+// `base = self.host.replace(".", "-")` (FASTPATH's copy-scp caps the remote
+// path length and rejects dots in filenames, per the certbot-hook
+// FastpathScpUpdater this mirrors).
+//
+// Like UploadCertificate (backend_http.go) and Identify/NSDPDevice
+// (switch.go), this deliberately BYPASSES the SNMP-first writeVia dispatch
+// entirely -- CLI/SCP is the ONLY mechanism that can ever serve it, so it
+// takes plain parameters rather than a Write{} options struct and accepts NO
+// per-call backend override (mirroring the MCP tool doc for this op: "Takes
+// NO 'backend' parameter: this IS the CLI/SCP mechanism"); the transport is
+// instead chosen internally via defaultCLITransportKind, above.
+//
+// Gated FIRST, before any session I/O, by fastpath.ScpProfile (called inside
+// DeployCertificateSCP): a model with no CLI backend at all, or a CLI model
+// with no known copy-scp SSL-certificate deploy profile (today, ONLY
+// gsm7228ps -- its cert upload is the separate HTTP-multipart mechanism,
+// UploadCertificate), returns an error wrapping model.ErrUnsupportedCapability
+// naming the reason -- never a CredentialError from resolving a CLI password
+// this op was never going to use. The CLI session itself stays lazy
+// (s.cliSession): built, and its password resolved, only on the FIRST actual
+// Run/RunSCPCopy call DeployCertificateSCP makes.
+//
+// NOT gated by force at all, mirroring Python/DeployCertificateSCP exactly
+// (no ProtectedPortError path for this op -- see cert_scp.go's own doc
+// comment). Reuses THIS Switch's shared, cached CLI session (s.cliSession)
+// rather than the fresh build-then-close session Python's own _cli_session()
+// opens per call -- deliberate, matching how UploadCertificate reuses
+// s.httpSession instead of a fresh HTTP connection: a Switch that already
+// dialled a CLI session for a read or write keeps using that SAME shell, and
+// Switch.Close releases it.
+func (s *Switch) UploadCertificateSCP(ctx context.Context, scpSource, scpPassword, remoteDir string, chain bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	session, err := s.cliSession(defaultCLITransportKind(s.model))
+	if err != nil {
+		return err
+	}
+	base := strings.ReplaceAll(s.host, ".", "-")
+	return fastpath.DeployCertificateSCP(ctx, session, s.model, scpSource, scpPassword, remoteDir, base, chain)
 }

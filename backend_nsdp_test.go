@@ -45,6 +45,15 @@ func (f *fakeNsdpRWClient) Read(_ context.Context, _ []nsdp.Tag) (*nsdp.Packet, 
 	pkt := &nsdp.Packet{Op: nsdp.OpReadResponse, ClientMAC: make([]byte, 6), ServerMAC: make([]byte, 6)}
 	pkt.AddTLV(nsdp.TagModel, []byte("GS110EMX"))
 	pkt.AddTLV(nsdp.TagMAC, []byte{0xbc, 0xa5, 0x11, 0xb8, 0xec, 0xf1})
+	// VLAN 90 exists because the password-plumbing tests below target it via
+	// SetPVID (as a convenient "any write op"): SetPVID refuses a PVID
+	// pointing at a VLAN the switch does not have (GAP-1 fix, parity with
+	// Python commit 98fb935), so this fake -- which otherwise never emits a
+	// TagVLANMembers TLV at all -- would be modelling a switch on which
+	// those writes genuinely cannot succeed.
+	if vlanTLV, err := nsdp.VlanMembersTLV(90, []int{1}, nil, 10); err == nil {
+		pkt.TLVs = append(pkt.TLVs, vlanTLV)
+	}
 	for port, vlan := range f.pvids {
 		tlv, err := nsdp.PvidTLV(port, vlan)
 		if err == nil {

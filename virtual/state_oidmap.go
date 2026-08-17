@@ -144,6 +144,28 @@ func (s *State) OIDMap() map[string]OIDEntry {
 	}
 
 	for vid, vsim := range s.Vlans {
+		// dot1qVlanCurrentTable -- the OPERATIONAL view, indexed
+		// <timeMark>.<vlanIndex>. Real agents publish it for EVERY VLAN,
+		// including ones with no static row, which is the only place a VLAN
+		// with VlanSim.NoStaticRow set appears at all (MEASURED on a
+		// GS728TPP, 10.2.5.10, firmware 6.0.1.30: its default VLAN 1 has no
+		// dot1qVlanStaticTable row, only a current-table row). Time mark 0
+		// is what that switch reports on every row.
+		out[fmt.Sprintf("%s.0.%d", snmp.Dot1qVlanCurrentEgress, vid)] = entry("OCTETSTR", string(snmp.EncodePortBitmap(sliceFromPortSet(vsim.Member), vlanWidth)))
+		out[fmt.Sprintf("%s.0.%d", snmp.Dot1qVlanCurrentUntagged, vid)] = entry("OCTETSTR", string(snmp.EncodePortBitmap(sliceFromPortSet(vsim.Untagged), vlanWidth)))
+		// 1=other, 2=permanent: the live GS728TPP reports 1 for its
+		// static-row-less VLAN 1 and 2 for all 12 configured VLANs.
+		status := "2"
+		if vsim.NoStaticRow {
+			status = "1"
+		}
+		out[fmt.Sprintf("%s.0.%d", snmp.Dot1qVlanStatus, vid)] = entry("INTEGER", status)
+		if vsim.NoStaticRow {
+			// No dot1qVlanStaticTable row at all -- not an empty one. The
+			// distinction is the whole point: an empty row would still make
+			// the VLAN visible to a static-table-only reader.
+			continue
+		}
 		out[colKey(snmp.Dot1qVlanStaticName, vid)] = entry("OCTETSTR", vsim.Name)
 		// dot1qVlanStaticEgressPorts is the STATIC (configured) table, so it
 		// reports vsim.Configured(), not the current Member set -- proven

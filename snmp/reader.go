@@ -113,17 +113,24 @@ func (r *Reader) GetStats(ctx context.Context) ([]model.PortStats, error) {
 	})
 }
 
-// GetVLANs reads the static VLAN table (name + member/tagged/untagged port
-// sets).
+// GetVLANs reads the VLAN table (name + member/tagged/untagged port sets),
+// completed by the dot1qVlanCurrentTable and physical-port-filtered by
+// IfType -- see ParseVlans for why both matter (a GS728TPP, measured live,
+// loses VLAN 1 without the current-table read and invents a phantom LAG
+// member port without the ifType filter).
 //
 // Walks, in order: Dot1qVlanStaticName, Dot1qVlanStaticEgress,
-// Dot1qVlanStaticUntagged.
+// Dot1qVlanStaticUntagged, IfType, Dot1qVlanCurrentEgress,
+// Dot1qVlanCurrentUntagged.
 func (r *Reader) GetVLANs(ctx context.Context) ([]model.VLANInfo, error) {
-	cols, err := walkAll(ctx, r.client, Dot1qVlanStaticName, Dot1qVlanStaticEgress, Dot1qVlanStaticUntagged)
+	cols, err := walkAll(ctx, r.client,
+		Dot1qVlanStaticName, Dot1qVlanStaticEgress, Dot1qVlanStaticUntagged,
+		IfType, Dot1qVlanCurrentEgress, Dot1qVlanCurrentUntagged,
+	)
 	if err != nil {
 		return nil, err
 	}
-	return ParseVlans(cols[0], cols[1], cols[2])
+	return ParseVlans(cols[0], cols[1], cols[2], cols[3], cols[4], cols[5])
 }
 
 // GetPVIDs reads each physical port's default/untagged VLAN (PVID).

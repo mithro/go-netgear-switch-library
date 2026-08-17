@@ -86,6 +86,29 @@ func (w *Writer) rawBitmap(ctx context.Context, baseOID string, vlanID int) ([]b
 	return nil, nil
 }
 
+// physical returns the switch's physical (ethernetCsmacd) ports via a
+// fresh IfType walk, or nil when the agent does not surface ifType at all
+// -- mirrors physicalPorts' "no ifType walk -> keep everything" contract
+// (see ParseVlans/ParsePortStatus, which use the same helper on the read
+// side).
+//
+// SetVlanMembership's verification decodes the bitmap it just SENT and
+// compares it with what GetVLANs reads back -- and GetVLANs now drops LAG
+// bridge-ports from VLAN membership (ParseVlans, parity with Python commit
+// 3f25b0b). Without the same filter here the two sides would disagree by
+// exactly those bits, and every membership write on a switch with a LAG in
+// the VLAN would raise a bogus WriteVerificationError. MEASURED: the
+// GSM7252PS seed (virtual.SeedGSM7252PS) has a real "lag 1" LAG at ifIndex
+// 418/419, a member of several VLANs -- this is the normal case there, not
+// an edge case.
+func (w *Writer) physical(ctx context.Context) (map[int]bool, error) {
+	ifTypes, err := w.client.Walk(ctx, IfType)
+	if err != nil {
+		return nil, err
+	}
+	return physicalPorts(ifTypes)
+}
+
 // SetVlanMembership sets port's membership mode (untagged/tagged/excluded)
 // within vlanID and verifies BOTH written columns (egress member_ports AND
 // untagged_ports) read back correctly. Ported from Python's
@@ -158,8 +181,14 @@ func (w *Writer) SetVlanMembership(ctx context.Context, vlanID, port int, mode m
 	if err != nil {
 		return err
 	}
-	wantEgress := DecodePortBitmap(newEgress)
-	wantUntagged := DecodePortBitmap(newUntagged)
+	// Compare on the same footing GetVLANs reports -- physical ports only
+	// (see the physical method's doc comment).
+	keep, err := w.physical(ctx)
+	if err != nil {
+		return err
+	}
+	wantEgress := filterPhysical(DecodePortBitmap(newEgress), keep)
+	wantUntagged := filterPhysical(DecodePortBitmap(newUntagged), keep)
 	if after == nil {
 		return &model.WriteVerificationError{
 			Msg:    fmt.Sprintf("VLAN %d disappeared while setting membership for port %d", vlanID, port),

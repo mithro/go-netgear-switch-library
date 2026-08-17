@@ -465,13 +465,25 @@ func (w *Writer) SetVLANMembership(ctx context.Context, vlan, port int, mode mod
 
 // SetPVID sets port's default/untagged VLAN (PVID) to vlan and verifies the
 // change read back correctly. Ported from Python CliWriter.set_pvid
-// (cli_write.py:388-412, dossier §4.5).
+// (cli_write.py:388-412, updated by commit 98fb935).
 //
 // guard(port, force) runs FIRST (disruptive, always honours protected
-// ports -- unlike SetVLANMembership's "always guarded" too, this matches).
-// Whether vlan must pre-exist is DELIBERATELY left to the switch itself (no
-// library-side existence check, unlike SetVLANMembership) -- an unknown
-// vlan simply comes back as a command rejection from `run` (dossier §4.5).
+// ports -- unlike SetVLANMembership's "always guarded" too, this matches),
+// THEN the VLAN-existence precondition below, mirroring
+// SetVLANMembership's own w.vlan(ctx, vlan) check. A missing target VLAN
+// is a PRECONDITION failure (errCliCommand-wrapped ErrCliCommandRejected,
+// NOT a *model.WriteVerificationError) with ZERO commands sent.
+//
+// This used to be DELIBERATELY left to the switch (no library-side
+// existence check, unlike SetVLANMembership), on the assumption an unknown
+// vlan would come back as a command rejection. That assumption does not
+// hold generally: MEASURED on a GS728TPP (10.2.5.10, firmware 6.0.1.30,
+// 2026-08-03) over HTTP/SNMP, the equivalent write to a nonexistent VLAN is
+// silently ACCEPTED and reads back, creating no VLAN -- so verify-after-
+// write cannot catch it. Only a precondition check can, so every backend
+// now has one (Python commit 98fb935), including this one, even though
+// this switch's OWN CLI firmware may still reject the raw command anyway.
+//
 // Command sequence: `configure` -> `interface <iface>` -> [`switchport
 // mode general` if applicable] -> `vlan pvid <vid>` -> `exit` `exit`.
 // Verification re-reads the FULL pvid list and checks the exact (port,
@@ -479,6 +491,13 @@ func (w *Writer) SetVLANMembership(ctx context.Context, vlan, port int, mode mod
 func (w *Writer) SetPVID(ctx context.Context, port, vlan int, force bool) error {
 	if err := w.guard(port, force); err != nil {
 		return err
+	}
+	targetVlan, err := w.vlan(ctx, vlan)
+	if err != nil {
+		return err
+	}
+	if targetVlan == nil {
+		return errCliCommand("VLAN %d does not exist", vlan)
 	}
 	before, err := w.reader.GetPVIDs(ctx)
 	if err != nil {

@@ -174,12 +174,34 @@ func pvidLookup(m map[int]int, port int) any {
 // UNVERIFIED pending a hardware capture: PORT_PVID (0x3000) is documented
 // READ-ONLY in the reference spec, so a real switch may reject this write
 // -- the read-after verify below is the runtime guard. The guard is
-// UNCONDITIONAL (any PVID change is disruptive). One WRITE_REQUEST with a
-// single PvidTLV. Verify: re-read the full PVID list via the internal
-// reader's GetPVIDs and check the exact (port, vlan) pair is present.
+// UNCONDITIONAL (any PVID change is disruptive), and runs BEFORE the
+// VLAN-existence precondition below.
+//
+// A missing target VLAN is itself a PRECONDITION failure -- an error
+// wrapping model.ErrNSDP (via errNSDP), NOT a *model.WriteVerificationError
+// -- and issues ZERO writes, mirroring every other backend's own
+// set_pvid/SetPVID precondition (Python commit 98fb935). NsdpError (Go:
+// model.ErrNSDP), not ErrUnsupportedCapability: the operation IS supported,
+// the switch simply has no such VLAN right now. The device is not relied
+// on to catch this itself -- MEASURED on a GS728TPP (10.2.5.10, firmware
+// 6.0.1.30) over HTTP/SNMP, the equivalent write to a nonexistent VLAN is
+// silently ACCEPTED and reads back, so only a precondition check prevents a
+// port being left pointing at nothing; the same must hold here even though
+// this backend's own PVID write is otherwise unverified against hardware.
+//
+// One WRITE_REQUEST with a single PvidTLV. Verify: re-read the full PVID
+// list via the internal reader's GetPVIDs and check the exact (port, vlan)
+// pair is present.
 func (w *Writer) SetPVID(ctx context.Context, port, vlan int, force bool) error {
 	if err := w.guard(port, force); err != nil {
 		return err
+	}
+	targetVlan, err := w.vlan(ctx, vlan)
+	if err != nil {
+		return err
+	}
+	if targetVlan == nil {
+		return errNSDP("VLAN %d does not exist", vlan)
 	}
 	beforePairs, err := w.reader.GetPVIDs(ctx)
 	if err != nil {

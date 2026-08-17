@@ -126,6 +126,22 @@ func pvidTables(port int, vlan int64) map[string][]Row {
 	}
 }
 
+// mergeTables combines any number of OID->rows table maps into one, for
+// tests that need both a PVID column (pvidTables) and a VLAN's static rows
+// (vlanTables) present on the same fake client -- e.g. SetPVID's
+// VLAN-existence precondition (writer.go) needs the target VLAN to be a
+// real row, distinct from pvidTables' unrelated "current PVID" value.
+// Later maps win on a key collision (none expected among these fixtures).
+func mergeTables(maps ...map[string][]Row) map[string][]Row {
+	out := map[string][]Row{}
+	for _, m := range maps {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // --- NewWriter: the single capability gate ---------------------------------
 
 func TestNewWriterRejectsNonSNMPModel(t *testing.T) {
@@ -313,7 +329,7 @@ func TestSetPortEnabledProtectedPortBlocksDisableWithoutForce(t *testing.T) {
 // --- SetPVID -----------------------------------------------------------------
 
 func TestSetPVIDSetsGauge32AndVerifies(t *testing.T) {
-	client := newFakeWriteClient(pvidTables(10, 1), true)
+	client := newFakeWriteClient(mergeTables(pvidTables(10, 1), vlanTables(90, nil, nil)), true)
 	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
@@ -328,7 +344,7 @@ func TestSetPVIDSetsGauge32AndVerifies(t *testing.T) {
 }
 
 func TestSetPVIDVerificationFailureRaises(t *testing.T) {
-	client := newFakeWriteClient(pvidTables(10, 1), false) // device ignores the write
+	client := newFakeWriteClient(mergeTables(pvidTables(10, 1), vlanTables(90, nil, nil)), false) // device ignores the write
 	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
@@ -349,7 +365,7 @@ func TestSetPVIDVerificationFailureRaises(t *testing.T) {
 func TestSetPVIDGuardIsUnconditional(t *testing.T) {
 	// Unlike SetPoE/SetPortEnabled, SetPVID's guard is NOT direction-gated:
 	// any PVID change is disruptive, so it always fires on a protected port.
-	client := newFakeWriteClient(pvidTables(10, 1), true)
+	client := newFakeWriteClient(mergeTables(pvidTables(10, 1), vlanTables(90, nil, nil)), true)
 	w, err := NewWriter(client, mustModel(t, "gsm7252ps"), WithProtectedPorts(10))
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
@@ -366,9 +382,37 @@ func TestSetPVIDGuardIsUnconditional(t *testing.T) {
 	}
 }
 
+// TestSetPVIDMissingVlanIsPreconditionNotVerifyError pins the GAP-1 fix
+// (parity with Python commit 98fb935): a PVID pointing at a VLAN the
+// switch does not have must be refused BEFORE any SET is attempted, as a
+// precondition failure (errSNMP-wrapped model.ErrSNMP), never a
+// *model.WriteVerificationError. The device itself will NOT catch this --
+// MEASURED on a GS728TPP (10.2.5.10, firmware 6.0.1.30): the equivalent
+// raw SET is ACCEPTED and reads back, creating no VLAN -- so only this
+// precondition prevents a port being left pointing at nothing. Mirrors
+// TestSetVlanMembershipMissingVlanIsPreconditionNotVerifyError exactly.
+func TestSetPVIDMissingVlanIsPreconditionNotVerifyError(t *testing.T) {
+	client := newFakeWriteClient(pvidTables(10, 1), true) // no VLAN 90 registered
+	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	err = w.SetPVID(context.Background(), 10, 90, true)
+	if !errors.Is(err, model.ErrSNMP) {
+		t.Fatalf("SetPVID error = %v, want wrap of model.ErrSNMP", err)
+	}
+	var verr *model.WriteVerificationError
+	if errors.As(err, &verr) {
+		t.Errorf("SetPVID error is a *model.WriteVerificationError, want a precondition ErrSNMP instead")
+	}
+	if len(client.sets) != 0 {
+		t.Errorf("sets = %+v, want none (precondition failed before any SET)", client.sets)
+	}
+}
+
 func TestSetPVIDReReadTransportErrorPropagatesUnwrapped(t *testing.T) {
 	boom := errors.New("boom: transport down")
-	client := &failAfterSetWriteClient{fakeWriteClient: newFakeWriteClient(pvidTables(10, 1), true), failErr: boom}
+	client := &failAfterSetWriteClient{fakeWriteClient: newFakeWriteClient(mergeTables(pvidTables(10, 1), vlanTables(90, nil, nil)), true), failErr: boom}
 	w, err := NewWriter(client, mustModel(t, "gsm7252ps"))
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)

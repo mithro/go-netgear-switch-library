@@ -847,6 +847,13 @@ func TestHTTPFaceGS110EMXWriterSetPortEnabled(t *testing.T) {
 // the pinned reference, not something this port should paper over. (Compare
 // TestHTTPFaceGS110EMXWriterSetPortEnabled, the ONE write op gs110emx's own
 // web_gs110emx.py genuinely implements.)
+//
+// Target vlan is 90 (seeded on gs110emx, see SeedGS110EMX), NOT an
+// arbitrary unused id: SetPVID now refuses up front if the target VLAN
+// does not exist (GAP-1 fix, parity with Python commit 98fb935), via
+// requireVlanExists's GS110EMX-dialect-aware dispatch (writer.go), so this
+// test's target must be real or it would fail at that earlier check
+// instead of reaching the CSRF-hash bug this test exists to pin.
 func TestHTTPFaceGS110EMXWriterSetPVIDHasNoCSRFHash(t *testing.T) {
 	st := SeedGS110EMX()
 	m, err := model.GetModel("gs110emx")
@@ -858,13 +865,14 @@ func TestHTTPFaceGS110EMXWriterSetPVIDHasNoCSRFHash(t *testing.T) {
 		t.Fatalf("webui.HTTPSpec: %v", err)
 	}
 	wantUnchanged := st.Pvids[3]
+	const targetVlan = 90
 	addr, _ := startHTTPFace(t, st, spec, "password")
 	client := webui.NewHTTPClient(addr, "password", spec)
 	writer, err := webui.NewWriter(client, m)
 	if err != nil {
 		t.Fatalf("webui.NewWriter: %v", err)
 	}
-	err = writer.SetPVID(context.Background(), 3, wantUnchanged+1, false)
+	err = writer.SetPVID(context.Background(), 3, targetVlan, false)
 	if err == nil {
 		t.Fatalf("SetPVID() against gs110emx error = nil, want an error (no CSRF hash field on this model's PVID page, see doc comment)")
 	}
@@ -873,6 +881,88 @@ func TestHTTPFaceGS110EMXWriterSetPVIDHasNoCSRFHash(t *testing.T) {
 	}
 	if st.Pvids[3] != wantUnchanged {
 		t.Errorf("state.Pvids[3] after a refused SetPVID = %d, want unchanged %d", st.Pvids[3], wantUnchanged)
+	}
+}
+
+// TestHTTPFaceGS728TPPWriterSetPVIDRefusesNonexistentVlan exercises
+// webui.Writer.requireVlanExists' isGoAheadDialect branch (writer.go) end-
+// to-end -- GAP-1 fix parity with Python commit 98fb935 -- which no other
+// test drove: SetPVID against a GS728TPP must refuse a PVID pointing at a
+// VLAN the switch does not have, BEFORE reaching the CSRF/PostForm write
+// this model's SetPVID otherwise shares with every other dialect (see
+// writer.go's package doc comment on that shared-but-imperfect verify
+// path), so this exercises the precondition without depending on that
+// separate, already-documented gap.
+func TestHTTPFaceGS728TPPWriterSetPVIDRefusesNonexistentVlan(t *testing.T) {
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	wantUnchanged := st.Pvids[2]
+	const nonexistentVlan = 4007 // not among gs728tpp's seeded VLANs (1,2,3,5,6,7,10,20,31,41,90,99)
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+
+	err = writer.SetPVID(context.Background(), 2, nonexistentVlan, false)
+	if err == nil {
+		t.Fatal("SetPVID() against gs728tpp with a nonexistent VLAN error = nil, want a refusal")
+	}
+	if !errors.Is(err, model.ErrHTTPUnexpectedPage) {
+		t.Errorf("SetPVID() error = %v, want errors.Is(..., model.ErrHTTPUnexpectedPage)", err)
+	}
+	if !strings.Contains(err.Error(), "4007") {
+		t.Errorf("SetPVID() error = %q, want it to mention the nonexistent VLAN 4007", err.Error())
+	}
+	if st.Pvids[2] != wantUnchanged {
+		t.Errorf("state.Pvids[2] after a refused SetPVID = %d, want unchanged %d", st.Pvids[2], wantUnchanged)
+	}
+}
+
+// TestHTTPFaceGSM7252PSWriterSetPVIDRefusesNonexistentVlan exercises
+// webui.Writer.requireVlanExists' isFastpathDialect branch (writer.go)
+// end-to-end -- GAP-1 fix parity with Python commit 98fb935 -- which no
+// other test drove: SetPVID against a managed FASTPATH model must refuse a
+// PVID pointing at a VLAN the switch does not have, before any write.
+func TestHTTPFaceGSM7252PSWriterSetPVIDRefusesNonexistentVlan(t *testing.T) {
+	st := SeedGSM7252PS()
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	wantUnchanged := st.Pvids[1]
+	const nonexistentVlan = 4007 // not among gsm7252ps's seeded VLANs
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", spec)
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+
+	err = writer.SetPVID(context.Background(), 1, nonexistentVlan, false)
+	if err == nil {
+		t.Fatal("SetPVID() against gsm7252ps with a nonexistent VLAN error = nil, want a refusal")
+	}
+	if !errors.Is(err, model.ErrHTTPUnexpectedPage) {
+		t.Errorf("SetPVID() error = %v, want errors.Is(..., model.ErrHTTPUnexpectedPage)", err)
+	}
+	if !strings.Contains(err.Error(), "4007") {
+		t.Errorf("SetPVID() error = %q, want it to mention the nonexistent VLAN 4007", err.Error())
+	}
+	if st.Pvids[1] != wantUnchanged {
+		t.Errorf("state.Pvids[1] after a refused SetPVID = %d, want unchanged %d", st.Pvids[1], wantUnchanged)
 	}
 }
 
@@ -1047,6 +1137,13 @@ func TestHTTPFaceGS105PEGetMgmtIP(t *testing.T) {
 // against gs105pe either (dossier §8's test inventory has no such case),
 // consistent with this being a genuine, if surprising, capability gap of
 // the pinned reference rather than something this port should paper over.
+//
+// Target vlan is 41 (seeded on gs105pe, see SeedGS105PE), NOT an arbitrary
+// unused id: SetPVID now refuses up front if the target VLAN does not
+// exist (GAP-1 fix, parity with Python commit 98fb935), so this test's
+// target must be real or it would fail at that earlier precondition
+// instead of reaching the write-is-a-no-op behavior this test exists to
+// pin.
 func TestHTTPFaceGS105PEWriterSetPVIDNeverAppliesOnThisMock(t *testing.T) {
 	st := SeedGS105PE()
 	m, err := model.GetModel("gs105pe")
@@ -1058,13 +1155,14 @@ func TestHTTPFaceGS105PEWriterSetPVIDNeverAppliesOnThisMock(t *testing.T) {
 		t.Fatalf("webui.HTTPSpec: %v", err)
 	}
 	wantUnchanged := st.Pvids[3]
+	const targetVlan = 41
 	addr, _ := startHTTPFace(t, st, spec, "password")
 	client := webui.NewHTTPClient(addr, "password", spec)
 	writer, err := webui.NewWriter(client, m)
 	if err != nil {
 		t.Fatalf("webui.NewWriter: %v", err)
 	}
-	err = writer.SetPVID(context.Background(), 3, wantUnchanged+1, false)
+	err = writer.SetPVID(context.Background(), 3, targetVlan, false)
 	if err == nil {
 		t.Fatalf("SetPVID() against gs105pe error = nil, want a WriteVerificationError (this mock's known write-is-a-no-op gap, see doc comment)")
 	}
@@ -1197,12 +1295,27 @@ func TestHTTPFaceGoAheadFaceServesEveryReadOpFromState(t *testing.T) {
 		t.Fatalf("webui.NewReader: %v", err)
 	}
 
+	// physicalCount counts only the set's members at or below the model's
+	// physical port count: the seed also carries ifIndex-keyed entries for
+	// the eight LAG pseudo-interfaces (1000-1007, GAP-2 fix parity with
+	// Python commit 3f25b0b), which the real wcd pages never list -- see
+	// physicalGS728TPPPorts's own doc comment.
+	physicalCount := func(set map[int]bool) int {
+		n := 0
+		for p := range set {
+			if p <= m.PortCount {
+				n++
+			}
+		}
+		return n
+	}
+
 	ports, err := reader.GetPorts(ctx)
 	if err != nil {
 		t.Fatalf("GetPorts() error = %v", err)
 	}
-	if len(ports) != len(st.Ports) {
-		t.Fatalf("GetPorts() returned %d ports, want %d (seeded)", len(ports), len(st.Ports))
+	if len(ports) != m.PortCount {
+		t.Fatalf("GetPorts() returned %d ports, want %d (physical only -- the seed's 8 LAG pseudo-interfaces are never listed by the real wcd pages)", len(ports), m.PortCount)
 	}
 	for _, p := range ports {
 		sim, ok := st.Ports[p.Port]
@@ -1218,8 +1331,8 @@ func TestHTTPFaceGoAheadFaceServesEveryReadOpFromState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPVIDs() error = %v", err)
 	}
-	if len(pvids) != len(st.Pvids) {
-		t.Errorf("GetPVIDs() returned %d rows, want %d (seeded)", len(pvids), len(st.Pvids))
+	if len(pvids) != m.PortCount {
+		t.Errorf("GetPVIDs() returned %d rows, want %d (physical only)", len(pvids), m.PortCount)
 	}
 
 	vlans, err := reader.GetVLANs(ctx)
@@ -1231,8 +1344,9 @@ func TestHTTPFaceGoAheadFaceServesEveryReadOpFromState(t *testing.T) {
 	}
 	for _, v := range vlans {
 		vsim := st.Vlans[v.VlanID]
-		if len(v.MemberPorts) != len(vsim.Member) {
-			t.Errorf("VLAN %d MemberPorts = %v, want len %d (seeded)", v.VlanID, v.MemberPorts, len(vsim.Member))
+		wantMembers := physicalCount(vsim.Member)
+		if len(v.MemberPorts) != wantMembers {
+			t.Errorf("VLAN %d MemberPorts = %v, want len %d (seeded, physical members only)", v.VlanID, v.MemberPorts, wantMembers)
 		}
 	}
 
