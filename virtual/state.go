@@ -1531,8 +1531,9 @@ func (s *State) ApplyNsdpWrite(tag nsdp.Tag, value []byte) {
 	case nsdp.TagPortName:
 		// Per-port operator description (0xB000). value is the port byte + the
 		// UTF-8 name; a bare 1-byte value clears the description (nil, not "").
-		// No NSDP writer emits this, but the fake applies it for parity with
-		// Python's apply_nsdp_write so a crafted PORT_NAME write round-trips.
+		// nsdp.Writer.SetPortDescription emits this (0xB000); the fake applies
+		// it, mirroring Python's apply_nsdp_write, so the write's
+		// verify-after-write read-back round-trips.
 		if len(value) == 0 {
 			return
 		}
