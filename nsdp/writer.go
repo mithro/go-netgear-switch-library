@@ -37,6 +37,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"github.com/mithro/go-netgear-switch-library/model"
 )
@@ -417,6 +418,131 @@ func (w *Writer) SetPoE(_ context.Context, _ int, _ bool, _ bool) error {
 // parameter is accepted-but-unused; see SetPoE's doc comment.
 func (w *Writer) SetPortEnabled(_ context.Context, _ int, _ bool, _ bool) error {
 	return unsupportedWrite(NoPortAdminMsg)
+}
+
+// descriptionMap builds a port->description lookup from statuses, mirroring
+// Python's `{p.port: p.description for p in self._reader.get_ports()}`.
+func descriptionMap(statuses []model.PortStatus) map[int]*string {
+	m := make(map[int]*string, len(statuses))
+	for i := range statuses {
+		m[statuses[i].Port] = statuses[i].Description
+	}
+	return m
+}
+
+// descriptionLookup returns m[port] rendered as an `any` for
+// *model.WriteVerificationError's Before/After fields -- nil when port is
+// absent, mirroring Python's `before.get(port)` (None on a missing key).
+// m[port] is itself a *string (nil for "no description"), matching
+// pvidLookup's sibling shape in this file.
+func descriptionLookup(m map[int]*string, port int) any {
+	if v, ok := m[port]; ok {
+		return v
+	}
+	return nil
+}
+
+// SetPortDescription sets port's description over NSDP tag 0xB000
+// (PORT_NAME) and verifies the change read back correctly. Ported from
+// Python's NsdpWriter.set_port_description.
+//
+// UN-HARDWARE-VERIFIED, and this comment must stay attached to this method:
+// the READ encoding is measured on three real GS110EMX units -- one TLV per
+// port, byte 0 the port number and the rest the description -- and the
+// write is that same shape (PortNameTLV, write_tlv.go). The write itself
+// has NEVER been exercised against hardware: the three Plus units in this
+// fleet were powered off when it was attempted. verify-after-write below is
+// the guard that makes that safe to ship -- a wrong shape cannot pass
+// silently.
+func (w *Writer) SetPortDescription(ctx context.Context, port int, description string, force bool) error {
+	if err := w.guard(port, force); err != nil {
+		return err
+	}
+	beforeStatuses, err := w.reader.GetPorts(ctx)
+	if err != nil {
+		return err
+	}
+	before := descriptionMap(beforeStatuses)
+
+	tlv := PortNameTLV(port, description)
+	if _, err := w.client.Write(ctx, []TLVEntry{tlv}, w.password); err != nil {
+		return err
+	}
+
+	afterStatuses, err := w.reader.GetPorts(ctx)
+	if err != nil {
+		return err
+	}
+	after := descriptionMap(afterStatuses)
+
+	var want *string
+	if description != "" {
+		want = &description
+	}
+	got, ok := after[port]
+	if !ok || !strPtrEqual(got, want) {
+		return &model.WriteVerificationError{
+			Msg:    fmt.Sprintf("description for port %d did not read back as %s", port, quoteOrNone(want)),
+			Before: descriptionLookup(before, port),
+			After:  descriptionLookup(after, port),
+		}
+	}
+	return nil
+}
+
+// strPtrEqual reports whether a and b are both nil, or both non-nil with the
+// same referenced value -- used by SetPortDescription's verify step, on the
+// same footing GetPorts reports it (an empty description reads back as a
+// nil Description, mirroring Python's `after.get(port) != (description or
+// None)`).
+func strPtrEqual(a, b *string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || *a == *b
+}
+
+// quoteOrNone renders s quoted, or "None" if s is nil -- mirrors Python's
+// `{want!r}` repr for an Optional[str] in SetPortDescription's verification
+// message.
+func quoteOrNone(s *string) string {
+	if s == nil {
+		return "None"
+	}
+	return strconv.Quote(*s)
+}
+
+// SetPortSpeed always returns an error wrapping
+// model.ErrUnsupportedCapability: this backend cannot configure a port's
+// speed. Mirrors Python's NsdpWriter.set_port_speed.
+//
+// Refused by name rather than approximated: NSDP's per-port speed byte is a
+// LINK-STATE code, not a setting -- its own value 0x00 is DOWN (see
+// LinkSpeed), which a configuration field could not mean. No speed/duplex
+// ADMIN tag has been identified in the tag inventory captured from live
+// GS110EMX units. Every parameter is accepted-but-unused, purely so this
+// method's signature matches the shared BackendWriter surface (see the root
+// package's write_dispatch.go).
+func (w *Writer) SetPortSpeed(_ context.Context, _ int, _ model.PortSpeed, _ bool) error {
+	return unsupportedWrite(fmt.Sprintf(
+		"model %q: NSDP publishes the negotiated link speed only; no speed/duplex admin tag has been identified",
+		w.model.Key,
+	))
+}
+
+// SetFlowControl always returns an error wrapping
+// model.ErrUnsupportedCapability: this backend cannot configure flow
+// control. Mirrors Python's NsdpWriter.set_flow_control.
+//
+// Refused by name: NSDP's PORT_STATUS carries a flow-control byte that this
+// library READS, but no write TLV for it has been identified in the tag
+// inventory captured from live GS110EMX units. Every parameter is
+// accepted-but-unused; see SetPortSpeed's doc comment.
+func (w *Writer) SetFlowControl(_ context.Context, _ int, _ bool, _ bool) error {
+	return unsupportedWrite(fmt.Sprintf(
+		"model %q: NSDP reports flow control but no write tag for it has been identified",
+		w.model.Key,
+	))
 }
 
 // vlanIDs projects a VLAN list to just its ids, mirroring the

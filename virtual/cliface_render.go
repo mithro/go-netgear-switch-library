@@ -564,6 +564,51 @@ func (f *CliFace) renderInterfaceCounters(port int) string {
 	}, "\n")
 }
 
+// renderPortDescription mirrors Python `render_port_description`
+// (cli_fastpath.py:462-491): `show port description <iface>`.
+//
+// Layout transcribed from live output on a GSM7252PS (10.1.5.22,
+// 2026-08-03):
+//
+//	Interface....... 1/0/8
+//	ifIndex......... 8
+//	Description.....
+//	MAC address..... E0:91:F5:0C:D6:DD
+//	Bit Offset Val.. 8
+//
+// An unset description prints the label with NOTHING after it -- which is
+// why the parser maps an empty value to nil rather than "". A port the
+// switch does not have answers with the same rejection any unknown
+// argument gets.
+func (f *CliFace) renderPortDescription(iface string) string {
+	var port int
+	found := false
+	for _, p := range f.physPorts() {
+		if f.iface(p) == iface {
+			port = p
+			found = true
+			break
+		}
+	}
+	if !found {
+		return cliInvalid
+	}
+	sim := f.state.Ports[port]
+	mac := cliMacHex(f.state.NsdpMac[:])
+	desc := ""
+	if sim.Description != nil {
+		desc = *sim.Description
+	}
+	lines := []string{
+		fmt.Sprintf("Interface....... %s", iface),
+		fmt.Sprintf("ifIndex......... %d", port),
+		strings.TrimRight(fmt.Sprintf("Description..... %s", desc), " "),
+		fmt.Sprintf("MAC address..... %s", mac),
+		fmt.Sprintf("Bit Offset Val.. %d", port),
+	}
+	return strings.Join(lines, "\n")
+}
+
 // --- show users / show ip http / show telnetcon / show ip ssh ------------
 //
 // PRINCIPLE-5 NOTE: Python's virtual CLI face has NO renderer for any of

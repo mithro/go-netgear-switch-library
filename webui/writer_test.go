@@ -613,6 +613,43 @@ func TestSetPortEnabledIsUnsupportedOnGs305ep(t *testing.T) {
 	wantUnsupported(t, err, "SetPortEnabled")
 }
 
+// --- SetPortDescription / SetPortSpeed / SetFlowControl -- XML-API-only,
+// refused by name on every non-GoAhead dialect (gs305ep exercises that
+// refusal here; the GoAhead success/verify/forced-speed-refusal paths are
+// exercised end to end against the REAL gs728tpp virtual HTTP fake in
+// virtual/httpface_test.go, since a GoAhead XML round trip needs a stateful
+// wcd-serving fake this package's gs305epState does not model). ------------
+
+func TestSetPortDescriptionIsUnsupportedOnGs305ep(t *testing.T) {
+	w := mustNewWriter(t, newWriterFakeSession(true), "gs305ep")
+	err := w.SetPortDescription(context.Background(), 2, "uplink", false)
+	wantUnsupported(t, err, "SetPortDescription")
+}
+
+func TestSetPortDescriptionProtectedPortBlocksWithoutForce(t *testing.T) {
+	w := mustNewWriter(t, newWriterFakeSession(true), "gs305ep", webui.WithProtectedPorts(2))
+	err := w.SetPortDescription(context.Background(), 2, "uplink", false)
+	wantProtectedPort(t, err, "SetPortDescription(protected, no force)")
+}
+
+func TestSetPortSpeedIsUnsupportedOnGs305ep(t *testing.T) {
+	w := mustNewWriter(t, newWriterFakeSession(true), "gs305ep")
+	err := w.SetPortSpeed(context.Background(), 2, model.AutoPortSpeed(), false)
+	wantUnsupported(t, err, "SetPortSpeed")
+}
+
+func TestSetPortSpeedProtectedPortBlocksWithoutForce(t *testing.T) {
+	w := mustNewWriter(t, newWriterFakeSession(true), "gs305ep", webui.WithProtectedPorts(2))
+	err := w.SetPortSpeed(context.Background(), 2, model.AutoPortSpeed(), false)
+	wantProtectedPort(t, err, "SetPortSpeed(protected, no force)")
+}
+
+func TestSetFlowControlIsUnsupportedOnGs305ep(t *testing.T) {
+	w := mustNewWriter(t, newWriterFakeSession(true), "gs305ep")
+	err := w.SetFlowControl(context.Background(), 2, true, false)
+	wantUnsupported(t, err, "SetFlowControl")
+}
+
 func mapsEqual(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false

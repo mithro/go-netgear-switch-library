@@ -927,6 +927,185 @@ func TestHTTPFaceGS728TPPWriterSetPVIDRefusesNonexistentVlan(t *testing.T) {
 	}
 }
 
+// TestHTTPFaceGS728TPPWriterSetPortDescriptionRoundTrips drives a REAL
+// webui.Writer.SetPortDescription against the REAL gs728tpp HTTP fake over
+// TCP loopback: the POST wcd Standard802_3List write must actually mutate
+// state (applyGoAheadStandard802_3List, httpface.go), and the writer's own
+// verify-after-write GET must see it -- proving the write->read round trip
+// end to end, not just that the writer issued the right POST body.
+// Clearing (SetPortDescription("")) is exercised too. Verification reads
+// back through a SEPARATE webui.Reader over the SAME session -- never by
+// peeking at *State directly -- because the fake's HTTP server runs on its
+// own goroutine: the wire round trip is a real synchronization point the Go
+// race detector understands, a direct State field read from the test
+// goroutine is not.
+func TestHTTPFaceGS728TPPWriterSetPortDescriptionRoundTrips(t *testing.T) {
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	descriptionOf := func(port int) *string {
+		t.Helper()
+		ports, err := reader.GetPorts(context.Background())
+		if err != nil {
+			t.Fatalf("GetPorts: %v", err)
+		}
+		for _, p := range ports {
+			if p.Port == port {
+				return p.Description
+			}
+		}
+		t.Fatalf("GetPorts: no such port %d", port)
+		return nil
+	}
+
+	if err := writer.SetPortDescription(context.Background(), 2, "uplink", false); err != nil {
+		t.Fatalf("SetPortDescription(2, \"uplink\") error = %v", err)
+	}
+	if got := descriptionOf(2); got == nil || *got != "uplink" {
+		t.Errorf("port 2 Description = %v, want \"uplink\"", got)
+	}
+
+	if err := writer.SetPortDescription(context.Background(), 2, "", false); err != nil {
+		t.Fatalf("SetPortDescription(2, \"\") error = %v", err)
+	}
+	if got := descriptionOf(2); got != nil {
+		t.Errorf("port 2 Description after clearing = %v, want nil", got)
+	}
+}
+
+// TestHTTPFaceGS728TPPWriterSetPortSpeedRoundTrips is SetPortDescription's
+// sibling for SetPortSpeed: forcing 100M half-duplex, then returning to
+// auto, both observed through the writer's own verify-after-write and a
+// separate webui.Reader.GetPorts SpeedConfig read-back, driven over real
+// TCP loopback (see SetPortDescription's sibling test for why this never
+// peeks at *State directly).
+func TestHTTPFaceGS728TPPWriterSetPortSpeedRoundTrips(t *testing.T) {
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+	speedConfigOf := func(port int) *model.PortSpeed {
+		t.Helper()
+		ports, err := reader.GetPorts(context.Background())
+		if err != nil {
+			t.Fatalf("GetPorts: %v", err)
+		}
+		for _, p := range ports {
+			if p.Port == port {
+				return p.SpeedConfig
+			}
+		}
+		t.Fatalf("GetPorts: no such port %d", port)
+		return nil
+	}
+
+	forced := model.ForcedPortSpeed(100, false)
+	if err := writer.SetPortSpeed(context.Background(), 2, forced, false); err != nil {
+		t.Fatalf("SetPortSpeed(2, 100M half) error = %v", err)
+	}
+	if got := speedConfigOf(2); got == nil || !got.Equal(forced) {
+		t.Errorf("port 2 SpeedConfig = %v, want %v", got, forced)
+	}
+
+	if err := writer.SetPortSpeed(context.Background(), 2, model.AutoPortSpeed(), false); err != nil {
+		t.Fatalf("SetPortSpeed(2, auto) error = %v", err)
+	}
+	if got := speedConfigOf(2); got == nil || !got.Equal(model.AutoPortSpeed()) {
+		t.Errorf("port 2 SpeedConfig after returning to auto = %v, want auto", got)
+	}
+}
+
+// TestHTTPFaceGS728TPPWriterSetPortSpeedRefusesUnofferedRate proves a rate
+// this UI's own dropdown does not offer (this fixture uses a forced 10G,
+// which the GoAhead ports page never lists -- only 10/100 half-or-full and
+// 1000 full) is refused BEFORE any POST, wrapping
+// model.ErrUnsupportedCapability, without touching state.
+func TestHTTPFaceGS728TPPWriterSetPortSpeedRefusesUnofferedRate(t *testing.T) {
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	before := *st.Ports[2]
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+
+	err = writer.SetPortSpeed(context.Background(), 2, model.ForcedPortSpeed(10000, true), false)
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("SetPortSpeed(2, 10G) error = %v, want model.ErrUnsupportedCapability", err)
+	}
+	if *st.Ports[2] != before {
+		t.Errorf("state.Ports[2] changed by a refused SetPortSpeed: got %+v, want unchanged %+v", *st.Ports[2], before)
+	}
+}
+
+// TestHTTPFaceGS728TPPWriterSetFlowControlAlwaysRefuses proves
+// SetFlowControl is refused by name over the GoAhead dialect -- a MEASURED
+// absence, not merely a not-yet-built path (the ports page publishes
+// flowControlAdminType/flowControlOperType but carries no control to
+// change them) -- and never touches the session at all.
+func TestHTTPFaceGS728TPPWriterSetFlowControlAlwaysRefuses(t *testing.T) {
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+	writer, err := webui.NewWriter(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewWriter: %v", err)
+	}
+
+	err = writer.SetFlowControl(context.Background(), 2, true, false)
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("SetFlowControl error = %v, want model.ErrUnsupportedCapability", err)
+	}
+}
+
 // TestHTTPFaceGSM7252PSWriterSetPVIDRefusesNonexistentVlan exercises
 // webui.Writer.requireVlanExists' isFastpathDialect branch (writer.go)
 // end-to-end -- GAP-1 fix parity with Python commit 98fb935 -- which no

@@ -524,6 +524,34 @@ func parsePortStatus(text string) []model.PortStatus {
 	return out
 }
 
+// parsePortDescription parses the "Description" field of `show port
+// description <iface>`, mirroring Python parse_port_description EXACTLY.
+//
+// GROUNDED in live output from a GSM7252PS (10.1.5.22, 2026-08-03):
+//
+//	Interface....... 1/0/8
+//	ifIndex......... 8
+//	Description.....
+//	MAC address..... E0:91:F5:0C:D6:DD
+//	Bit Offset Val.. 8
+//
+// Returns nil for an unset description (the label is present with an empty
+// value, exactly as above) so it matches what every other backend reports
+// for an absent label, rather than a pointer to "". This command exists
+// because "show port all" carries NO description column -- which is why
+// parsePortStatus honestly reports Description=nil and why a CLI
+// description write has to verify itself through here instead.
+func parsePortDescription(text string) (*string, error) {
+	value, ok := labelledValues(text)["Description"]
+	if !ok {
+		return nil, errCliCommand("show port description: no 'Description' field in the output")
+	}
+	if value == "" {
+		return nil, nil
+	}
+	return &value, nil
+}
+
 // Column indices for parseVLANBrief, mirroring Python's
 // _VLAN_BRIEF_ID/_VLAN_BRIEF_NAME (parse.py:301): header is "VLAN ID |
 // VLAN Name | VLAN Type" -- only the first two columns are consulted.

@@ -186,6 +186,36 @@ func TestForcedPortSpeed(t *testing.T) {
 	}
 }
 
+// TestPortSpeedEqual pins Equal's field-by-field value comparison --
+// dereferencing the optional SpeedMbps/FullDuplex pointer fields the way
+// Python's @dataclass(frozen=True) equality does for free, which Go's bare
+// == would never give a struct with pointer fields (two *int(100) values
+// are never ==).
+func TestPortSpeedEqual(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b model.PortSpeed
+		want bool
+	}{
+		{"both auto", model.AutoPortSpeed(), model.AutoPortSpeed(), true},
+		{"same forced value, different pointers", model.ForcedPortSpeed(100, true), model.ForcedPortSpeed(100, true), true},
+		{"auto vs forced", model.AutoPortSpeed(), model.ForcedPortSpeed(100, true), false},
+		{"different rate", model.ForcedPortSpeed(100, true), model.ForcedPortSpeed(1000, true), false},
+		{"different duplex", model.ForcedPortSpeed(100, true), model.ForcedPortSpeed(100, false), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.a.Equal(c.b); got != c.want {
+				t.Errorf("(%v).Equal(%v) = %v, want %v", c.a, c.b, got, c.want)
+			}
+			// Equal must be symmetric.
+			if got := c.b.Equal(c.a); got != c.want {
+				t.Errorf("(%v).Equal(%v) = %v, want %v (symmetry)", c.b, c.a, got, c.want)
+			}
+		})
+	}
+}
+
 // TestPrivilegedAccess exercises every word in the three (deliberately
 // disagreeing) vocabularies from §A.3, plus case-insensitivity/whitespace
 // trimming and the honest nil for an unmeasured word.

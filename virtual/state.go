@@ -1012,7 +1012,26 @@ func (s *State) ApplyWrite(oid string, value any) {
 		return
 	}
 
-	// 2. pethPsePortAdminEnable = PethPsePortTable.3.1.<port>
+	// 2. ifAlias.<port> -- the per-port description. An EMPTY value clears
+	// it, and OIDMap omits the row entirely when Description is nil --
+	// which is what makes the reader report nil rather than "". That round
+	// trip is the one the live transport could not do until an empty
+	// OCTET STRING learned to travel as an empty hex string (see
+	// snmp.gosnmp's toOctetBytes, which this mock's own SET path already
+	// exercises since it goes through the real gosnmp wire encoding).
+	if port, ok := columnTail(snmp.IfAlias, oid); ok {
+		if p, exists := s.Ports[port]; exists {
+			text := asString(value)
+			if text != "" {
+				p.Description = &text
+			} else {
+				p.Description = nil
+			}
+		}
+		return
+	}
+
+	// 3. pethPsePortAdminEnable = PethPsePortTable.3.1.<port>
 	if port, ok := isPoeAdminColumn(oid); ok {
 		if poe, exists := s.Poe[port]; exists {
 			on := mustInt(oid, value) == 1
@@ -1031,14 +1050,14 @@ func (s *State) ApplyWrite(oid string, value any) {
 		return
 	}
 
-	// 3. dot1qPvid.<port>: no existence check -- creates the entry
+	// 4. dot1qPvid.<port>: no existence check -- creates the entry
 	// unconditionally.
 	if port, ok := columnTail(snmp.Dot1qPvid, oid); ok {
 		s.Pvids[port] = mustInt(oid, value)
 		return
 	}
 
-	// 4. dot1qVlanStaticEgressPorts.<vid>
+	// 5. dot1qVlanStaticEgressPorts.<vid>
 	if vid, ok := columnTail(snmp.Dot1qVlanStaticEgress, oid); ok {
 		if vl, exists := s.Vlans[vid]; exists {
 			vl.Member = portSetFromSlice(snmp.DecodePortBitmap(asBytes(oid, value)))
@@ -1046,7 +1065,7 @@ func (s *State) ApplyWrite(oid string, value any) {
 		return
 	}
 
-	// 5. dot1qVlanStaticUntaggedPorts.<vid>
+	// 6. dot1qVlanStaticUntaggedPorts.<vid>
 	if vid, ok := columnTail(snmp.Dot1qVlanStaticUntagged, oid); ok {
 		if vl, exists := s.Vlans[vid]; exists {
 			vl.Untagged = portSetFromSlice(snmp.DecodePortBitmap(asBytes(oid, value)))
@@ -1054,7 +1073,7 @@ func (s *State) ApplyWrite(oid string, value any) {
 		return
 	}
 
-	// 6. dot1qVlanStaticRowStatus.<vid> (createAndGo=4 / destroy=6).
+	// 7. dot1qVlanStaticRowStatus.<vid> (createAndGo=4 / destroy=6).
 	if vid, ok := columnTail(snmp.Dot1qVlanStaticRowStatus, oid); ok {
 		iv := mustInt(oid, value)
 		switch iv {
@@ -1068,7 +1087,7 @@ func (s *State) ApplyWrite(oid string, value any) {
 		return
 	}
 
-	// 7. dot1qVlanStaticName.<vid>: a name write alone can create a row
+	// 8. dot1qVlanStaticName.<vid>: a name write alone can create a row
 	// too, independent of RowStatus.
 	if vid, ok := columnTail(snmp.Dot1qVlanStaticName, oid); ok {
 		name := asString(value)
@@ -1080,7 +1099,7 @@ func (s *State) ApplyWrite(oid string, value any) {
 		return
 	}
 
-	// 8. Vendor mgmt-IP/dhcp-mode writes -- only for a model with a vendor
+	// 9. Vendor mgmt-IP/dhcp-mode writes -- only for a model with a vendor
 	// subtree; a no-vendor model (gs728tpp) never advertises or accepts
 	// these.
 	if v != nil {
@@ -1106,7 +1125,7 @@ func (s *State) ApplyWrite(oid string, value any) {
 		}
 	}
 
-	// 9. Unhandled writable OID: deliberate no-op (verify-after-write
+	// 10. Unhandled writable OID: deliberate no-op (verify-after-write
 	// catches it).
 }
 
@@ -1118,6 +1137,13 @@ func (s *State) IsWritableOID(oid string) bool {
 	v := resolveVendorOids(s.mustModel())
 
 	if _, ok := columnTail(snmp.IfAdminStatus, oid); ok {
+		return true
+	}
+	// ifAlias, the standard per-port description column. WRITABLE on real
+	// hardware: confirmed on a GS728TPP (10.2.5.10, firmware 6.0.1.30,
+	// 2026-08-03) -- a SET was accepted and read straight back through
+	// GetPorts, and an empty value cleared it again.
+	if _, ok := columnTail(snmp.IfAlias, oid); ok {
 		return true
 	}
 	if _, ok := isPoeAdminColumn(oid); ok {
@@ -1505,8 +1531,9 @@ func (s *State) ApplyNsdpWrite(tag nsdp.Tag, value []byte) {
 	case nsdp.TagPortName:
 		// Per-port operator description (0xB000). value is the port byte + the
 		// UTF-8 name; a bare 1-byte value clears the description (nil, not "").
-		// No NSDP writer emits this, but the fake applies it for parity with
-		// Python's apply_nsdp_write so a crafted PORT_NAME write round-trips.
+		// nsdp.Writer.SetPortDescription emits this (0xB000); the fake applies
+		// it, mirroring Python's apply_nsdp_write, so the write's
+		// verify-after-write read-back round-trips.
 		if len(value) == 0 {
 			return
 		}

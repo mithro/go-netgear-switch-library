@@ -9,6 +9,7 @@ package nsdp_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/mithro/go-netgear-switch-library/model"
@@ -27,6 +28,11 @@ type fakeNsdpWriteClient struct {
 		ip, mask, gw string
 		dhcp         bool
 	}
+	// ports is port -> description (nil = undescribed); only ports present
+	// as a key get a PORT_STATUS + PORT_NAME TLV pair in Read's response --
+	// empty (the default, every EXISTING test in this file) means GetPorts
+	// sees no ports at all, which is fine since none of those tests call it.
+	ports  map[int]*string
 	writes [][]nsdp.Tag
 	apply  bool
 }
@@ -42,6 +48,7 @@ func newFakeNsdpWriteClient(apply bool) *fakeNsdpWriteClient {
 		vlans: map[int]*vlanSets{
 			90: {members: map[int]bool{1: true, 2: true}, tagged: map[int]bool{}},
 		},
+		ports: map[int]*string{},
 		apply: apply,
 	}
 	c.mgmt.ip = "10.1.5.20"
@@ -75,6 +82,14 @@ func (c *fakeNsdpWriteClient) Read(_ context.Context, _ []nsdp.Tag) (*nsdp.Packe
 		dhcpByte = 0x01
 	}
 	pkt.AddTLV(nsdp.TagDHCPMode, []byte{dhcpByte})
+	for port, desc := range c.ports {
+		pkt.AddTLV(nsdp.TagPortStatus, []byte{byte(port), 0x05, 0x01}) // gigabit, arbitrary
+		value := []byte{byte(port)}
+		if desc != nil {
+			value = append(value, []byte(*desc)...)
+		}
+		pkt.AddTLV(nsdp.TagPortName, value)
+	}
 	return pkt, nil
 }
 
@@ -113,6 +128,20 @@ func (c *fakeNsdpWriteClient) applyTLV(t nsdp.TLVEntry) {
 		c.mgmt.mask = formatDottedQuad(t.Value)
 	case nsdp.TagGateway:
 		c.mgmt.gw = formatDottedQuad(t.Value)
+	case nsdp.TagPortName:
+		if len(t.Value) == 0 {
+			return
+		}
+		port := int(t.Value[0])
+		if _, exists := c.ports[port]; !exists {
+			return
+		}
+		if len(t.Value) > 1 {
+			desc := string(t.Value[1:])
+			c.ports[port] = &desc
+		} else {
+			c.ports[port] = nil
+		}
 	}
 }
 
@@ -332,6 +361,108 @@ func TestWriter_UnsupportedWritesRaise(t *testing.T) {
 		w := newTestWriter(t, newFakeNsdpWriteClient(true))
 		requireUnsupported(t, w.SetPortEnabled(ctx, 1, false, false))
 	})
+	t.Run("SetPortSpeed", func(t *testing.T) {
+		w := newTestWriter(t, newFakeNsdpWriteClient(true))
+		err := w.SetPortSpeed(ctx, 1, model.AutoPortSpeed(), false)
+		requireUnsupported(t, err)
+	})
+	t.Run("SetFlowControl", func(t *testing.T) {
+		w := newTestWriter(t, newFakeNsdpWriteClient(true))
+		requireUnsupported(t, w.SetFlowControl(ctx, 1, true, false))
+	})
+}
+
+// --- SetPortDescription (0xB000 PORT_NAME) -- UN-HARDWARE-VERIFIED, see
+// nsdp/writer.go's own doc comment on this method for the caveat ---
+
+func TestWriter_SetPortDescriptionWritesAndVerifies(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	client.ports[5] = nil
+	w := newTestWriter(t, client)
+	if err := w.SetPortDescription(context.Background(), 5, "uplink", false); err != nil {
+		t.Fatalf("SetPortDescription: %v", err)
+	}
+	if client.ports[5] == nil || *client.ports[5] != "uplink" {
+		t.Errorf("ports[5] = %v, want \"uplink\"", client.ports[5])
+	}
+	if !wroteTags(client.writes, nsdp.TagPortName) {
+		t.Errorf("writes = %+v, want a PORT_NAME (0xB000) write", client.writes)
+	}
+}
+
+func TestWriter_SetPortDescriptionClearingSendsEmptyDescription(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	old := "old-label"
+	client.ports[5] = &old
+	w := newTestWriter(t, client)
+	if err := w.SetPortDescription(context.Background(), 5, "", false); err != nil {
+		t.Fatalf("SetPortDescription(\"\"): %v", err)
+	}
+	if client.ports[5] != nil {
+		t.Errorf("ports[5] = %v, want nil (cleared)", client.ports[5])
+	}
+}
+
+func TestWriter_SetPortDescriptionVerificationFailureRaises(t *testing.T) {
+	client := newFakeNsdpWriteClient(false) // device ignores the write
+	client.ports[5] = nil
+	w := newTestWriter(t, client)
+	err := w.SetPortDescription(context.Background(), 5, "uplink", false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("SetPortDescription error = %v, want *model.WriteVerificationError", err)
+	}
+}
+
+// TestWriter_SetPortDescriptionClearingVerificationFailureRaises exercises
+// the quoteOrNone "None" branch: the target description ("") is nil-repr'd
+// in the mismatch message when the device silently ignores a clear.
+func TestWriter_SetPortDescriptionClearingVerificationFailureRaises(t *testing.T) {
+	client := newFakeNsdpWriteClient(false) // device ignores the write
+	old := "stuck-label"
+	client.ports[5] = &old
+	w := newTestWriter(t, client)
+	err := w.SetPortDescription(context.Background(), 5, "", false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("SetPortDescription(\"\") error = %v, want *model.WriteVerificationError", err)
+	}
+	if !strings.Contains(err.Error(), "None") {
+		t.Errorf("SetPortDescription(\"\") error = %q, want it to mention None (the target was clearing the label)", err.Error())
+	}
+}
+
+// TestWriter_SetPortDescriptionUnknownPortMismatch exercises
+// descriptionLookup's "not present" branch: a port the switch never
+// reports (absent from PORT_STATUS/PORT_NAME entirely) yields a
+// WriteVerificationError with Before/After both nil, not a lookup panic.
+func TestWriter_SetPortDescriptionUnknownPortMismatch(t *testing.T) {
+	client := newFakeNsdpWriteClient(true) // client.ports has NO entry for port 99
+	w := newTestWriter(t, client)
+	err := w.SetPortDescription(context.Background(), 99, "uplink", false)
+	var verr *model.WriteVerificationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("SetPortDescription(port 99) error = %v, want *model.WriteVerificationError", err)
+	}
+	if verr.Before != nil || verr.After != nil {
+		t.Errorf("SetPortDescription(port 99) verr = %+v, want Before/After both nil (port never reported)", verr)
+	}
+}
+
+func TestWriter_SetPortDescriptionProtectedPortBlocksWithoutForce(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	client.ports[5] = nil
+	w := newTestWriter(t, client, nsdp.WithProtectedPorts(5))
+	err := w.SetPortDescription(context.Background(), 5, "uplink", false)
+	if !errors.Is(err, model.ErrProtectedPort) {
+		t.Fatalf("SetPortDescription error = %v, want ErrProtectedPort", err)
+	}
+	if len(client.writes) != 0 {
+		t.Errorf("writes = %+v, want none (blocked before any write)", client.writes)
+	}
+	if err := w.SetPortDescription(context.Background(), 5, "uplink", true); err != nil {
+		t.Fatalf("SetPortDescription with force=true: %v", err)
+	}
 }
 
 // --- VLAN create/delete over NSDP (ported from test_nsdp_write.py's

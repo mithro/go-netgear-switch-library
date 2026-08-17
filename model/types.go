@@ -113,6 +113,32 @@ func (p PortSpeed) String() string {
 	return fmt.Sprintf("%dM %s-duplex", speed, duplex)
 }
 
+// Equal reports whether p and o describe the same configured speed/duplex,
+// dereferencing the optional SpeedMbps/FullDuplex fields for a value
+// comparison. Mirrors the field-by-field equality Python's
+// @dataclass(frozen=True) PortSpeed gets for free; Go has no such automatic
+// equality for a struct with pointer fields (two *int(100) values are never
+// ==), so set_port_speed's verify-after-write on every backend needs this
+// instead of a bare == or reflect.DeepEqual.
+func (p PortSpeed) Equal(o PortSpeed) bool {
+	if p.Autonegotiate != o.Autonegotiate {
+		return false
+	}
+	if (p.SpeedMbps == nil) != (o.SpeedMbps == nil) {
+		return false
+	}
+	if p.SpeedMbps != nil && *p.SpeedMbps != *o.SpeedMbps {
+		return false
+	}
+	if (p.FullDuplex == nil) != (o.FullDuplex == nil) {
+		return false
+	}
+	if p.FullDuplex != nil && *p.FullDuplex != *o.FullDuplex {
+		return false
+	}
+	return true
+}
+
 // PortStatus mirrors Python models.PortStatus. Name is ifName; Description
 // is ifAlias — a backend that cannot read a field leaves it nil rather than
 // fabricating a value.

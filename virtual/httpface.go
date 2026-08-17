@@ -545,10 +545,10 @@ func (f *HTTPFace) goaheadGet(w http.ResponseWriter, r *http.Request) {
 	f.send(w, notFoundBody, http.StatusNotFound, false)
 }
 
-// goaheadPost serves the GoAhead XML_API write flow: a POST of the
-// SSLCryptoCertificateImportList XML to "<session>/wcd" records the
-// certificate and returns a wcd statusCode response. Any other POST 404s,
-// mirroring Python Handler._goahead_post (faces/http.py:276-299).
+// goaheadPost serves the GoAhead XML_API write flow: a POST of an XML body
+// to "<session>/wcd" -- the object name (and its action attribute) inside
+// the body selects the operation, applied by applyGoAheadWrite. Any other
+// path 404s, mirroring Python Handler._goahead_post (faces/http.py:276-299).
 func (f *HTTPFace) goaheadPost(w http.ResponseWriter, r *http.Request) {
 	pathOnly := r.URL.Path
 	if !strings.Contains(r.Header.Get("Cookie"), "sessionID=virtualsid") {
@@ -561,7 +561,7 @@ func (f *HTTPFace) goaheadPost(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, _ := io.ReadAll(r.Body)
 	f.renderMu.Lock()
-	response := goaheadApplyCertImport(f.state, string(raw))
+	response := applyGoAheadWrite(f.state, string(raw))
 	f.renderMu.Unlock()
 	w.Header().Set("Content-Type", "text/xml")
 	data := []byte(response)
@@ -626,6 +626,152 @@ func goaheadApplyCertImport(state *State, xmlBody string) string {
 	}
 	state.UploadedCert = model.Ptr(cert)
 	return goaheadStatusResponse(0, "")
+}
+
+// goaheadStandard802_3Entry is one Standard802_3List/Entry the GoAhead ports
+// page posts, mirroring the subset of fields Python web_gs728tpp.apply_write
+// reads off each entry: interfaceName (identifies the port), adminState
+// (present on this codebase's writers is deliberately NOT set -- no
+// SetPortEnabled write over the GoAhead dialect exists yet -- but is still
+// decoded here since it travels in the SAME wire section and a future
+// writer would otherwise silently no-op against this fake), and the
+// description/speed-duplex triad SetPortDescription/SetPortSpeed post.
+// InterfaceDescription is a pointer so an ABSENT element (a speed-only
+// write) is distinguishable from a PRESENT-but-empty one (a description
+// write clearing the label) -- mirroring Python's `desc is not None` check
+// against ElementTree's findtext.
+type goaheadStandard802_3Entry struct {
+	InterfaceName               string  `xml:"interfaceName"`
+	AdminState                  string  `xml:"adminState"`
+	InterfaceDescription        *string `xml:"interfaceDescription"`
+	AutoNegotiationAdminEnabled string  `xml:"autoNegotiationAdminEnabled"`
+	SpeedAdmin                  string  `xml:"speedAdmin"`
+	DuplexAdminMode             string  `xml:"duplexAdminMode"`
+}
+
+// goaheadIfacePort converts a Standard802_3List entry's interfaceName
+// ("g17") to a port number, mirroring Python web_gs728tpp._iface_port: a
+// LAG or any other non-"g<digits>" name yields ok=false.
+func goaheadIfacePort(name string) (int, bool) {
+	name = strings.TrimSpace(name)
+	if !strings.HasPrefix(name, "g") {
+		return 0, false
+	}
+	rest := name[1:]
+	if !isAllDigits(rest) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// applyGoAheadStandard802_3List mutates state from a Standard802_3List
+// write's entries, mirroring Python web_gs728tpp.apply_write's
+// "Standard802_3List" branch EXACTLY: admin state and description apply
+// independently of each other and of the speed/duplex triad, which itself
+// applies as a UNIT (the page's JS marks each of autoNegotiationAdminEnabled/
+// speedAdmin/duplexAdminMode "undefined" -- omitted -- when the operator did
+// not touch the Speed control, so a well-formed write always carries all
+// three together or none). Forcing a rate does NOT re-negotiate the link, so
+// Speed/Link are left untouched -- the same separation the FASTPATH CLI face
+// keeps between Physical Mode and Physical Status. Returning to auto sends
+// speedAdmin="0", but the live switch reports a REAL rate there while
+// negotiating, so the previous SpeedAdmin is kept rather than storing the 0.
+// An unknown port, or a port this switch does not have, is a silent skip,
+// mirroring Python's `port not in state.ports: continue`.
+func applyGoAheadStandard802_3List(state *State, entries []goaheadStandard802_3Entry) {
+	for _, entry := range entries {
+		port, ok := goaheadIfacePort(entry.InterfaceName)
+		if !ok {
+			continue
+		}
+		sim, exists := state.Ports[port]
+		if !exists {
+			continue
+		}
+		if admin := strings.TrimSpace(entry.AdminState); admin == "1" || admin == "2" {
+			sim.Admin = admin == "1"
+			if admin == "2" {
+				sim.Link = false
+			}
+		}
+		if entry.InterfaceDescription != nil {
+			if desc := strings.TrimSpace(*entry.InterfaceDescription); desc != "" {
+				sim.Description = &desc
+			} else {
+				sim.Description = nil
+			}
+		}
+		autoneg := strings.TrimSpace(entry.AutoNegotiationAdminEnabled)
+		rate := strings.TrimSpace(entry.SpeedAdmin)
+		duplex := strings.TrimSpace(entry.DuplexAdminMode)
+		if (autoneg == "1" || autoneg == "2") && rate != "" && (duplex == "2" || duplex == "3") {
+			sim.AutonegAdmin = autoneg
+			sim.DuplexAdminMode = duplex
+			if autoneg == "2" {
+				sim.SpeedAdmin = rate
+			}
+		}
+	}
+}
+
+// goaheadWriteXML captures the "POST wcd" DeviceConfiguration objects this
+// Go codebase's writers can post -- Standard802_3List (SetPortDescription/
+// SetPortSpeed) -- mirroring the shape Python web_gs728tpp.apply_write's
+// per-tag dispatch loop reads. SSLCryptoCertificateImportList is detected
+// and handled separately (applyGoAheadWrite, below): its own decode shape
+// (goaheadCertImportXML) predates this struct and is unrelated to
+// Standard802_3List's fields. Other captures every OTHER top-level child's
+// tag name, purely for an honest "no handler for X" refusal message --
+// mirroring Python's `[s.tag for s in root]` diagnostic -- when neither of
+// the two objects above is present: this Go port does not (yet) wire
+// VLANList/VLANMembershipList/VLANInterfaceList/PoEPSEInterfaceList/
+// DeviceBasicInfo the way the real firmware (and the pinned Python fake)
+// does, since no writer in this codebase posts them over the GoAhead
+// dialect at this pin (webui.Writer's SetPVID/CreateVlan/DeleteVlan/SetPoE
+// do not branch on HTMLDialectGoAheadXML) -- wiring their fake handling
+// without a real caller would be untested surface, so an unrecognized
+// object fails loudly here rather than silently succeeding.
+type goaheadWriteXML struct {
+	Standard802_3List *struct {
+		Entries []goaheadStandard802_3Entry `xml:"Entry"`
+	} `xml:"Standard802_3List"`
+	Other []struct {
+		XMLName xml.Name
+	} `xml:",any"`
+}
+
+// applyGoAheadWrite applies one "POST wcd" write body and returns the wcd
+// status response, mirroring Python web_gs728tpp.apply_write: the real UI
+// writes EVERYTHING through this one endpoint, with the object name (and
+// its action attribute) selecting the operation, so the mock must dispatch
+// the same way rather than recognizing one special upload. An unrecognized
+// object returns a NON-zero statusCode, never a silent success -- see
+// goaheadWriteXML's own doc comment for exactly which objects this Go port
+// wires versus the pinned Python fake.
+func applyGoAheadWrite(state *State, xmlBody string) string {
+	if strings.Contains(xmlBody, "<!DOCTYPE") || strings.Contains(xmlBody, "<!ENTITY") {
+		return goaheadStatusResponse(3, "DTD/entity declaration rejected")
+	}
+	if strings.Contains(xmlBody, "SSLCryptoCertificateImportList") {
+		return goaheadApplyCertImport(state, xmlBody)
+	}
+	var doc goaheadWriteXML
+	if err := xml.Unmarshal([]byte(xmlBody), &doc); err != nil {
+		return goaheadStatusResponse(1, fmt.Sprintf("malformed XML: %v", err))
+	}
+	if doc.Standard802_3List != nil {
+		applyGoAheadStandard802_3List(state, doc.Standard802_3List.Entries)
+		return goaheadStatusResponse(0, "")
+	}
+	tags := make([]string, len(doc.Other))
+	for i, o := range doc.Other {
+		tags[i] = o.XMLName.Local
+	}
+	return goaheadStatusResponse(2, fmt.Sprintf("no handler for %v", tags))
 }
 
 // goaheadStatusResponse mirrors Python web_gs728tpp._status_response: a

@@ -75,13 +75,34 @@ var (
 	cliParticipationRE  = regexp.MustCompile(`^vlan participation (include|exclude) (\d+)$`)
 	cliTaggingRE        = regexp.MustCompile(`^(no )?vlan tagging (\d+)$`)
 	cliPvidRE           = regexp.MustCompile(`^vlan pvid (\d+)$`)
-	cliPoeRE            = regexp.MustCompile(`^(no )?poe$`)
-	cliPoeResetRE       = regexp.MustCompile(`^poe reset$`)
-	cliShutdownRE       = regexp.MustCompile(`^(no )?shutdown$`)
-	cliIPPattern        = `(\d+\.\d+\.\d+\.\d+)`
-	cliNetworkParmsRE   = regexp.MustCompile(`^network parms ` + cliIPPattern + ` ` + cliIPPattern + `(?: ` + cliIPPattern + `)?$`)
-	cliIPMgmtAddrRE     = regexp.MustCompile(`^ip management address ` + cliIPPattern + ` ` + cliIPPattern + `$`)
-	cliIPGatewayRE      = regexp.MustCompile(`^ip default-gateway ` + cliIPPattern + `$`)
+	// cliDescriptionRE/cliNoDescriptionRE/cliPortDescriptionShowRE mirror the
+	// per-port description commands (dossier: NOT mode-gated, unlike the
+	// VLAN commands -- a label is cosmetic and does not depend on the
+	// port's switchport mode). The single-quoted form is the firmware's
+	// OWN: a live GSM7252PS (10.1.5.22, 2026-08-03) renders its labelled
+	// ports in `show running-config` as `description 'eth0.rpi5-pmod'`.
+	cliDescriptionRE         = regexp.MustCompile(`^description '([^']*)'$`)
+	cliNoDescriptionRE       = regexp.MustCompile(`^no description$`)
+	cliPortDescriptionShowRE = regexp.MustCompile(`^show port description (\S+)$`)
+	// cliSpeedAutoRE/cliSpeedForcedRE mirror the per-port speed/duplex
+	// commands -- TWO grammars meaning opposite things, both executed on
+	// the real gsm7252ps (10.1.5.22 port 1/0/8, 2026-08-03): "speed 100
+	// full-duplex" moved Physical Mode to "100 Full", "speed auto" moved
+	// it back.
+	cliSpeedAutoRE   = regexp.MustCompile(`^speed auto$`)
+	cliSpeedForcedRE = regexp.MustCompile(`^speed (\d+G?) (full|half)-duplex$`)
+	// cliFlowControlRE mirrors the bare IEEE 802.3x flow-control toggle,
+	// round-tripped live on gsm7252ps 10.1.5.22 port 1/0/8 (2026-08-03):
+	// `flowcontrol` moved Flow Mode from Disable to Enable and added a
+	// running-config line, `no flowcontrol` undid both.
+	cliFlowControlRE  = regexp.MustCompile(`^(no )?flowcontrol$`)
+	cliPoeRE          = regexp.MustCompile(`^(no )?poe$`)
+	cliPoeResetRE     = regexp.MustCompile(`^poe reset$`)
+	cliShutdownRE     = regexp.MustCompile(`^(no )?shutdown$`)
+	cliIPPattern      = `(\d+\.\d+\.\d+\.\d+)`
+	cliNetworkParmsRE = regexp.MustCompile(`^network parms ` + cliIPPattern + ` ` + cliIPPattern + `(?: ` + cliIPPattern + `)?$`)
+	cliIPMgmtAddrRE   = regexp.MustCompile(`^ip management address ` + cliIPPattern + ` ` + cliIPPattern + `$`)
+	cliIPGatewayRE    = regexp.MustCompile(`^ip default-gateway ` + cliIPPattern + `$`)
 )
 
 // Mode names for CliFace.modes (dossier §3.3).
@@ -100,6 +121,17 @@ const (
 	cliInvalid  = "% Invalid input detected at '^' marker."
 	cliAccepted = ""
 )
+
+// cliNoForcedRate is the MEASURED refusal, and the reason this mock is not
+// merely permissive: a live gsm7252ps port answered "speed 1000
+// full-duplex" with cliInvalid and left Physical Mode UNCHANGED.
+// 1000BASE-T requires auto-negotiation, so the firmware keeps 1000 out of
+// the forced grammar while offering it in "speed auto [10] [100] [1000]
+// [10G]". NOT modelled, and deliberately so: which OTHER rates a port will
+// force is a property of its PHY, not of the firmware, so no per-model rate
+// table is kept here -- this mock and the real library agree on exactly the
+// one rule that was measured.
+const cliNoForcedRate = "1000"
 
 func cliNoSuchVlan(vlan int) string {
 	return fmt.Sprintf("ERROR: VLAN %d does not exist", vlan)
@@ -424,6 +456,41 @@ func (f *CliFace) interfaceCommand(c string, port int) (string, bool) {
 		f.state.Pvids[port] = vid
 		return cliAccepted, true
 	}
+	if m := cliFlowControlRE.FindStringSubmatch(c); m != nil {
+		// Configured state only: the link is not renegotiated, exactly as
+		// observed on the live DOWN port whose Flow Mode still moved.
+		f.state.Ports[port].FlowControl = m[1] == "" // "no flowcontrol" -> off
+		return cliAccepted, true
+	}
+	if cliSpeedAutoRE.MatchString(c) {
+		f.state.Ports[port].PhysicalMode = "Auto"
+		return cliAccepted, true
+	}
+	if m := cliSpeedForcedRE.FindStringSubmatch(c); m != nil {
+		rate, duplex := m[1], m[2]
+		if rate == cliNoForcedRate {
+			return cliInvalid, true // measured: the switch has no forced 1000
+		}
+		// Physical Mode ONLY. The negotiated rate (Speed, rendered in the
+		// Physical Status column) is untouched, because forcing the
+		// configuration of a DOWN port negotiates nothing -- exactly what
+		// the live port did.
+		f.state.Ports[port].PhysicalMode = rate + " " + strings.ToUpper(duplex[:1]) + duplex[1:]
+		return cliAccepted, true
+	}
+	if m := cliDescriptionRE.FindStringSubmatch(c); m != nil {
+		if m[1] != "" {
+			text := m[1]
+			f.state.Ports[port].Description = &text
+		} else {
+			f.state.Ports[port].Description = nil
+		}
+		return cliAccepted, true
+	}
+	if cliNoDescriptionRE.MatchString(c) {
+		f.state.Ports[port].Description = nil
+		return cliAccepted, true
+	}
 	return "", false
 }
 
@@ -549,6 +616,11 @@ func (f *CliFace) run(command string) string {
 		return f.renderVersion()
 	case f.spec.PortStatusCmd:
 		return f.renderPorts()
+	}
+	if m := cliPortDescriptionShowRE.FindStringSubmatch(c); m != nil {
+		return f.renderPortDescription(m[1])
+	}
+	switch c {
 	case f.spec.VlanBriefCmd:
 		return f.renderVlanBrief()
 	case f.spec.PvidCmd:

@@ -131,6 +131,33 @@ type CliModelSpec struct {
 	VlanTaggingCmd       string
 	VlanNoTaggingCmd     string
 	VlanPvidCmd          string
+	// PortDescriptionCmd/PortNoDescriptionCmd are the interface-config-mode
+	// per-port label commands (set_port_description). The single quotes in
+	// PortDescriptionCmd's default are the firmware's OWN form: READ OFF a
+	// live GSM7252PS (10.1.5.22, 2026-08-03) whose `show running-config`
+	// renders its labelled ports as `description 'eth0.rpi5-pmod'`.
+	PortDescriptionCmd   string
+	PortNoDescriptionCmd string
+	// PortDescriptionShowCmd is the per-port command that reports a
+	// description BACK -- `show port all` carries no description column, so
+	// SetPortDescription's verify-after-write goes through this instead.
+	PortDescriptionShowCmd string
+	// PortSpeedAutoCmd/PortSpeedForcedCmd are the interface-config-mode
+	// per-port speed/duplex commands (set_port_speed). Both grammars were
+	// PROVEN BY EXECUTION on gsm7252ps 10.1.5.22 port 1/0/8 (2026-08-03,
+	// link-down, undescribed, restored afterward): "speed 100 full-duplex"
+	// moved Physical Mode to "100 Full", "speed auto" moved it back. No
+	// per-model rate table is kept -- the forced rates a port offers follow
+	// its PHY, not the firmware, so an unsupported rate is sent unchecked
+	// and the device's own "% Invalid input" surfaces through the writer's
+	// treat-any-output-as-failure rule.
+	PortSpeedAutoCmd   string
+	PortSpeedForcedCmd string
+	// PortFlowControlCmd/PortNoFlowControlCmd are the interface-config-mode
+	// IEEE 802.3x flow-control bare toggles (set_flow_control) -- PROVEN as
+	// a full round trip on gsm7252ps 10.1.5.22 port 1/0/8, 2026-08-03.
+	PortFlowControlCmd   string
+	PortNoFlowControlCmd string
 	ExitCmd              string
 	PoeEnableCmd         string
 	PoeDisableCmd        string
@@ -231,6 +258,66 @@ func (s *CliModelSpec) VlanTagging(vlan int, tagged bool) string {
 // CliModelSpec.vlan_pvid (commands.py:212-213).
 func (s *CliModelSpec) VlanPvid(vlan int) string {
 	return formatOne(s.VlanPvidCmd, "vlan", strconv.Itoa(vlan))
+}
+
+// PortDescription returns PortNoDescriptionCmd for an empty text (clearing
+// the label), or PortDescriptionCmd with {text} filled in otherwise,
+// mirroring Python CliModelSpec.port_description.
+func (s *CliModelSpec) PortDescription(text string) string {
+	if text == "" {
+		return s.PortNoDescriptionCmd
+	}
+	return formatOne(s.PortDescriptionCmd, "text", text)
+}
+
+// PortDescriptionShow returns PortDescriptionShowCmd templated with
+// Iface(port), mirroring Python CliModelSpec.port_description_show.
+func (s *CliModelSpec) PortDescriptionShow(port int) string {
+	return formatOne(s.PortDescriptionShowCmd, "iface", s.Iface(port))
+}
+
+// fastpathRate renders mbps the way FASTPATH spells a port rate in a
+// "speed" command, mirroring Python's module-level fastpath_rate
+// (commands.py:81-90): sub-gigabit rates go as bare Mbit/s ("100"), gigabit
+// multiples take the "G" suffix ("10000" -> "10G"). Not a lookup table --
+// this is a formatting rule applied to whatever rate the caller asks for,
+// including one this firmware doesn't have; the device's own "% Invalid
+// input" is what surfaces for that, through the writer's
+// treat-any-output-as-failure convention.
+func fastpathRate(mbps int) string {
+	if mbps >= 1000 && mbps%1000 == 0 {
+		return fmt.Sprintf("%dG", mbps/1000)
+	}
+	return strconv.Itoa(mbps)
+}
+
+// PortSpeed returns the interface-config command that applies speed,
+// mirroring Python CliModelSpec.port_speed: PortSpeedAutoCmd for an
+// auto-negotiating configuration, or PortSpeedForcedCmd with {rate}/{duplex}
+// filled in for a forced one. Callers must not pass a forced PortSpeed with
+// a nil SpeedMbps/FullDuplex (model.ForcedPortSpeed's own invariant, mirrors
+// Python's `assert speed.speed_mbps is not None`); this method trusts that
+// invariant rather than re-checking it.
+func (s *CliModelSpec) PortSpeed(speed model.PortSpeed) string {
+	if speed.Autonegotiate {
+		return s.PortSpeedAutoCmd
+	}
+	rate := fastpathRate(*speed.SpeedMbps)
+	duplex := "half"
+	if speed.FullDuplex != nil && *speed.FullDuplex {
+		duplex = "full"
+	}
+	out := formatOne(s.PortSpeedForcedCmd, "rate", rate)
+	return formatOne(out, "duplex", duplex)
+}
+
+// PortFlowControl returns PortFlowControlCmd or PortNoFlowControlCmd,
+// mirroring Python CliModelSpec.port_flow_control.
+func (s *CliModelSpec) PortFlowControl(enabled bool) string {
+	if enabled {
+		return s.PortFlowControlCmd
+	}
+	return s.PortNoFlowControlCmd
 }
 
 // PoeAdmin returns PoeEnableCmd or PoeDisableCmd, mirroring Python
@@ -345,26 +432,33 @@ func newCliModelSpec(modelKey string, captured, readsVerified bool) CliModelSpec
 		UplinkIfaceTemplate: "", // None
 		FirstUplinkPort:     nil,
 
-		VlanDatabaseCmd:      "vlan database",
-		VlanCreateCmd:        "vlan {vlan}",
-		VlanNameCmd:          "vlan name {vlan} {name}",
-		VlanDeleteCmd:        "no vlan {vlan}",
-		ConfigureCmd:         "configure",
-		InterfaceCmd:         "interface {iface}",
-		SwitchportGeneralCmd: "switchport mode general",
-		VlanParticipationCmd: "vlan participation {action} {vlan}",
-		VlanTaggingCmd:       "vlan tagging {vlan}",
-		VlanNoTaggingCmd:     "no vlan tagging {vlan}",
-		VlanPvidCmd:          "vlan pvid {vlan}",
-		ExitCmd:              "exit",
-		PoeEnableCmd:         "poe",
-		PoeDisableCmd:        "no poe",
-		PoeResetCmd:          "poe reset",
-		PortEnableCmd:        "no shutdown",
-		PortDisableCmd:       "shutdown",
-		MgmtIPExecCmds:       []string{"network parms {address} {netmask} {gateway}"},
-		MgmtIPConfigCmds:     nil, // ()
-		ReloadCmd:            "reload",
+		VlanDatabaseCmd:        "vlan database",
+		VlanCreateCmd:          "vlan {vlan}",
+		VlanNameCmd:            "vlan name {vlan} {name}",
+		VlanDeleteCmd:          "no vlan {vlan}",
+		ConfigureCmd:           "configure",
+		InterfaceCmd:           "interface {iface}",
+		SwitchportGeneralCmd:   "switchport mode general",
+		VlanParticipationCmd:   "vlan participation {action} {vlan}",
+		VlanTaggingCmd:         "vlan tagging {vlan}",
+		VlanNoTaggingCmd:       "no vlan tagging {vlan}",
+		VlanPvidCmd:            "vlan pvid {vlan}",
+		PortDescriptionCmd:     "description '{text}'",
+		PortNoDescriptionCmd:   "no description",
+		PortDescriptionShowCmd: "show port description {iface}",
+		PortSpeedAutoCmd:       "speed auto",
+		PortSpeedForcedCmd:     "speed {rate} {duplex}-duplex",
+		PortFlowControlCmd:     "flowcontrol",
+		PortNoFlowControlCmd:   "no flowcontrol",
+		ExitCmd:                "exit",
+		PoeEnableCmd:           "poe",
+		PoeDisableCmd:          "no poe",
+		PoeResetCmd:            "poe reset",
+		PortEnableCmd:          "no shutdown",
+		PortDisableCmd:         "shutdown",
+		MgmtIPExecCmds:         []string{"network parms {address} {netmask} {gateway}"},
+		MgmtIPConfigCmds:       nil, // ()
+		ReloadCmd:              "reload",
 	}
 }
 

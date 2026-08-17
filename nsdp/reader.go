@@ -152,15 +152,27 @@ func (r *Reader) device(ctx context.Context, tags []Tag) (model.NsdpDevice, erro
 // default is reported), Name is always nil (NSDP PORT_STATUS carries no
 // port name), LinkUp is s.Speed != LinkSpeedDown, and SpeedMbps is
 // s.Speed.SpeedMbps() or nil when that's 0 (Python's `speed_mbps or None`).
+//
+// Description, NOT Name, is where PORT_NAME (0xB000) lands: its own
+// write_tlv.go doc comment records it as cross-checked byte-for-byte
+// against each switch's port_settings.html "Port Description" column on
+// three real GS110EMX units, so it belongs in Description -- the field
+// SNMP fills from ifAlias and the CLI from `description '<text>'` -- and
+// NOT in Name, which every other backend uses for the interface IDENTIFIER
+// (ifName "1/0/1", the web UI's "g1"). Mirrors Python's _ports exactly
+// (nsdp_read.py, updated by the same commit that fixed this exact reversal
+// there: "It used to land in `name`, which made the same label appear in
+// different fields depending on the protocol, and left `description` blank
+// on a backend that demonstrably has one"). NSDP has no identifier to
+// report -- PORT_STATUS carries only a port number -- so Name is honestly
+// nil.
 func mapPorts(dev model.NsdpDevice) []model.PortStatus {
-	// PORT_STATUS carries no name, but PORT_NAME (0xB000) does; GetPorts
-	// requests both, so Name reports the same operator descriptions the HTTP
-	// backend does instead of a blanket nil. names[port] is nil for a port with
-	// no PORT_NAME TLV (map zero value) OR one that answered a bare port-only
-	// TLV (undescribed) -- both mirror Python's names.get(port) returning None.
-	names := make(map[int]*string, len(dev.PortNames))
+	// labels[port] is nil for a port with no PORT_NAME TLV (map zero value)
+	// OR one that answered a bare port-only TLV (undescribed) -- both
+	// mirror Python's labels.get(port) returning None.
+	labels := make(map[int]*string, len(dev.PortNames))
 	for _, n := range dev.PortNames {
-		names[n.PortID] = n.Name
+		labels[n.PortID] = n.Name
 	}
 	out := make([]model.PortStatus, 0, len(dev.PortStatus))
 	for _, s := range dev.PortStatus {
@@ -170,11 +182,11 @@ func mapPorts(dev model.NsdpDevice) []model.PortStatus {
 		}
 		out = append(out, model.PortStatus{
 			Port:         s.PortID,
-			Name:         names[s.PortID],
+			Name:         nil,
 			AdminEnabled: true,
 			LinkUp:       s.Speed != model.LinkSpeedDown,
 			SpeedMbps:    speedMbps,
-			Description:  nil,
+			Description:  labels[s.PortID],
 		})
 	}
 	return out
@@ -250,7 +262,7 @@ func mapMgmtIP(dev model.NsdpDevice) model.MgmtIPConfig {
 // TagModel, prepended by withModel), mirroring Python's
 // get_ports/[Tag.PORT_COUNT, Tag.PORT_STATUS, Tag.PORT_NAME] -- PORT_NAME
 // carries the per-port operator descriptions mapPorts folds into
-// PortStatus.Name.
+// PortStatus.Description.
 func (r *Reader) GetPorts(ctx context.Context) ([]model.PortStatus, error) {
 	dev, err := r.device(ctx, []Tag{TagPortCount, TagPortStatus, TagPortName})
 	if err != nil {

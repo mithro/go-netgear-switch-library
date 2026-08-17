@@ -175,8 +175,10 @@ func TestNsdpFaceV2LockoutCounterResetsAfterSuccess(t *testing.T) {
 // PORT_NAME: a real nsdp.Reader over a real UDPClient reads GetPorts from the
 // v2 GS110EMX fake over UDP loopback and sees the seeded per-port descriptions
 // (port 8 "rumpus", every other port undescribed/nil) folded into
-// PortStatus.Name -- exercising the fake's PORT_NAME projection, the wire
-// codec, ParsePortName, and mapPorts end to end.
+// PortStatus.Description -- the operator label, matching every other
+// backend's ifAlias-equivalent field, NOT Name (which NSDP never populates)
+// -- exercising the fake's PORT_NAME projection, the wire codec,
+// ParsePortName, and mapPorts end to end.
 func TestNsdpFaceServesPortNames(t *testing.T) {
 	port, _ := startNsdpFace(t, SeedGS110EMX())
 	m, err := model.GetModel("gs110emx")
@@ -195,12 +197,15 @@ func TestNsdpFaceServesPortNames(t *testing.T) {
 	for _, p := range ports {
 		byPort[p.Port] = p
 	}
-	if p8 := byPort[8]; p8.Name == nil || *p8.Name != "rumpus" {
-		t.Errorf("port 8 Name = %v, want \"rumpus\"", p8.Name)
+	if p8 := byPort[8]; p8.Description == nil || *p8.Description != "rumpus" {
+		t.Errorf("port 8 Description = %v, want \"rumpus\"", p8.Description)
+	}
+	if p8 := byPort[8]; p8.Name != nil {
+		t.Errorf("port 8 Name = %v, want nil (NSDP PORT_STATUS carries no interface identifier)", p8.Name)
 	}
 	for _, port := range []int{1, 2, 6, 9, 10} {
-		if p := byPort[port]; p.Name != nil {
-			t.Errorf("port %d Name = %v, want nil (undescribed)", port, p.Name)
+		if p := byPort[port]; p.Description != nil {
+			t.Errorf("port %d Description = %v, want nil (undescribed)", port, p.Description)
 		}
 	}
 }
