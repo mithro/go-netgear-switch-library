@@ -84,8 +84,19 @@ func physicalGS728TPPPorts(state *State) []int {
 	return out
 }
 
+// goAheadFlowControlText renders a PortSim.FlowControl bool as the GoAhead
+// wire code shared by flowControlOperType/flowControlAdminType: 1 enabled,
+// 2 disabled -- decoded against SNMP on the live GS728TPP capture (see
+// webui.ParseGoAheadPorts's _GOAHEAD_FLOW_CONTROL doc comment).
+func goAheadFlowControlText(on bool) string {
+	if on {
+		return "1"
+	}
+	return "2"
+}
+
 // RenderGS728TPPPorts renders the Standard802_3List wcd section. Mirrors
-// Python web_gs728tpp.render_ports.
+// Python web_gs728tpp.render_ports/_port_entry.
 func RenderGS728TPPPorts(state *State) string {
 	var rows strings.Builder
 	for _, p := range physicalGS728TPPPorts(state) {
@@ -94,14 +105,32 @@ func RenderGS728TPPPorts(state *State) string {
 		if sim.Description != nil {
 			desc = *sim.Description
 		}
+		// duplexOperMode: 2 while up, 4 while down -- the codes the live
+		// switch returns, decoded against SNMP (webui's _GOAHEAD_DUPLEX_OPER).
+		duplexOper := "4"
+		if sim.Link {
+			duplexOper = "2"
+		}
 		fmt.Fprintf(&rows,
 			"<Entry><interfaceName>g%d</interfaceName>"+
 				"<interfaceType>1</interfaceType><interfaceID>%d</interfaceID>"+
 				"<interfaceDescription>%s</interfaceDescription>"+
 				"<adminState>%s</adminState>"+
 				"<linkState>%s</linkState>"+
-				"<speedOper>%d</speedOper></Entry>",
-			p, p, xmlEscape(desc), goAheadAdminText(sim.Admin), goAheadLinkText(sim.Link), sim.Speed)
+				"<speedOper>%d</speedOper>"+
+				"<duplexOperMode>%s</duplexOperMode>"+
+				// The three configured-speed fields, from state rather than
+				// hardcoded -- a write has to be able to move them.
+				// autoNegotiationAdminEnabled is the authoritative one;
+				// speedAdmin keeps reporting a rate beside it.
+				"<speedAdmin>%s</speedAdmin>"+
+				"<duplexAdminMode>%s</duplexAdminMode>"+
+				"<autoNegotiationAdminEnabled>%s</autoNegotiationAdminEnabled>"+
+				"<flowControlOperType>%s</flowControlOperType>"+
+				"<flowControlAdminType>%s</flowControlAdminType></Entry>",
+			p, p, xmlEscape(desc), goAheadAdminText(sim.Admin), goAheadLinkText(sim.Link), sim.Speed,
+			duplexOper, sim.speedAdmin(), sim.duplexAdminMode(), sim.autonegAdmin(),
+			goAheadFlowControlText(sim.FlowControl), goAheadFlowControlText(sim.FlowControl))
 	}
 	return goAheadWcd("<Standard802_3List type=\"section\">" + rows.String() + "</Standard802_3List>")
 }

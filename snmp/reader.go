@@ -77,17 +77,25 @@ func walkAll(ctx context.Context, c Client, oids ...string) ([][]Row, error) {
 	return out, nil
 }
 
-// GetPorts reads per-port administrative/operational status, speed, name and
-// description, filtered to physical Ethernet ports.
+// GetPorts reads per-port administrative/operational status, speed, name,
+// description, duplex and flow control, filtered to physical Ethernet
+// ports.
 //
 // Walks, in order: IfAdminStatus, IfOperStatus, IfHighSpeed, IfName,
-// IfAlias, IfType.
+// IfAlias, IfType, Dot3StatsDuplexStatus, Dot3PauseOperMode. The two
+// EtherLike-MIB columns are walked UNCONDITIONALLY: an agent that does not
+// serve them (most models -- see ParsePortStatus) answers an empty
+// subtree, which ParsePortStatus renders as FullDuplex/FlowControl == nil,
+// never a fabricated value.
 func (r *Reader) GetPorts(ctx context.Context) ([]model.PortStatus, error) {
-	cols, err := walkAll(ctx, r.client, IfAdminStatus, IfOperStatus, IfHighSpeed, IfName, IfAlias, IfType)
+	cols, err := walkAll(ctx, r.client,
+		IfAdminStatus, IfOperStatus, IfHighSpeed, IfName, IfAlias, IfType,
+		Dot3StatsDuplexStatus, Dot3PauseOperMode,
+	)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePortStatus(cols[0], cols[1], cols[2], cols[3], cols[4], cols[5])
+	return ParsePortStatus(cols[0], cols[1], cols[2], cols[3], cols[4], cols[5], cols[6], cols[7])
 }
 
 // GetStats reads the per-port traffic-counter snapshot.

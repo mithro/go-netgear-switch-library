@@ -75,6 +75,84 @@ type PortSim struct {
 	// Description is ifAlias. nil means this port's ifAlias column instance
 	// is entirely absent (never configured) -- never a fabricated "".
 	Description *string
+	// FlowControl is IEEE 802.3x flow control, as reported in the FASTPATH
+	// CLI's "Flow Mode" column and the GoAhead web UI's flowControlOperType/
+	// flowControlAdminType. Zero value (false) matches every model this
+	// field currently drives: MEASURED False on all 28 GS728TPP ports
+	// (2026-08-03, both the SNMP dot3PauseOperMode walk and the GoAhead wcd
+	// page agreed) and False in every captured `show port all` Flow Mode
+	// column (gsm7252ps/gsm7228ps/m4300-16x/m4300-24x) -- so no seed needs
+	// to set this explicitly today; a future seed with a measured True port
+	// sets it directly.
+	FlowControl bool
+	// ServesEtherlike reports whether this model's SNMP agent publishes the
+	// EtherLike-MIB dot3StatsDuplexStatus/dot3Pause{Admin,Oper}Mode columns
+	// for this interface. Per-model, MEASURED 2026-08-03: the GS728TPP
+	// serves them for all 28 physical ports; the GSM7252PS's dot3StatsTable
+	// stops at column 16 (no 19) and its dot3PauseTable serves only the
+	// counters, not AdminMode/OperMode. Default false so no model's mock
+	// gains an OID its hardware was never observed to answer -- a seed
+	// opts in. Where false, SNMP GetPorts reports FullDuplex/FlowControl as
+	// nil, the honest reading of an absent column.
+	ServesEtherlike bool
+	// PhysicalMode is the FASTPATH CLI's "Physical Mode" column raw text --
+	// the port's CONFIGURED speed/duplex, as opposed to Speed/Link above
+	// (the NEGOTIATED rate the "Physical Status" column reports). Kept as
+	// raw device text, like SwitchportMode, so the mock does not re-derive
+	// the cell with the same helper the parser uses. Empty string (the Go
+	// zero value) is treated as "Auto" by the CLI renderer -- "Auto" is
+	// what every real port on every switch captured here reports, so no
+	// seed needs to set this explicitly today.
+	PhysicalMode string
+	// AutonegAdmin/SpeedAdmin/DuplexAdminMode are the GoAhead web UI's own
+	// three-field encoding of the SAME configured speed/duplex PhysicalMode
+	// carries for the CLI -- kept as separate raw fields, for the same
+	// "don't re-derive what the parser decodes" reason. Wire codes: 1 =
+	// negotiating, 2 = forced (autoneg); 2 = half, 3 = full (duplex). Empty
+	// string defaults to "1"/"1000"/"3" respectively -- what the live
+	// GS728TPP (10.2.5.10, firmware 6.0.1.30) returned for EVERY port
+	// (2026-08-03): autoneg 1 with speedAdmin 1000 sitting beside it
+	// (meaningful only while autoneg is 2). No FASTPATH model serves these
+	// fields and no GoAhead model serves PhysicalMode, so the two never
+	// disagree on one device.
+	AutonegAdmin    string
+	SpeedAdmin      string
+	DuplexAdminMode string
+}
+
+// physicalMode returns sim.PhysicalMode, defaulting to "Auto" when unset
+// (the Go zero value), mirroring PortSim.physical_mode's Python dataclass
+// default.
+func (sim *PortSim) physicalMode() string {
+	if sim.PhysicalMode == "" {
+		return "Auto"
+	}
+	return sim.PhysicalMode
+}
+
+// autonegAdmin/speedAdmin/duplexAdminMode return the GoAhead raw wire
+// fields, defaulting to the live GS728TPP's own per-port defaults
+// ("1"/"1000"/"3") when unset -- mirroring PortSim's Python dataclass
+// defaults (autoneg_admin/speed_admin/duplex_admin_mode).
+func (sim *PortSim) autonegAdmin() string {
+	if sim.AutonegAdmin == "" {
+		return "1"
+	}
+	return sim.AutonegAdmin
+}
+
+func (sim *PortSim) speedAdmin() string {
+	if sim.SpeedAdmin == "" {
+		return "1000"
+	}
+	return sim.SpeedAdmin
+}
+
+func (sim *PortSim) duplexAdminMode() string {
+	if sim.DuplexAdminMode == "" {
+		return "3"
+	}
+	return sim.DuplexAdminMode
 }
 
 // NewPortSim builds a PortSim with the physical-port default IfType (6 =

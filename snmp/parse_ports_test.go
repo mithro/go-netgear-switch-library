@@ -53,7 +53,7 @@ func TestParsePortStatusJoinsAdminOperSpeedName(t *testing.T) {
 	names := strRows(IfName, map[int]string{1: "1/0/1", 2: "1/0/2"})
 	aliases := strRows(IfAlias, map[int]string{1: "uplink"})
 
-	ports, err := ParsePortStatus(admin, oper, speed, names, aliases, nil)
+	ports, err := ParsePortStatus(admin, oper, speed, names, aliases, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("ParsePortStatus: %v", err)
 	}
@@ -91,6 +91,13 @@ func TestParsePortStatusJoinsAdminOperSpeedName(t *testing.T) {
 	if p2.Description != nil {
 		t.Errorf("port 2 Description = %v, want nil", *p2.Description)
 	}
+	// No duplex/pause walk passed at all -> both honestly nil for every port.
+	if p1.FullDuplex != nil || p1.FlowControl != nil {
+		t.Errorf("port 1 FullDuplex/FlowControl = %v/%v, want nil/nil (no EtherLike walk)", p1.FullDuplex, p1.FlowControl)
+	}
+	if p2.FullDuplex != nil || p2.FlowControl != nil {
+		t.Errorf("port 2 FullDuplex/FlowControl = %v/%v, want nil/nil (no EtherLike walk)", p2.FullDuplex, p2.FlowControl)
+	}
 }
 
 // TestParsePortStatusFiltersToPhysicalEthernetPorts mirrors the Python
@@ -108,7 +115,7 @@ func TestParsePortStatusFiltersToPhysicalEthernetPorts(t *testing.T) {
 	})
 	ifTypes := intRows(IfType, map[int]int64{1: 6, 2: 6, 769: 1, 770: 161, 898: 135})
 
-	ports, err := ParsePortStatus(admin, oper, nil, names, nil, ifTypes)
+	ports, err := ParsePortStatus(admin, oper, nil, names, nil, ifTypes, nil, nil)
 	if err != nil {
 		t.Fatalf("ParsePortStatus: %v", err)
 	}
@@ -124,7 +131,7 @@ func TestParsePortStatusKeepsAllWhenNoIfTypeWalk(t *testing.T) {
 	admin := intRows(IfAdminStatus, map[int]int64{1: 1, 770: 1})
 	oper := intRows(IfOperStatus, map[int]int64{1: 1, 770: 1})
 
-	ports, err := ParsePortStatus(admin, oper, nil, nil, nil, nil)
+	ports, err := ParsePortStatus(admin, oper, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("ParsePortStatus: %v", err)
 	}
@@ -177,7 +184,7 @@ func TestParsePortStatusDownPortReportsNoSpeed(t *testing.T) {
 	speed := intRows(IfHighSpeed, map[int]int64{1: 10000})
 	names := strRows(IfName, map[int]string{1: "1/0/52"})
 
-	ports, err := ParsePortStatus(admin, oper, speed, names, nil, nil)
+	ports, err := ParsePortStatus(admin, oper, speed, names, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("ParsePortStatus: %v", err)
 	}
@@ -198,12 +205,58 @@ func TestParsePortStatusEmptyAliasIsNoneNotEmptyString(t *testing.T) {
 	// switch that has an ifAlias instance but no operator-set text.
 	aliases := strRows(IfAlias, map[int]string{1: ""})
 
-	ports, err := ParsePortStatus(admin, oper, speed, names, aliases, nil)
+	ports, err := ParsePortStatus(admin, oper, speed, names, aliases, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("ParsePortStatus: %v", err)
 	}
 	if ports[0].Description != nil {
 		t.Errorf("Description = %v, want nil", *ports[0].Description)
+	}
+}
+
+// TestParsePortStatusDuplexAndPauseDecoding pins the EtherLike-MIB decode:
+// dot3StatsDuplexStatus 2/3 -> false/true, 1 (unknown) or an absent row ->
+// nil; dot3PauseOperMode 1 -> false (disabled), any other present value ->
+// true, an absent row -> nil. Four ports exercise the four combinations.
+func TestParsePortStatusDuplexAndPauseDecoding(t *testing.T) {
+	admin := intRows(IfAdminStatus, map[int]int64{1: 1, 2: 1, 3: 1, 4: 1})
+	oper := intRows(IfOperStatus, map[int]int64{1: 1, 2: 1, 3: 1, 4: 1})
+	duplex := intRows(Dot3StatsDuplexStatus, map[int]int64{1: 3, 2: 2, 3: 1 /* unknown */})
+	// port 4 has NO duplex row at all.
+	pause := intRows(Dot3PauseOperMode, map[int]int64{1: 4 /* enabledXmitAndRcv */, 2: 1 /* disabled */, 3: 2})
+	// port 4 has NO pause row at all.
+
+	ports, err := ParsePortStatus(admin, oper, nil, nil, nil, nil, duplex, pause)
+	if err != nil {
+		t.Fatalf("ParsePortStatus: %v", err)
+	}
+	byPort := make(map[int]model.PortStatus, len(ports))
+	for _, p := range ports {
+		byPort[p.Port] = p
+	}
+	if fd := byPort[1].FullDuplex; fd == nil || !*fd {
+		t.Errorf("port 1 FullDuplex = %v, want true", fd)
+	}
+	if fc := byPort[1].FlowControl; fc == nil || !*fc {
+		t.Errorf("port 1 FlowControl = %v, want true", fc)
+	}
+	if fd := byPort[2].FullDuplex; fd == nil || *fd {
+		t.Errorf("port 2 FullDuplex = %v, want false", fd)
+	}
+	if fc := byPort[2].FlowControl; fc == nil || *fc {
+		t.Errorf("port 2 FlowControl = %v, want false", fc)
+	}
+	if fd := byPort[3].FullDuplex; fd != nil {
+		t.Errorf("port 3 FullDuplex = %v, want nil (dot3StatsDuplexStatus 1 == unknown)", *fd)
+	}
+	if fc := byPort[3].FlowControl; fc == nil || !*fc {
+		t.Errorf("port 3 FlowControl = %v, want true", fc)
+	}
+	if fd := byPort[4].FullDuplex; fd != nil {
+		t.Errorf("port 4 FullDuplex = %v, want nil (no row at all)", *fd)
+	}
+	if fc := byPort[4].FlowControl; fc != nil {
+		t.Errorf("port 4 FlowControl = %v, want nil (no row at all)", *fc)
 	}
 }
 
@@ -369,19 +422,21 @@ func TestParsePortStatusPropagatesColumnErrors(t *testing.T) {
 	badStr := func(base string) []Row { return []Row{NewIntRow(base+".1", 1)} }
 
 	cases := []struct {
-		name                                      string
-		admin, oper, speed, names, aliases, types []Row
+		name                                                     string
+		admin, oper, speed, names, aliases, types, duplex, pause []Row
 	}{
-		{"admin", badInt(IfAdminStatus), nil, nil, nil, nil, nil},
-		{"oper", nil, badInt(IfOperStatus), nil, nil, nil, nil},
-		{"speed", nil, nil, badInt(IfHighSpeed), nil, nil, nil},
-		{"names", nil, nil, nil, badStr(IfName), nil, nil},
-		{"aliases", nil, nil, nil, nil, badStr(IfAlias), nil},
-		{"ifTypes", nil, nil, nil, nil, nil, badInt(IfType)},
+		{"admin", badInt(IfAdminStatus), nil, nil, nil, nil, nil, nil, nil},
+		{"oper", nil, badInt(IfOperStatus), nil, nil, nil, nil, nil, nil},
+		{"speed", nil, nil, badInt(IfHighSpeed), nil, nil, nil, nil, nil},
+		{"names", nil, nil, nil, badStr(IfName), nil, nil, nil, nil},
+		{"aliases", nil, nil, nil, nil, badStr(IfAlias), nil, nil, nil},
+		{"ifTypes", nil, nil, nil, nil, nil, badInt(IfType), nil, nil},
+		{"duplex", nil, nil, nil, nil, nil, nil, badInt(Dot3StatsDuplexStatus), nil},
+		{"pause", nil, nil, nil, nil, nil, nil, nil, badInt(Dot3PauseOperMode)},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParsePortStatus(tt.admin, tt.oper, tt.speed, tt.names, tt.aliases, tt.types)
+			_, err := ParsePortStatus(tt.admin, tt.oper, tt.speed, tt.names, tt.aliases, tt.types, tt.duplex, tt.pause)
 			if !errors.Is(err, model.ErrSNMP) {
 				t.Fatalf("ParsePortStatus(%s bad) error = %v, want wrap of model.ErrSNMP", tt.name, err)
 			}

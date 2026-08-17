@@ -852,6 +852,60 @@ func TestCliFaceRenderPortsFullColumnSet(t *testing.T) {
 	}
 }
 
+// TestCliFaceRenderPortsM4300StackCapableColumnDoesNotShiftFlowMode proves
+// the M4300 dialect's rendered "show port all" carries the SAME "Stack
+// Capable" trailing column real M4300 firmware does (measured:
+// testdata/cli/m4300_24x_show_port_all.txt), AND that
+// fastpath.parsePortStatus's BY-HEADER-NAME Flow Mode lookup still finds
+// the right column despite it -- the real-hardware bug this whole
+// mechanism exists to defuse (see parsePortStatus's doc comment: reading
+// Flow Mode as the LAST column would grab "Stack Capable" instead on this
+// exact shape). Mutates one port's FlowControl to TRUE (every seeded
+// gs728tpp/M4300 port is measured False, which alone could pass by
+// accident if the parser silently read the wrong column) and confirms the
+// write is visible through the real fastpath.Reader, not by inspecting the
+// rendered string.
+func TestCliFaceRenderPortsM4300StackCapableColumnDoesNotShiftFlowMode(t *testing.T) {
+	st := SeedM4300_24X()
+	st.Ports[3].FlowControl = true // every other seeded port stays the measured false
+	face, m := newTestCliFace(t, "m4300-24x", st)
+
+	out := face.renderPorts()
+	if !strings.Contains(out, "Stack") {
+		t.Fatalf("m4300-24x renderPorts output missing the \"Stack Capable\" column real firmware has:\n%s", out)
+	}
+	// gsm7252ps must NOT gain this column -- it is a measured M4300-only
+	// shape (testdata/cli/gsm7252ps_show_port_all.txt has 8 columns).
+	gsmOut, _ := newTestCliFace(t, "gsm7252ps", SeedGSM7252PS())
+	if strings.Contains(gsmOut.renderPorts(), "Stack") {
+		t.Errorf("gsm7252ps renderPorts output unexpectedly has a \"Stack\" column:\n%s", gsmOut.renderPorts())
+	}
+
+	reader, err := fastpath.NewReader(face, m)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	ports, err := reader.GetPorts(context.Background())
+	if err != nil {
+		t.Fatalf("GetPorts: %v", err)
+	}
+	byPort := make(map[int]model.PortStatus, len(ports))
+	for _, p := range ports {
+		byPort[p.Port] = p
+	}
+	if p3 := byPort[3]; p3.FlowControl == nil || !*p3.FlowControl {
+		t.Errorf("port 3 FlowControl = %v, want true -- the by-header-name Flow Mode lookup must find the right column even with Stack Capable appended after it", p3.FlowControl)
+	}
+	if p1 := byPort[1]; p1.FlowControl == nil || *p1.FlowControl {
+		t.Errorf("port 1 FlowControl = %v, want false (unmutated, measured value)", p1.FlowControl)
+	}
+	// Physical Mode defaults to "Auto" for every seeded M4300 port (no seed
+	// forces one) -- SpeedConfig must decode that.
+	if p1 := byPort[1]; p1.SpeedConfig == nil || !p1.SpeedConfig.Autonegotiate {
+		t.Errorf("port 1 SpeedConfig = %+v, want Auto", byPort[1].SpeedConfig)
+	}
+}
+
 // TestCliFaceRenderPoEModelGating asserts render_poe's M4300 vs gsm7252ps
 // Temperature-column gating (cli_fastpath.py:303-326, parse.go's own
 // documented 9-vs-10-column real-fixture divergence): m4300-16x (PoE

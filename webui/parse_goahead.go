@@ -134,12 +134,67 @@ func goaheadPortNum(name string) (int, bool) {
 	return parseIntCell(m[1])
 }
 
+// goaheadDuplexOper mirrors Python parse._GOAHEAD_DUPLEX_OPER: duplexOperMode
+// -> FullDuplex, DECODED AGAINST SNMP rather than guessed. Measured on the
+// live GS728TPP (10.2.5.10, firmware 6.0.1.30, 2026-08-03) by reading this
+// page and dot3StatsDuplexStatus for all 28 ports at once: every link-UP
+// port reads 2 here and 3 (fullDuplex) there, every link-DOWN port reads 4
+// here and 1 (unknown) there. 4 therefore maps to nothing (not false):
+// nothing is claimed about codes 1 and 3 either -- that fleet had no
+// half-duplex link to observe, and inventing the rest of an enum from one
+// observation is how a plausible-but-wrong mapping gets in. An unmapped
+// code (comma-ok false) yields nil, the honest answer for "not known". NOT
+// the same enum as duplexAdminMode, where the page's own JS uses 2=half/
+// 3=full (see goaheadSpeedConfig below, which decodes that field instead).
+var goaheadDuplexOper = map[string]bool{"2": true}
+
+// goaheadFlowControl mirrors Python parse._GOAHEAD_FLOW_CONTROL:
+// flowControlOperType -> FlowControl. Measured in the same read: every port
+// reads 2 here while dot3PauseOperMode reads 1 (disabled), so 2 is disabled
+// -- consistent with this UI's usual 1=enabled/2=disabled pairing
+// (adminState, linkState). Every port on that switch had flow control off,
+// so "1 means enabled" is inference from the UI's convention rather than
+// observation, and any other code stays nil (comma-ok false).
+var goaheadFlowControl = map[string]bool{"1": true, "2": false}
+
+// goaheadSpeedConfig decodes the CONFIGURED speed of one Standard802_3List
+// Entry, mirroring Python _goahead_speed_config (parse.py:2820-2844)
+// EXACTLY -- decoded exactly as the page's own JS decodes it for display:
+//
+//	if (field.autoNegotiationAdminEnabled == "1") str = "Auto";
+//	else str = field.speedAdmin + "M" + (duplexAdminMode=="3" ? " Full" : " Half");
+//
+// autoNegotiationAdminEnabled is authoritative and speedAdmin is IGNORED
+// while it is "1" -- not a detail one could skip: in the live capture every
+// auto-negotiating port carries speedAdmin 1000 alongside
+// autoNegotiationAdminEnabled 1, so decoding on the rate alone would report
+// the whole switch as forced to 1000.
+func goaheadSpeedConfig(e *xmlNode) *model.PortSpeed {
+	autoneg := gtext(e, "autoNegotiationAdminEnabled")
+	if autoneg == "1" {
+		v := model.AutoPortSpeed()
+		return &v
+	}
+	if autoneg != "2" {
+		return nil // neither code the page knows: honestly unknown
+	}
+	rate, rateOK := parseIntCell(gtext(e, "speedAdmin"))
+	duplexCode := gtext(e, "duplexAdminMode")
+	if !rateOK || (duplexCode != "2" && duplexCode != "3") {
+		return nil
+	}
+	v := model.ForcedPortSpeed(rate, duplexCode == "3")
+	return &v
+}
+
 // ParseGoAheadPorts parses GS728TPP's Standard802_3List section -> per-port
 // status. Only physical g<n> ports are returned; LAG aggregation rows are
 // skipped. SpeedMbps is the negotiated speedOper while the link is up, and
 // honestly nil on a down port. This is the ONE dialect whose PortStatus
-// populates Description (interfaceDescription). Mirrors Python
-// parse.parse_goahead_ports (source lines 2489-2517). GROUNDED in
+// populates Description (interfaceDescription). duplexOperMode and
+// flowControlOperType are decoded against SNMP rather than against a guess
+// -- see goaheadDuplexOper/goaheadFlowControl. Mirrors Python
+// parse.parse_goahead_ports (source lines 2847-2884). GROUNDED in
 // gs728tpp_ports.xml.
 func ParseGoAheadPorts(body string) ([]model.PortStatus, error) {
 	sec, err := goaheadSection(body, "Standard802_3List")
@@ -166,6 +221,14 @@ func ParseGoAheadPorts(body string) ([]model.PortStatus, error) {
 		if v := gtext(e, "interfaceDescription"); v != "" {
 			desc = model.Ptr(v)
 		}
+		var fullDuplex *bool
+		if v, ok := goaheadDuplexOper[gtext(e, "duplexOperMode")]; ok {
+			fullDuplex = model.Ptr(v)
+		}
+		var flowControl *bool
+		if v, ok := goaheadFlowControl[gtext(e, "flowControlOperType")]; ok {
+			flowControl = model.Ptr(v)
+		}
 		out = append(out, model.PortStatus{
 			Port:         port,
 			Name:         name,
@@ -173,6 +236,9 @@ func ParseGoAheadPorts(body string) ([]model.PortStatus, error) {
 			LinkUp:       linkUp,
 			SpeedMbps:    speed,
 			Description:  desc,
+			FullDuplex:   fullDuplex,
+			FlowControl:  flowControl,
+			SpeedConfig:  goaheadSpeedConfig(e),
 		})
 	}
 	if len(out) == 0 {

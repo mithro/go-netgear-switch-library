@@ -187,14 +187,33 @@ func (f *CliFace) renderNetwork() string {
 
 // --- show port all (cli_fastpath.py:133-163) --------------------------------
 
-// renderPorts mirrors Python `render_ports` (cli_fastpath.py:133-163):
+// renderPorts mirrors Python `render_ports` (cli_fastpath.py:171-204):
 // NINE columns -- Intf/Type/Admin/Physical(Mode)/Physical(Status)/
-// Link(Status)/Link(Trap)/LACP(Mode)/Flow(Mode). Link Trap, LACP Mode and
-// Flow Mode are FIXED constants ("Enable"/"Enable"/"Disable"), never
-// derived from State -- the ported source itself never models them.
+// Link(Status)/Link(Trap)/LACP(Mode)/Flow(Mode). Link Trap and LACP Mode are
+// FIXED constants ("Enable"/"Enable"), never derived from State -- the
+// ported source itself never models them. Physical Mode comes from
+// PortSim.physicalMode() (defaults to "Auto") and Flow Mode from
+// PortSim.FlowControl -- FROM STATE, not hardcoded, so this face can show a
+// speed/flow-control write at all.
+//
+// On the M4300 dialect ONLY, a tenth "Stack Capable" column is appended,
+// always "Yes" for a physical port -- MEASURED real-hardware shape (see
+// testdata/cli/m4300_24x_show_port_all.txt: every physical-port row reads
+// "Yes", every lag/vlan pseudo-row reads "No", and this face only ever
+// renders physical rows here). Python's own mock never modelled this column
+// at all -- a real gap on that side, not something this port narrows for
+// its own sake: without it, no virtual-fake round-trip exercises
+// fastpath.parsePortStatus's BY-HEADER-NAME Flow Mode lookup, the exact
+// column-position hazard that column caused on real M4300 firmware (see
+// parsePortStatus's doc comment).
 func (f *CliFace) renderPorts() string {
 	headers := []string{"Intf", "Type", "Admin", "Physical", "Physical", "Link", "Link", "LACP", "Flow"}
 	widths := []int{9, 6, 9, 10, 10, 6, 7, 6, 7}
+	stackCapable := f.isM4300()
+	if stackCapable {
+		headers = append(headers, "Stack")
+		widths = append(widths, 8)
+	}
 	var rows [][]string
 	for _, p := range f.physPorts() {
 		sim := f.state.Ports[p]
@@ -210,9 +229,17 @@ func (f *CliFace) renderPorts() string {
 		if sim.Link {
 			link = "Up"
 		}
-		rows = append(rows, []string{
-			f.iface(p), "", admin, "Auto", physStatus, link, "Enable", "Enable", "Disable",
-		})
+		flow := "Disable"
+		if sim.FlowControl {
+			flow = "Enable"
+		}
+		row := []string{
+			f.iface(p), "", admin, sim.physicalMode(), physStatus, link, "Enable", "Enable", flow,
+		}
+		if stackCapable {
+			row = append(row, "Yes")
+		}
+		rows = append(rows, row)
 	}
 	return cliTable(headers, widths, rows)
 }
