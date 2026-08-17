@@ -3,6 +3,7 @@ package fmtx
 import (
 	"bytes"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -120,6 +121,175 @@ func TestToJSONPvidTupleShape(t *testing.T) {
 ]`
 	if got != want {
 		t.Errorf("ToJSON([]Pvid) =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// --- float64 (model.Sensor.Value) byte-parity with json.dumps -------
+//
+// The expected strings below were captured VERBATIM from a live run of
+// the pinned Python source's cli/format.to_json against the SAME
+// model.Sensor values constructed here (see the bug this regression-
+// tests: ToJSON previously let Go's default float encoder handle
+// float64, which renders a whole-number float with no ".0" and diverges
+// from Python's repr()-based encoding at the 1e15/1e16 and 1e-4/1e-5
+// scientific-notation boundaries -- see pyfloat_test.go for the
+// unit-level pyFloatRepr checks against the same live Python source).
+
+func TestToJSONSensorWholeNumberValueKeepsDotZero(t *testing.T) {
+	s := model.Sensor{Name: "Fan1", Kind: "fan", Value: 3300.0, Unit: "rpm"}
+	got, err := ToJSON(s)
+	if err != nil {
+		t.Fatalf("ToJSON() error = %v, want nil", err)
+	}
+	want := `{
+  "name": "Fan1",
+  "kind": "fan",
+  "value": 3300.0,
+  "unit": "rpm"
+}`
+	if got != want {
+		t.Errorf("ToJSON(Sensor) =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestToJSONSensorSliceMatchesPython(t *testing.T) {
+	sensors := []model.Sensor{
+		{Name: "Fan1", Kind: "fan", Value: 3300.0, Unit: "rpm"},
+		{Name: "Temp1", Kind: "temperature", Value: 45.678912, Unit: "C"},
+		{Name: "PSU1", Kind: "power", Value: 0.0, Unit: "W"},
+	}
+	got, err := ToJSON(sensors)
+	if err != nil {
+		t.Fatalf("ToJSON() error = %v, want nil", err)
+	}
+	want := `[
+  {
+    "name": "Fan1",
+    "kind": "fan",
+    "value": 3300.0,
+    "unit": "rpm"
+  },
+  {
+    "name": "Temp1",
+    "kind": "temperature",
+    "value": 45.678912,
+    "unit": "C"
+  },
+  {
+    "name": "PSU1",
+    "kind": "power",
+    "value": 0.0,
+    "unit": "W"
+  }
+]`
+	if got != want {
+		t.Errorf("ToJSON([]Sensor) =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestToJSONSensorScientificNotationBoundaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		want  string
+	}{
+		{"one_e15_stays_fixed", 1e15, "1000000000000000.0"},
+		{"one_e16_switches_to_scientific", 1e16, "1e+16"},
+		{"one_e_minus5_switches_to_scientific", 1e-5, "1e-05"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ToJSON(model.Sensor{Name: "s", Kind: "k", Value: tt.value, Unit: "u"})
+			if err != nil {
+				t.Fatalf("ToJSON() error = %v, want nil", err)
+			}
+			wantLine := `  "value": ` + tt.want + `,`
+			if !strings.Contains(got, wantLine) {
+				t.Errorf("ToJSON(Sensor{Value: %v}) = %s, want it to contain %q", tt.value, got, wantLine)
+			}
+		})
+	}
+}
+
+func TestToJSONSensorNonFiniteValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		want  string
+	}{
+		{"nan", math.NaN(), `  "value": NaN,`},
+		{"positive_infinity", math.Inf(1), `  "value": Infinity,`},
+		{"negative_infinity", math.Inf(-1), `  "value": -Infinity,`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ToJSON(model.Sensor{Name: "s", Kind: "k", Value: tt.value, Unit: "u"})
+			if err != nil {
+				t.Fatalf("ToJSON() error = %v, want nil", err)
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("ToJSON(Sensor{Value: %v}) = %s, want it to contain %q", tt.value, got, tt.want)
+			}
+			// No leftover internal sentinel bytes -- the substitution
+			// must have replaced ALL of them, and the sentinel's raw
+			// (non-JSON-string-encoded) form must never leak either.
+			if strings.Contains(got, "ngsw:pyfloat:") {
+				t.Errorf("ToJSON(Sensor{Value: %v}) = %s, leaked an internal sentinel", tt.value, got)
+			}
+		})
+	}
+}
+
+// TestToJSONSwitchDataWithSensorsNestedFloat exercises the FULL
+// GetSensors/Snapshot shape the bug report named: a float64 nested two
+// levels deep (SwitchData -> []Sensor -> Value), confirming mirrorFloats'
+// recursive struct/slice handling reaches it.
+func TestToJSONSwitchDataWithSensorsNestedFloat(t *testing.T) {
+	sd := model.SwitchData{
+		Model: "gsm7252ps",
+		Host:  "10.0.0.5",
+		Sensors: []model.Sensor{
+			{Name: "Fan1", Kind: "fan", Value: 3300.0, Unit: "rpm"},
+		},
+	}.Canonical()
+	got, err := ToJSON(sd)
+	if err != nil {
+		t.Fatalf("ToJSON() error = %v, want nil", err)
+	}
+	if !strings.Contains(got, `"value": 3300.0`) {
+		t.Errorf("ToJSON(SwitchData with Sensors) = %s, want a nested \"value\": 3300.0 (not 3300)", got)
+	}
+}
+
+// TestToJSONPointerToSensor exercises mirrorFloats' pointer-mirroring
+// path (a *model.Sensor, not a bare value) -- e.g. how a *SwitchData with
+// a MgmtIP-like optional nested struct would be reached if it ever grew
+// a float64 field.
+func TestToJSONPointerToSensor(t *testing.T) {
+	s := &model.Sensor{Name: "Fan1", Kind: "fan", Value: 3300.0, Unit: "rpm"}
+	got, err := ToJSON(s)
+	if err != nil {
+		t.Fatalf("ToJSON() error = %v, want nil", err)
+	}
+	if !strings.Contains(got, `"value": 3300.0`) {
+		t.Errorf("ToJSON(*Sensor) = %s, want \"value\": 3300.0", got)
+	}
+}
+
+// TestMirrorFloatsNoOpWithoutAnyFloatField confirms the fix is a true
+// no-op (returns the exact original value, doing zero reconstruction)
+// for every type with no float64 anywhere -- the overwhelming majority
+// of this codebase's JSON output -- so the float64 fix carries no
+// regression risk for anything else already byte-parity-tested above.
+func TestMirrorFloatsNoOpWithoutAnyFloatField(t *testing.T) {
+	v := model.PortStatus{Port: 1, AdminEnabled: true}
+	got := mirrorFloats(v)
+	gotPS, ok := got.(model.PortStatus)
+	if !ok {
+		t.Fatalf("mirrorFloats(PortStatus) returned %T, want model.PortStatus unchanged", got)
+	}
+	if gotPS != v {
+		t.Errorf("mirrorFloats(PortStatus) = %+v, want the identical, unmodified value %+v", gotPS, v)
 	}
 }
 

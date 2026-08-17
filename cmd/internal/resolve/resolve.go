@@ -300,16 +300,25 @@ func readCommunity(flag string, env func(string) (string, bool), configValue *st
 
 // writeCommunityOverride resolves a LITERAL write-community override by
 // precedence CLI flag -> NGSW_WRITE_COMMUNITY env var, mirroring
-// resolve.py's _write_community_override exactly. Returns nil when
-// neither tier has a value -- the caller falls back to a lazy inventory
-// resolver (or, on the --host/--model path, to no write community at
-// all).
+// resolve.py's _write_community_override exactly -- including its
+// deliberate ASYMMETRY with readCommunity's NGSW_COMMUNITY tier: the flag
+// check here IS a truthy/"not given" check (an empty --write-community is
+// indistinguishable from an absent one, matching Python's `if
+// args.write_community:`), but the ENV check is NOT -- Python's
+// `env.get("NGSW_WRITE_COMMUNITY")` is returned AS-IS, with no truthy
+// guard, so a PRESENT-BUT-BLANK NGSW_WRITE_COMMUNITY="" is a real
+// (blank-string) override that LOCKS IN "" over the inventory's own
+// snmp.write_community spec, rather than falling through to it. Only an
+// ABSENT env var (env's second return value false) falls through. Get
+// this wrong (e.g. treating "" the same as absent) and a blank env var
+// meant to explicitly clear the write community instead silently
+// resurrects the inventory's spec -- fail-open where Python fails-closed.
 func writeCommunityOverride(flag string, env func(string) (string, bool)) *string {
 	if flag != "" {
 		v := flag
 		return &v
 	}
-	if v, _ := env("NGSW_WRITE_COMMUNITY"); v != "" {
+	if v, ok := env("NGSW_WRITE_COMMUNITY"); ok {
 		return &v
 	}
 	return nil

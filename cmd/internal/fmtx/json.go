@@ -30,15 +30,31 @@ import (
 //     json.Encoder.Encode always appends one, which this function trims;
 //     format.py's own trailing newline comes from `print()`, reproduced
 //     by Emit below, not by ToJSON).
+//   - float64 fields render via pyFloatRepr (json.dumps' float.__repr__
+//     encoding: "3300.0", "1e+16", "NaN", ...), NOT Go's default float
+//     formatting (which would emit "3300", "10000000000000000", and
+//     fail outright on NaN/Inf). mirrorFloats does this generically, for
+//     any float64 reachable from v -- see pyfloat.go/floatmirror.go; this
+//     is DISTINCT from pyG (pyg.go), which is sensors_table's TEXT
+//     rendering (Python's f"{v:g}"), a different algorithm entirely.
 func ToJSON(v any) (string, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	if err := enc.Encode(v); err != nil {
+	if err := enc.Encode(mirrorFloats(v)); err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(buf.String(), "\n"), nil
+	s := strings.TrimSuffix(buf.String(), "\n")
+	// pyFloat.MarshalJSON emits a quoted sentinel string in place of a
+	// non-finite value (Go's encoder rejects the bare NaN/Infinity
+	// tokens Python's json.dumps writes -- see the sentinel constants'
+	// doc comment in pyfloat.go); swap them in now that the full
+	// document is valid, fully-encoded JSON text.
+	s = strings.ReplaceAll(s, nanSentinelJSON, "NaN")
+	s = strings.ReplaceAll(s, posInfSentinelJSON, "Infinity")
+	s = strings.ReplaceAll(s, negInfSentinelJSON, "-Infinity")
+	return s, nil
 }
 
 // Emit writes v to w as JSON (asJSON=true, via ToJSON) or via tableFn

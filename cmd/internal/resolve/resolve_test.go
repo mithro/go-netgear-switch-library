@@ -178,6 +178,27 @@ func TestWriteCommunityOverrideNone(t *testing.T) {
 	}
 }
 
+// TestWriteCommunityOverrideEnvPresentButBlank pins the deliberate
+// ASYMMETRY between writeCommunityOverride and readCommunity's own env
+// tier (see writeCommunityOverride's doc comment): Python's
+// _write_community_override returns env.get("NGSW_WRITE_COMMUNITY") with
+// NO truthy guard, so a PRESENT-BUT-EMPTY env var is a real override
+// (locking in "" over the inventory's own spec) -- distinct from an
+// ABSENT env var (which falls through, see TestWriteCommunityOverrideNone
+// above). A regression here (treating "" the same as unset) would be
+// fail-open exactly where Python fails-closed: a blank env var meant to
+// explicitly clear the write community would instead silently let the
+// inventory's own spec take effect.
+func TestWriteCommunityOverrideEnvPresentButBlank(t *testing.T) {
+	got := writeCommunityOverride("", mapEnv(map[string]string{"NGSW_WRITE_COMMUNITY": ""}))
+	if got == nil {
+		t.Fatal("writeCommunityOverride() = nil, want a non-nil override locking in the blank value (present-but-empty env var is NOT the same as absent)")
+	}
+	if *got != "" {
+		t.Fatalf("writeCommunityOverride() = %q, want the empty string", *got)
+	}
+}
+
 func TestWriteCommunityResolverLiteralNeverInvokesConfigResolver(t *testing.T) {
 	literal := "literal-write"
 	called := false
@@ -567,6 +588,98 @@ func TestResolveInventoryMissingFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("Resolve(missing inventory file) = nil error, want an error")
 	}
+}
+
+// --- Secret redaction ------------------------------------------------
+
+// TestResolveNeverEchoesSecrets mirrors safety's own
+// TestDoWriteNeverEchoesSecrets: constructs Params carrying
+// secret-looking Community/WriteCommunity/HTTPPassword values, then
+// exercises every error-returning path in this package (bad usage, an
+// unknown model, an unresolvable inventory switch/file, a bad --backend
+// on both dispatch paths, and a failing prompt) and asserts NONE of the
+// resulting error messages contain any of those values. resolve's error
+// strings are all static/config-shaped text (missing flags, unknown
+// names) that never interpolates a credential today; this test pins that
+// invariant so it stays true as the package grows.
+func TestResolveNeverEchoesSecrets(t *testing.T) {
+	const (
+		community      = "s3cr3t-read-community-DO-NOT-LEAK"
+		writeCommunity = "s3cr3t-write-community-DO-NOT-LEAK"
+		httpPassword   = "s3cr3t-http-password-DO-NOT-LEAK"
+	)
+	secretParams := Params{Community: community, WriteCommunity: writeCommunity, HTTPPassword: httpPassword}
+
+	path := writeInventory(t, `
+[switches.sw1]
+model = "gsm7252ps"
+host = "10.0.0.5"
+`)
+
+	cases := []struct {
+		name string
+		p    Params
+		opts []Option
+	}{
+		{"no_switch_no_host_model", secretParams, nil},
+		{"switch_without_config", mergeParams(secretParams, Params{Switch: "sw1"}), nil},
+		{"switch_not_found", mergeParams(secretParams, Params{Switch: "no-such-switch", Config: path}), nil},
+		{"inventory_missing_file", mergeParams(secretParams, Params{Switch: "sw1", Config: "/does/not/exist.toml"}), nil},
+		{"inventory_bad_backend", mergeParams(secretParams, Params{Switch: "sw1", Config: path, Backend: "bogus"}), nil},
+		{"host_only_no_model", mergeParams(secretParams, Params{Host: "10.0.0.5"}), nil},
+		{"unknown_model", mergeParams(secretParams, Params{Host: "10.0.0.5", Model: "no-such-model"}), nil},
+		{"host_model_bad_backend", mergeParams(secretParams, Params{Host: "10.0.0.5", Model: "gsm7252ps", Backend: "bogus"}), nil},
+		{
+			// Community deliberately NOT set here (unlike every other
+			// case): a non-empty --community flag would short-circuit
+			// readCommunity before it ever reaches the prompt, defeating
+			// the point of this case (WriteCommunity/HTTPPassword are
+			// still set, so those two secrets are still checked below).
+			"host_model_prompt_error",
+			Params{WriteCommunity: writeCommunity, HTTPPassword: httpPassword, Host: "10.0.0.5", Model: "gsm7252ps"},
+			[]Option{WithEnv(mapEnv(nil)), WithPrompt(func(string) (string, error) { return "", errors.New("EOF") })},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Resolve(tc.p, tc.opts...)
+			if err == nil {
+				t.Fatalf("Resolve(%s) error = nil, want an error (test setup should always fail)", tc.name)
+			}
+			msg := err.Error()
+			for _, secret := range []string{community, writeCommunity, httpPassword} {
+				if strings.Contains(msg, secret) {
+					t.Errorf("Resolve(%s) error = %q, leaked a secret value", tc.name, msg)
+				}
+			}
+		})
+	}
+}
+
+// mergeParams returns base with every non-zero string field of override
+// applied on top -- a small test helper so each secret-redaction case
+// above only needs to spell out the fields relevant to that error path.
+func mergeParams(base, override Params) Params {
+	if override.Switch != "" {
+		base.Switch = override.Switch
+	}
+	if override.Config != "" {
+		base.Config = override.Config
+	}
+	if override.Host != "" {
+		base.Host = override.Host
+	}
+	if override.Model != "" {
+		base.Model = override.Model
+	}
+	if override.Backend != "" {
+		base.Backend = override.Backend
+	}
+	if override.NSDPInterface != "" {
+		base.NSDPInterface = override.NSDPInterface
+	}
+	return base
 }
 
 // --- WithEnv / default env -----------------------------------------
