@@ -342,3 +342,149 @@ func ApplyFastpathPortAdmin(state *State, form map[string]string, checkbox strin
 	}
 	return ""
 }
+
+// --- userManagement.html ------------------------------------------------
+//
+// The login-account grid. LIVE-CAPTURED 2026-08-03 from gsm7252ps 10.1.5.22
+// and m4300-24x 10.1.5.13; column labels are those pages' own header
+// cells. Mirrors Python web_fastpath_xui.py's _USER_HEADERS/render_users
+// (source lines 321-363).
+//
+// The password columns are rendered because the real pages render them,
+// and rendering what the device renders is the point -- but note WHAT they
+// hold: gsm7252ps emits a literal "********" and the M4300 emits "", so
+// neither page discloses anything, and a reader that tried to report a
+// password would find only asterisks. This mock reproduces the gsm7252ps
+// spelling on every model, exactly as the Python source does.
+var xuiUserHeaders = []xeHeaderCol{
+	{"1_1_2", "User Name"},
+	{"1_1_13", "Edit Password"},
+	{"1_1_3", "Password"},
+	{"1_1_4", "Confirm   Password"},
+	{"1_1_5", "Access   Mode"},
+	{"1_1_6", "Lockout   Status"},
+	{"1_1_7", "Password   Expiration   Date"},
+}
+
+// RenderXUIUsers renders userManagement.html from state.Users, mirroring
+// Python web_fastpath_xui.render_users. Shared by both managed dialects
+// (gsm7252ps and the M4300s): userManagement.html's row-grid coordinates
+// are identical on both live-captured pages (webui.ParseXUIUsers's
+// xuiUserNameCoord/xuiUserAccessModeCoord), so one renderer serves both,
+// exactly as one parser reads both. A model whose State.Users is empty
+// (m4300-16x/gsm7228ps -- unmeasured, see SeedM4300_16X/SeedGSM7228PS)
+// renders a header-only page with zero data rows, which webui.ParseXUIUsers
+// then honestly refuses ("no user rows on page") rather than this mock
+// fabricating accounts it was never seeded with.
+func RenderXUIUsers(state *State, path string) string {
+	var body strings.Builder
+	body.WriteString("<TR>\n")
+	body.WriteString(xeHeader(xuiUserHeaders))
+	body.WriteString("</TR>\n")
+	count := len(state.Users)
+	for row0, u := range state.Users {
+		inst := fastpathInstance(row0, count)
+		body.WriteString("<TR>\n")
+		body.WriteString(xeCell(inst, "1_1_1", strconv.Itoa(row0)))
+		body.WriteString(xeCell(inst, "1_1_2", u.Name))
+		body.WriteString(xeCell(inst, "1_1_13", "Disable"))
+		body.WriteString(xeCell(inst, "1_1_3", "********"))
+		body.WriteString(xeCell(inst, "1_1_4", "********"))
+		// Verbatim from state: this page's wording is NOT the CLI's.
+		body.WriteString(xeCell(inst, "1_1_5", u.HTTPAccessMode))
+		body.WriteString(xeCell(inst, "1_1_6", "FALSE"))
+		body.WriteString(xeCell(inst, "1_1_7", ""))
+		body.WriteString("</TR>\n")
+	}
+	return fastpathPage(path, body.String(),
+		[]fastpathButton{{XID: "3_1_1", Label: "CANCEL"}, {XID: "3_2_1", Label: "APPLY"}},
+		"", "NetGear - User Management")
+}
+
+// --- management-service pages --------------------------------------------
+//
+// Two shapes, MIXED WITHIN A MODEL -- measured 2026-08-03, see
+// webui.serviceFieldsTable for the full map. gsm7252ps renders all four as
+// XUI; m4300 renders http/https as a plain named form and ssh/telnet as
+// XUI. This mock reproduces that split rather than picking one, because a
+// fake that served only XUI would let a parser that had never learned the
+// plain form pass. Mirrors Python web_fastpath_xui.py's
+// _SERVICE_XUI_COORDS/_SERVICE_FORM_FIELDS/render_service_xui/
+// render_service_form (source lines 244-308).
+
+// xeServiceXUICoord is the XUI admin coordinate for one service, and the
+// port coordinate where the real page prints one ("" = telnet's page
+// prints NO port on either switch -- the CLI reports it, the page does
+// not, so this mock must not invent one).
+type xeServiceXUICoord struct {
+	Admin string
+	Port  string
+}
+
+var xeServiceXUICoords = map[string]xeServiceXUICoord{
+	"http":   {Admin: "1_1_1", Port: ""},
+	"https":  {Admin: "1_1_1", Port: "1_4_1"},
+	"ssh":    {Admin: "1_1_1", Port: "1_10_1"},
+	"telnet": {Admin: "2_5_1", Port: ""},
+}
+
+// xeServiceFormField is the plain-form radio group and port input name for
+// one service (only http/https have a measured plain-form page).
+type xeServiceFormField struct {
+	Radio    string
+	PortName string
+}
+
+var xeServiceFormFields = map[string]xeServiceFormField{
+	"http":  {Radio: "httpAdmin", PortName: "httpPort"},
+	"https": {Radio: "sslAdmin", PortName: "httpsPort"},
+}
+
+// RenderXUIServicePage renders one service's config page in the XUI
+// labelled-scalar shape, mirroring Python render_service_xui. sim.CLIPort
+// is deliberately never consulted here: it is CLI-only state, extending
+// beyond Python's own ServiceSim -- see ServiceSim's doc comment.
+func RenderXUIServicePage(state *State, path, service string) string {
+	sim := state.Services[service]
+	coord := xeServiceXUICoords[service]
+	body := fastpathLabelled(coord.Admin, strings.ToUpper(service)+" Admin Mode", enableWordShort(sim.Enabled))
+	if coord.Port != "" && sim.Port != nil {
+		body += fastpathLabelled(coord.Port, strings.ToUpper(service)+" Port", strconv.Itoa(*sim.Port))
+	}
+	return fastpathPage(path, body,
+		[]fastpathButton{{XID: "4_5_1", Label: "CANCEL"}, {XID: "4_5_2", Label: "APPLY"}},
+		"", "NetGear - "+strings.ToUpper(service)+" Configuration")
+}
+
+// RenderFormServicePage renders one service's config page in the PLAIN
+// NAMED FORM shape (the M4300's http/https pages), mirroring Python
+// render_service_form.
+//
+// Reproduces the firmware's double-checked radio group verbatim: BOTH
+// radios carry a checked attribute, spelled `checked="checked"` on the
+// first and a bare uppercase `CHECKED` on the second, and a browser takes
+// the LAST. A mock that marked only the true one would let a first-match
+// parser pass here and then misreport every real switch -- see
+// webui.checkedRadio's doc comment for the same trap on the reader side.
+func RenderFormServicePage(state *State, path, service string) string {
+	sim := state.Services[service]
+	fields := xeServiceFormFields[service]
+	selected := enableWordShort(sim.Enabled)
+	other := enableWordShort(!sim.Enabled)
+	radios := fmt.Sprintf(
+		"<INPUT type=\"radio\" name=\"%s\" id=\"%s%s\" value=\"%s\" checked=\"checked\" disabled=\"disabled\" >\n"+
+			"<INPUT type=\"radio\" name=\"%s\" id=\"%s%s\" value=\"%s\" disabled=\"disabled\" CHECKED>\n",
+		fields.Radio, fields.Radio, other, other,
+		fields.Radio, fields.Radio, selected, selected)
+	port := ""
+	if sim.Port != nil {
+		port = fmt.Sprintf(
+			"<INPUT TYPE=\"TEXT\" class=\"input\" id=\"%s\" name=\"%s\" SIZE=\"17\" MAXLENGTH=\"5\" VALUE=\"%d\">\n",
+			fields.PortName, fields.PortName, *sim.Port)
+	}
+	return "<HTML>\n<HEAD><TITLE>NETGEAR</TITLE></HEAD>\n<BODY CLASS=page>\n" +
+		"<FORM method=post ACTION=\"" + path + "\">\n" + radios + port +
+		"<INPUT TYPE=\"hidden\" id=\"submt\" NAME=\"submt\" VALUE=\"\">\n" +
+		"<INPUT TYPE=\"hidden\" NAME=\"err_flag\" VALUE=\"0\">\n" +
+		"</FORM>\n</BODY>\n</HTML>\n"
+}

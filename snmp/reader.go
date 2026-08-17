@@ -301,6 +301,31 @@ func (r *Reader) GetMgmtIP(ctx context.Context) (model.MgmtIPConfig, error) {
 	return ParseMgmtIP(addr, netmask, routeDest, routeNexthop, dhcp, baseMac, addrRFC4293)
 }
 
+// GetUsers always returns an error wrapping model.ErrUnsupportedCapability:
+// this backend does not serve local user accounts, mirroring Python
+// SnmpReader.get_users (snmp_read.py:265-274). Refused BY NAME rather than
+// returned empty -- an empty answer here would be indistinguishable from a
+// switch that genuinely has none. Users is deliberately NOT served over
+// SNMP even though a vendor user table exists: the S3300's SNMP user table
+// (4526.11.1.2.1.3) disagrees with its own CLI (one user where the CLI
+// shows two), so the two backends do not report the same set.
+func (r *Reader) GetUsers(_ context.Context) ([]model.SwitchUser, error) {
+	return nil, fmt.Errorf(
+		"model %q: this backend does not expose local user accounts (no such tag/page/table on this backend): %w",
+		r.model.Key, model.ErrUnsupportedCapability)
+}
+
+// GetServices always returns an error wrapping
+// model.ErrUnsupportedCapability: this backend does not serve
+// management-service state, mirroring Python SnmpReader.get_services
+// (snmp_read.py's sibling to get_users). Refused BY NAME rather than
+// returned empty, for the same reason GetUsers is.
+func (r *Reader) GetServices(_ context.Context) ([]model.ServiceStatus, error) {
+	return nil, fmt.Errorf(
+		"model %q: this backend does not expose management-service state (http/https/telnet/ssh): %w",
+		r.model.Key, model.ErrUnsupportedCapability)
+}
+
 // GetSystemInfo identifies this switch's model via ReadSystemInfo, reusing
 // this reader's already-connected client.
 //

@@ -737,6 +737,43 @@ func (s *Switch) GetSensors(ctx context.Context, opts ...ReadOption) ([]model.Se
 	return out, err
 }
 
+// GetUsers reads the switch's local login accounts. Served over the
+// FASTPATH CLI and the managed-model web UI; SNMP and NSDP refuse by name
+// (deliberately -- the S3300's SNMP user table disagrees with its own CLI).
+// model.SwitchUser.AccessMode keeps the firmware's own wording, which
+// differs between images, and Privileged carries the normalised reading.
+func (s *Switch) GetUsers(ctx context.Context, opts ...ReadOption) ([]model.SwitchUser, error) {
+	o := resolveReadOptions(opts)
+	var out []model.SwitchUser
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
+		v, err := r.GetUsers(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
+// GetServices reads which management services are enabled, and on which
+// ports. Served over the FASTPATH CLI and the managed-model web UI; SNMP
+// and NSDP refuse by name. A port of nil means the firmware reports no port
+// for that service, not that a default applies.
+func (s *Switch) GetServices(ctx context.Context, opts ...ReadOption) ([]model.ServiceStatus, error) {
+	o := resolveReadOptions(opts)
+	var out []model.ServiceStatus
+	err := s.readVia(ctx, o.backend, func(r BackendReader) error {
+		v, err := r.GetServices(ctx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
+}
+
 // GetMgmtIP reads the switch's own management IP configuration.
 func (s *Switch) GetMgmtIP(ctx context.Context, opts ...ReadOption) (model.MgmtIPConfig, error) {
 	o := resolveReadOptions(opts)

@@ -93,6 +93,17 @@ type CliModelSpec struct {
 	EnvironmentCmd    string
 	NetworkCmd        string
 	InterfaceStatsCmd string
+	// UsersCmd/HTTPServiceCmd/TelnetServiceCmd/SSHServiceCmd: local login
+	// accounts and management-service state. Constant across every FASTPATH
+	// model (no per-model override exists in commands.py:139-147) --
+	// HTTPServiceCmd deliberately covers BOTH the plain and secure web
+	// servers in one command, and TelnetServiceCmd is "show telnetcon", NOT
+	// "show telnet" (which reports the switch as an outbound telnet CLIENT,
+	// not the inbound server this library's TELNET backend connects to).
+	UsersCmd         string
+	HTTPServiceCmd   string
+	TelnetServiceCmd string
+	SSHServiceCmd    string
 
 	// --- physical-interface naming -----------------------------------
 	// IfaceTemplate is how this model's firmware ADDRESSES one physical
@@ -324,6 +335,11 @@ func newCliModelSpec(modelKey string, captured, readsVerified bool) CliModelSpec
 		EnvironmentCmd:    "show environment",
 		NetworkCmd:        "show network",
 		InterfaceStatsCmd: "show interface ethernet {iface}",
+
+		UsersCmd:         "show users",
+		HTTPServiceCmd:   "show ip http",
+		TelnetServiceCmd: "show telnetcon",
+		SSHServiceCmd:    "show ip ssh",
 
 		IfaceTemplate:       "1/0/{port}",
 		UplinkIfaceTemplate: "", // None

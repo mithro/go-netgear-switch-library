@@ -563,6 +563,14 @@ func (f *CliFace) run(command string) string {
 		return f.renderEnvironment()
 	case f.spec.NetworkCmd:
 		return f.renderNetwork()
+	case f.spec.UsersCmd:
+		return f.renderUsers()
+	case f.spec.HTTPServiceCmd:
+		return f.renderHTTPService()
+	case f.spec.TelnetServiceCmd:
+		return f.renderTelnetService()
+	case f.spec.SSHServiceCmd:
+		return f.renderSSHService()
 	}
 	if m := cliShowVlanIDRE.FindStringSubmatch(c); m != nil {
 		vid, _ := strconv.Atoi(m[1])

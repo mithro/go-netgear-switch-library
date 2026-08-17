@@ -10,10 +10,10 @@ package webui
 // Parallel to nsdp/reader.go and snmp/reader.go: maps each dialect's parsed
 // HTML/XML onto the SAME shared model types (model.PortStatus/PoEStatus/
 // VLANInfo/Pvid/LLDPNeighbor/MacEntry/Sensor/PortStats/MgmtIPConfig) so a
-// caller sees one uniform shape regardless of backend. Reader's nine Get*
-// methods (GetPorts/GetStats/GetVLANs/GetPVIDs/GetLLDP/GetMACs/GetPoE/
-// GetSensors/GetMgmtIP) satisfy the root package's BackendReader interface
-// verbatim -- see dispatch.go there.
+// caller sees one uniform shape regardless of backend. Reader's eleven
+// Get* methods (GetPorts/GetStats/GetVLANs/GetPVIDs/GetLLDP/GetMACs/GetPoE/
+// GetSensors/GetMgmtIP/GetUsers/GetServices) satisfy the root package's
+// BackendReader interface verbatim -- see dispatch.go there.
 //
 // Python has NO separate "http_reads_supported" table distinct from
 // HTTPModelSpec.ReadsVerified (dossier D-HTTP-F §1.5): NewReader gates
@@ -840,6 +840,71 @@ func (r *Reader) GetMgmtIP(ctx context.Context) (model.MgmtIPConfig, error) {
 		cfg.BaseMac = mac
 	}
 	return cfg, nil
+}
+
+// GetUsers reads local login accounts, mirroring Python HttpReader.get_users
+// (http_read.py:724-734). Refuses by name on a model whose UI has no such
+// page located, rather than returning empty: an empty answer would be
+// indistinguishable from a switch that genuinely has no accounts.
+func (r *Reader) GetUsers(ctx context.Context) ([]model.SwitchUser, error) {
+	path, err := requirePath(r.model.Key, r.spec.UsersPath, "local user accounts")
+	if err != nil {
+		return nil, err
+	}
+	html, err := r.session.GetPage(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return ParseXUIUsers(html)
+}
+
+// requireServicePaths returns the (service, path) pairs for spec, in
+// ServiceNames order, or refuses honestly unless ALL FOUR are populated,
+// mirroring Python _require_service_paths/_service_paths (http_read.py:
+// 78-104). All-or-nothing on purpose: the S3300 is the case that motivates
+// it -- its https and telnet pages parse fine, but its
+// httpConfiguration.html carries no admin control and its
+// sshConfiguration.html 404s. Returning the two that work would report a
+// switch with no SSH -- a confident wrong answer -- where refusing says only
+// what is true: this UI cannot be asked.
+func requireServicePaths(modelKey string, spec *HTTPModelSpec) ([]struct{ Service, Path string }, error) {
+	pathFor := map[string]string{
+		"http":   spec.HTTPServicePath,
+		"https":  spec.HTTPSServicePath,
+		"ssh":    spec.SSHServicePath,
+		"telnet": spec.TelnetServicePath,
+	}
+	out := make([]struct{ Service, Path string }, 0, len(ServiceNames))
+	for _, service := range ServiceNames {
+		path := pathFor[service]
+		if path == "" {
+			return nil, unsupportedOp(modelKey, "management-service state (http/https/telnet/ssh)")
+		}
+		out = append(out, struct{ Service, Path string }{service, path})
+	}
+	return out, nil
+}
+
+// GetServices reads management-service state, one page per service,
+// mirroring Python HttpReader.get_services (http_read.py:736-746).
+func (r *Reader) GetServices(ctx context.Context) ([]model.ServiceStatus, error) {
+	paths, err := requireServicePaths(r.model.Key, r.spec)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.ServiceStatus, 0, len(paths))
+	for _, p := range paths {
+		html, err := r.session.GetPage(ctx, p.Path)
+		if err != nil {
+			return nil, err
+		}
+		status, err := ParseServicePage(html, p.Service)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, status)
+	}
+	return out, nil
 }
 
 // itoa is a tiny local alias so membershipForm doesn't need a second

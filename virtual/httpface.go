@@ -210,6 +210,8 @@ func httpSpecPathFields(spec *webui.HTTPModelSpec) []string {
 		spec.VlanConfigPath, spec.VlanMembershipPath, spec.PvidPath, spec.RebootPath,
 		spec.LogoutPath, spec.SysinfoPath, spec.MgmtIPPath, spec.MacTablePath,
 		spec.LLDPPath, spec.CertUploadPath, spec.VlanMembershipPostPath, spec.PortConfigPath,
+		spec.UsersPath, spec.HTTPServicePath, spec.HTTPSServicePath, spec.SSHServicePath,
+		spec.TelnetServicePath,
 	}
 }
 
@@ -902,6 +904,36 @@ func (f *HTTPFace) renderFastpathXUIPage(path string, form map[string]string) (s
 	}
 }
 
+// serviceFor returns which management service path is the config page for,
+// mirroring Python VirtualHttpFace._service_for (faces/http.py:513-521): a
+// path only resolves to a service the STATE has seeded (state.Services),
+// even when the spec itself names the page -- exactly reproducing Python's
+// behavior for m4300-16x, whose webui.HTTPModelSpec inherits m4300-24x's
+// service paths unchanged (Go struct-copy mirrors Python's
+// dataclasses.replace not touching them) but whose own seed has never
+// measured (and so never populates) Services, leaving those pages served
+// nowhere (an honest 404) rather than this mock fabricating page content
+// that model's state was never given.
+func (f *HTTPFace) serviceFor(path string) (string, bool) {
+	spec := f.spec
+	configuredPaths := map[string]string{
+		"http":   spec.HTTPServicePath,
+		"https":  spec.HTTPSServicePath,
+		"ssh":    spec.SSHServicePath,
+		"telnet": spec.TelnetServicePath,
+	}
+	for _, service := range webui.ServiceNames {
+		configured := configuredPaths[service]
+		if configured != "" && path == configured {
+			if _, ok := f.state.Services[service]; ok {
+				return service, true
+			}
+			return "", false
+		}
+	}
+	return "", false
+}
+
 // renderM4300Page renders an M4300 Cheetah /v1 read page from state,
 // ok=false if this model is not an M4300 (so the caller falls through).
 // Mirrors Python VirtualHttpFace._render_m4300_page (faces/http.py:518-551).
@@ -920,6 +952,18 @@ func (f *HTTPFace) renderM4300Page(path string) (string, bool) {
 		return RenderM4300MacTable(f.state), true
 	case path == spec.SysinfoPath:
 		return RenderM4300Sysinfo(f.state), true
+	case spec.UsersPath != "" && path == spec.UsersPath:
+		return RenderXUIUsers(f.state, path), true
+	}
+	// The M4300 serves http/https as PLAIN named forms and ssh/telnet as
+	// XUI -- measured, see xeServiceFormFields.
+	if service, ok := f.serviceFor(path); ok {
+		if service == "http" || service == "https" {
+			return RenderFormServicePage(f.state, path, service), true
+		}
+		return RenderXUIServicePage(f.state, path, service), true
+	}
+	switch {
 	case spec.LLDPPath != "" && path == spec.LLDPPath:
 		// lldpRemoteInventory.html is the SAME page (and the same XE cell
 		// grid, with 1/0/N ifNames) on the M4300s as on gsm7252ps.
@@ -994,9 +1038,14 @@ func (f *HTTPFace) renderXEPage(path string) (string, bool) {
 		return RenderXELLDP(f.state), true
 	case spec.SysinfoPath:
 		return RenderXESysinfo(f.state), true
-	default:
-		return "", false
+	case spec.UsersPath:
+		return RenderXUIUsers(f.state, path), true
 	}
+	// gsm7252ps renders ALL FOUR service pages as XUI (unlike the M4300).
+	if service, ok := f.serviceFor(path); ok {
+		return RenderXUIServicePage(f.state, path, service), true
+	}
+	return "", false
 }
 
 // renderGS110EMXPage renders one of the GAMBIT token-session model's known

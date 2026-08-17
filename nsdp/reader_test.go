@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/mithro/go-netgear-switch-library/model"
@@ -425,6 +426,33 @@ func TestReader_UnsupportedOpsRaise(t *testing.T) {
 		_, err := reader.GetPoE(ctx)
 		requireUnsupported(t, err)
 	})
+	t.Run("GetUsers", func(t *testing.T) {
+		_, err := reader.GetUsers(ctx)
+		requireUnsupported(t, err)
+	})
+	t.Run("GetServices", func(t *testing.T) {
+		_, err := reader.GetServices(ctx)
+		requireUnsupported(t, err)
+	})
+}
+
+// TestReader_GetUsersGetServicesRefuseByExactMessage mirrors Python's
+// nsdp_read.py get_users/get_services refusal text VERBATIM -- byte-
+// identical to snmp_read.py's own (see nsdp.NoUsersMsg/NoServicesMsg's doc
+// comments): both backends refuse this op the same way, since users is
+// deliberately NOT served over SNMP/NSDP even though a vendor table exists.
+func TestReader_GetUsersGetServicesRefuseByExactMessage(t *testing.T) {
+	reader := newTestReader(t)
+	ctx := context.Background()
+
+	_, err := reader.GetUsers(ctx)
+	if err == nil || !strings.Contains(err.Error(), nsdp.NoUsersMsg) {
+		t.Errorf("GetUsers() error = %v, want it to contain %q", err, nsdp.NoUsersMsg)
+	}
+	_, err = reader.GetServices(ctx)
+	if err == nil || !strings.Contains(err.Error(), nsdp.NoServicesMsg) {
+		t.Errorf("GetServices() error = %v, want it to contain %q", err, nsdp.NoServicesMsg)
+	}
 }
 
 func requireUnsupported(t *testing.T, err error) {
@@ -553,10 +581,12 @@ func TestReader_GetPortsMapsPortName(t *testing.T) {
 
 func TestExportedRefusalMessagesNonEmpty(t *testing.T) {
 	for name, msg := range map[string]string{
-		"NoMACsMsg":    nsdp.NoMACsMsg,
-		"NoLLDPMsg":    nsdp.NoLLDPMsg,
-		"NoSensorsMsg": nsdp.NoSensorsMsg,
-		"NoPoEReadMsg": nsdp.NoPoEReadMsg,
+		"NoMACsMsg":     nsdp.NoMACsMsg,
+		"NoLLDPMsg":     nsdp.NoLLDPMsg,
+		"NoSensorsMsg":  nsdp.NoSensorsMsg,
+		"NoPoEReadMsg":  nsdp.NoPoEReadMsg,
+		"NoUsersMsg":    nsdp.NoUsersMsg,
+		"NoServicesMsg": nsdp.NoServicesMsg,
 	} {
 		if msg == "" {
 			t.Errorf("%s is empty", name)

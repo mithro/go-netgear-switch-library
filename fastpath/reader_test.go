@@ -556,6 +556,103 @@ func TestReaderGetMgmtIPM4300Rename(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// GetUsers/GetServices: no captured device-transcript FIXTURE FILE exists
+// for either command at pin b26eb1f (see parse_users_services_test.go's
+// package doc comment for the principle-5 citation), so these two reader
+// tests use the SAME docstring-transcribed text that file's parser tests
+// use, rather than readCLIFixture.
+// ---------------------------------------------------------------------
+
+func TestReaderGetUsers(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	text := "" +
+		"User Name                 Access Mode\n" +
+		"------------------------  ------------\n" +
+		"admin                     Read/Write\n" +
+		"guest                     Read Only\n"
+	session := oneShotSession(text)
+	r := mustNewReader(t, session, m)
+
+	got, err := r.GetUsers(context.Background())
+	if err != nil {
+		t.Fatalf("GetUsers: %v", err)
+	}
+	want := parseUsers(text)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GetUsers() = %+v, want %+v", got, want)
+	}
+	wantCmds := []string{r.spec.UsersCmd}
+	if gotCmds := session.commandsSnapshot(); !reflect.DeepEqual(gotCmds, wantCmds) {
+		t.Errorf("commands = %v, want %v", gotCmds, wantCmds)
+	}
+	if r.spec.UsersCmd != "show users" {
+		t.Errorf("UsersCmd = %q, want %q", r.spec.UsersCmd, "show users")
+	}
+}
+
+// TestReaderGetServices exercises the three-command round trip (dossier-
+// style routing, mirroring TestReaderGetStats's per-command fake), and
+// confirms the exact command STRINGS -- in particular that the telnet
+// command is "show telnetcon", never "show telnet" (which reports the
+// switch as an outbound telnet client, not the inbound server).
+func TestReaderGetServices(t *testing.T) {
+	m := mustGetModel(t, "m4300-24x")
+	httpText := "" +
+		"HTTP Mode (Unsecure)........................... Enabled\n" +
+		"HTTP Port...................................... 80\n" +
+		"HTTP Mode (Secure)............................. Enabled\n" +
+		"Secure Port..................................... 443\n"
+	telnetText := "" +
+		"Telnet Server Admin Mode....................... Enable\n" +
+		"Telnet Server Port............................. 23\n"
+	sshText := "" +
+		"Administrative Mode: .......................... Enabled\n" +
+		"SSH Port: ...................................... 22\n"
+	session := &fakeCliSession{
+		respond: func(command string) (string, error) {
+			switch command {
+			case "show ip http":
+				return httpText, nil
+			case "show telnetcon":
+				return telnetText, nil
+			case "show ip ssh":
+				return sshText, nil
+			default:
+				return "", errors.New("unexpected command: " + command)
+			}
+		},
+	}
+	r := mustNewReader(t, session, m)
+
+	got, err := r.GetServices(context.Background())
+	if err != nil {
+		t.Fatalf("GetServices: %v", err)
+	}
+	want := parseServices(httpText, telnetText, sshText)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GetServices() = %+v, want %+v", got, want)
+	}
+	wantCmds := []string{"show ip http", "show telnetcon", "show ip ssh"}
+	if gotCmds := session.commandsSnapshot(); !reflect.DeepEqual(gotCmds, wantCmds) {
+		t.Errorf("commands = %v, want %v", gotCmds, wantCmds)
+	}
+}
+
+// TestReaderGetServicesPropagatesSessionError confirms a session failure on
+// ANY of the three commands short-circuits GetServices rather than
+// returning a partial/degraded result.
+func TestReaderGetServicesPropagatesSessionError(t *testing.T) {
+	m := mustGetModel(t, "gsm7252ps")
+	wantErr := errors.New("boom")
+	session := &fakeCliSession{respond: func(string) (string, error) { return "", wantErr }}
+	r := mustNewReader(t, session, m)
+
+	if _, err := r.GetServices(context.Background()); !errors.Is(err, wantErr) {
+		t.Errorf("GetServices() error = %v, want wrapping %v", err, wantErr)
+	}
+}
+
+// ---------------------------------------------------------------------
 // Identify (dossier §3.10): one command, VersionCmd; searches the GLOBAL
 // model registry, not just r.model.
 // ---------------------------------------------------------------------

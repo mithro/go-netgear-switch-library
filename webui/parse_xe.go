@@ -1616,3 +1616,227 @@ func ParseXUIMgmtIP(htmlStr string, addressField, netmaskField, gatewayField, mo
 	}
 	return out, nil
 }
+
+// ---------------------------------------------------------------------------
+// Page-level XUI scalars (userManagement.html / the four service pages)
+// ---------------------------------------------------------------------------
+
+// xeScalarRE mirrors Python parse._XE_SCALAR_RE: a page-level XUI scalar
+// carries NO instance prefix (NAME=v_1_1_1), which is exactly why
+// ParseXERows skips it -- it is not a table row. The service pages read
+// these by coordinate instead.
+var xeScalarRE = regexp.MustCompile(`(?i)NAME=v_(\d+_\d+_\d+) VALUE="([^"]*)"`)
+
+// parseXEScalars mirrors Python parse_xe_rows's sibling read for page-level
+// scalars: `dict(_XE_SCALAR_RE.findall(html))`. Deliberately NOT trimmed or
+// unescaped here -- exactly like the Python dict comprehension it mirrors --
+// so every caller applies whatever normalisation its own field needs (an
+// admin-mode value is lower-cased/trimmed by the caller; a port value is
+// parsed by parseIntCell, which already tolerates surrounding whitespace).
+func parseXEScalars(htmlStr string) map[string]string {
+	out := make(map[string]string)
+	for _, m := range xeScalarRE.FindAllStringSubmatch(htmlStr, -1) {
+		out[m[1]] = m[2]
+	}
+	return out
+}
+
+// checkedRadio returns the value the browser would show SELECTED for radio
+// group name: the LAST checked radio in document order, mirroring Python
+// _checked_radio/_radio_group (parse.py:1636-1666). ok=false when the page
+// carries no radio of this name at all.
+//
+// THE RADIO TRAP (measured verbatim on m4300-24x httpConfiguration.html):
+// every plain-form service page marks BOTH radios of the group "checked",
+// spelled two different ways --
+//
+//	<INPUT type="radio" name="httpAdmin" ... value="Disable" ... checked="checked" disabled="disabled" >
+//	<INPUT type="radio" name="httpAdmin" ... value="Enable"  ... disabled="disabled" CHECKED>
+//
+// A browser applies them in document order, so the LAST one wins and the
+// true state is Enable -- self-evidencing here, since the page was fetched
+// OVER HTTP, so HTTP cannot be disabled. Taking the FIRST match would report
+// every one of these switches as having the service off.
+//
+// Reuses inputRE+tagAttrs (the same generic <input> attribute-map scrape
+// xuiInputsWithCheckboxes/xuiButtons already use) rather than a dedicated
+// lookahead-based regex: Go's RE2 engine has no lookahead support, and
+// extract-tag-then-inspect-attributes is the established equivalent
+// elsewhere in this file.
+func checkedRadio(htmlStr, name string) (string, bool) {
+	value, found := "", false
+	for _, m := range inputRE.FindAllStringSubmatch(htmlStr, -1) {
+		attrs := tagAttrs(m[1])
+		if !strings.EqualFold(attrs["type"], "radio") || attrs["name"] != name {
+			continue
+		}
+		v, hasValue := attrs["value"]
+		if !hasValue {
+			continue
+		}
+		if _, checked := attrs["checked"]; checked {
+			value, found = v, true
+		}
+	}
+	return value, found
+}
+
+// plainFormValue returns a plain named text input's VALUE=, or ok=false if
+// the page has none, mirroring Python _plain_form_value (parse.py:
+// 1672-1687). Same tagAttrs-based approach as checkedRadio, for the same
+// RE2-has-no-lookahead reason.
+func plainFormValue(htmlStr, name string) (string, bool) {
+	for _, m := range inputRE.FindAllStringSubmatch(htmlStr, -1) {
+		attrs := tagAttrs(m[1])
+		if attrs["name"] != name {
+			continue
+		}
+		if v, ok := attrs["value"]; ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// ---------------------------------------------------------------------------
+// userManagement.html -> local login accounts
+// ---------------------------------------------------------------------------
+
+// The login-account grid's coordinates, transcribed from each page's OWN
+// header row (LIVE-CAPTURED 2026-08-03 from gsm7252ps 10.1.5.22 and m4300-24x
+// 10.1.5.13, whose pages are the same XUI row grid -- mirrors Python
+// _USER_NAME/_USER_ACCESS_MODE, parse.py:1771-1772). Deliberately NOT
+// userConfiguration.html, which is the SNMPv3 user page on every managed
+// model and carries no login accounts at all -- reading it here would report
+// SNMPv3 credentials as logins.
+const (
+	xuiUserNameCoord       = "1_1_2" // "User Name"   -> admin / guest
+	xuiUserAccessModeCoord = "1_1_5" // "Access Mode" -> Super User / Read Only
+)
+
+// ParseXUIUsers parses userManagement.html into the switch's local login
+// accounts, mirroring Python parse_xui_users (parse.py:1780-1804) EXACTLY.
+// Returns an error wrapping model.ErrHTTPUnexpectedPage if the page carries
+// NO user rows: a switch always has at least the account this very request
+// authenticated as, so an empty list means the fetch landed somewhere else --
+// "this switch has no accounts" is not an answer any device would give. The
+// password columns (1_1_3/1_1_4) are deliberately never read: gsm7252ps
+// renders them as a literal "********" and the M4300 as empty, so neither
+// carries a secret -- nor anything useful -- which is also why
+// model.SwitchUser has no password field.
+func ParseXUIUsers(htmlStr string) ([]model.SwitchUser, error) {
+	var users []model.SwitchUser
+	for _, row := range ParseXERows(htmlStr) {
+		name := strings.TrimSpace(row[xuiUserNameCoord])
+		if name == "" {
+			continue
+		}
+		access := strings.TrimSpace(row[xuiUserAccessModeCoord])
+		users = append(users, model.SwitchUser{
+			Name:       name,
+			AccessMode: access,
+			// Preserved verbatim: this page says "Super User" where the same
+			// switch's own CLI says "Read/Write" or "Privilege-15".
+			Privileged: model.PrivilegedAccess(access),
+		})
+	}
+	if len(users) == 0 {
+		return nil, errUnexpectedPage(
+			"userManagement.html: no user rows on page (a switch always has at least the account this request authenticated as)")
+	}
+	return users, nil
+}
+
+// ---------------------------------------------------------------------------
+// The four management-service pages (http / https / ssh / telnet)
+// ---------------------------------------------------------------------------
+
+// ServiceNames is the order GetServices reports in, mirroring Python
+// SERVICE_NAMES (parse.py:1728).
+var ServiceNames = []string{"http", "https", "ssh", "telnet"}
+
+// serviceFields is where one service's admin state and port live, in EITHER
+// page shape, mirroring Python _ServiceFields (parse.py:1693-1704).
+type serviceFields struct {
+	// XUIAdmin is the XUI scalar coordinate carrying Enable/Disable.
+	XUIAdmin string
+	// XUIPort is the XUI scalar coordinate carrying the port, where the
+	// page prints one. "" = the page never prints a port for this service.
+	XUIPort string
+	// Radio is the plain-form radio group name carrying Enable/Disable. ""
+	// = no plain-form fallback measured for this service (ssh/telnet).
+	Radio string
+	// FormPort is the plain-form text input carrying the port. "" = none.
+	FormPort string
+}
+
+// serviceFieldsTable is per service, transcribed from the live pages named
+// above (LIVE-MEASURED 2026-08-03 on gsm7252ps 10.1.5.22, gsm7228ps
+// 10.1.5.11 and m4300-24x 10.1.5.13), mirroring Python _SERVICE_FIELDS
+// (parse.py:1709-1725). These pages come in TWO shapes, and the shapes are
+// MIXED WITHIN A SINGLE MODEL, so the parser cannot be keyed by model or by
+// HTMLDialect, only per service:
+//
+//	gsm7252ps  http/https/ssh/telnet  all four XUI labelled scalars
+//	m4300-24x  http/https             PLAIN named form (radios + text inputs)
+//	           ssh/telnet             XUI
+var serviceFieldsTable = map[string]serviceFields{
+	// "HTTP Access". The XUI page prints NO port row, so XUIPort is "" and
+	// the port stays nil there rather than being defaulted to 80.
+	"http": {XUIAdmin: "1_1_1", XUIPort: "", Radio: "httpAdmin", FormPort: "httpPort"},
+	// "HTTPS Admin Mode" + "HTTPS Port" (443 on every switch measured).
+	"https": {XUIAdmin: "1_1_1", XUIPort: "1_4_1", Radio: "sslAdmin", FormPort: "httpsPort"},
+	// "SSH Admin Mode". v_1_10_1 is the SSH Port -- present on m4300
+	// ("22"), ABSENT on gsm7252ps, which is exactly what
+	// model.ServiceStatus.Port's doc comment already records. No
+	// plain-form SSH page has been seen, so there is no radio fallback.
+	"ssh": {XUIAdmin: "1_1_1", XUIPort: "1_10_1", Radio: "", FormPort: ""},
+	// "Telnet Server Admin Mode" -- note the 2_x coordinate: this page's
+	// first section is the authentication lists, not the admin state.
+	"telnet": {XUIAdmin: "2_5_1", XUIPort: "", Radio: "", FormPort: ""},
+}
+
+// ParseServicePage parses one service's config page into its
+// model.ServiceStatus, mirroring Python parse_service_page (parse.py:
+// 1731-1758) EXACTLY: tries the XUI coordinate first, then the plain-form
+// radio group. Returns an error wrapping model.ErrHTTPUnexpectedPage when
+// NEITHER is present rather than reporting the service as disabled -- a page
+// that does not carry the control (the S3300's httpConfiguration.html
+// genuinely does not) says nothing about whether the service is running,
+// and a login redirect says nothing either.
+func ParseServicePage(htmlStr, service string) (model.ServiceStatus, error) {
+	fields := serviceFieldsTable[service]
+	scalars := parseXEScalars(htmlStr)
+	var admin, portText string
+	if v, ok := scalars[fields.XUIAdmin]; ok {
+		admin = v
+		if fields.XUIPort != "" {
+			portText = scalars[fields.XUIPort]
+		}
+	} else {
+		v, ok := "", false
+		if fields.Radio != "" {
+			v, ok = checkedRadio(htmlStr, fields.Radio)
+		}
+		if !ok {
+			radioRepr := "None"
+			if fields.Radio != "" {
+				radioRepr = fmt.Sprintf("%q", fields.Radio)
+			}
+			return model.ServiceStatus{}, errUnexpectedPage(
+				"%s configuration page: no admin-state control found (neither XUI v_%s nor a %s radio group)",
+				service, fields.XUIAdmin, radioRepr)
+		}
+		admin = v
+		if fields.FormPort != "" {
+			if p, ok := plainFormValue(htmlStr, fields.FormPort); ok {
+				portText = p
+			}
+		}
+	}
+	return model.ServiceStatus{
+		Name:    service,
+		Enabled: strings.EqualFold(strings.TrimSpace(admin), "enable"),
+		Port:    intCellPtr(portText),
+	}, nil
+}

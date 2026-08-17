@@ -358,3 +358,33 @@ func (r *Reader) GetPoE(_ context.Context) ([]model.PoEStatus, error) {
 func (r *Reader) GetSensors(_ context.Context) ([]model.Sensor, error) {
 	return nil, unsupportedRead(NoSensorsMsg)
 }
+
+// NoUsersMsg is the exact message GetUsers wraps, mirroring Python
+// nsdp_read.py's inline f-string (nsdp_read.py:275-284) -- byte-identical
+// to snmp_read.py's own get_users refusal text, since both backends refuse
+// this op the same way: users is deliberately NOT served over SNMP/NSDP
+// even though a vendor table exists (the S3300's SNMP user table disagrees
+// with its own CLI), so an empty answer here would be indistinguishable
+// from a switch that genuinely has none.
+const NoUsersMsg = "this backend does not expose local user accounts (no such tag/page/table on this backend)"
+
+// NoServicesMsg is the exact message GetServices wraps, mirroring Python
+// nsdp_read.py's get_services refusal text -- byte-identical to
+// snmp_read.py's own, for the same reason NoUsersMsg is.
+const NoServicesMsg = "this backend does not expose management-service state (http/https/telnet/ssh)"
+
+// GetUsers always returns an error wrapping model.ErrUnsupportedCapability:
+// NSDP exposes no local-user-account tag on these Plus switches. Mirrors
+// Python's NsdpReader.get_users. ctx is accepted-but-unused; see GetLLDP's
+// doc comment.
+func (r *Reader) GetUsers(_ context.Context) ([]model.SwitchUser, error) {
+	return nil, fmt.Errorf("model %q: %s: %w", r.model.Key, NoUsersMsg, model.ErrUnsupportedCapability)
+}
+
+// GetServices always returns an error wrapping
+// model.ErrUnsupportedCapability: NSDP exposes no management-service tag on
+// these Plus switches. Mirrors Python's NsdpReader.get_services. ctx is
+// accepted-but-unused; see GetLLDP's doc comment.
+func (r *Reader) GetServices(_ context.Context) ([]model.ServiceStatus, error) {
+	return nil, fmt.Errorf("model %q: %s: %w", r.model.Key, NoServicesMsg, model.ErrUnsupportedCapability)
+}

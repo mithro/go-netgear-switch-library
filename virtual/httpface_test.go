@@ -1563,6 +1563,32 @@ func TestHTTPFaceXEFaceServesEveryReadOpFromState(t *testing.T) {
 	if v, ok := byKindName[[2]string{"fan", "Fan1/PWR"}]; !ok || v != 1.0 {
 		t.Errorf("sensors[fan/Fan1/PWR] = %v (ok=%v), want 1.0", v, ok)
 	}
+
+	users, err := reader.GetUsers(ctx)
+	if err != nil {
+		t.Fatalf("GetUsers() error = %v", err)
+	}
+	if len(users) != 2 || users[0].Name != "admin" || users[0].AccessMode != "Super User" {
+		t.Errorf("GetUsers() = %+v, want [admin/Super User, guest/Read Only]", users)
+	}
+	if users[0].Privileged == nil || !*users[0].Privileged {
+		t.Errorf("GetUsers()[admin].Privileged = %v, want true", users[0].Privileged)
+	}
+
+	services, err := reader.GetServices(ctx)
+	if err != nil {
+		t.Fatalf("GetServices() error = %v", err)
+	}
+	byServiceName := make(map[string]model.ServiceStatus, len(services))
+	for _, s := range services {
+		byServiceName[s.Name] = s
+	}
+	if !byServiceName["http"].Enabled || byServiceName["http"].Port != nil {
+		t.Errorf("GetServices()[http] = %+v, want enabled=true, port=nil (this page prints no HTTP Port line)", byServiceName["http"])
+	}
+	if byServiceName["telnet"].Enabled {
+		t.Errorf("GetServices()[telnet] = %+v, want enabled=false (measured off on 10.1.5.22)", byServiceName["telnet"])
+	}
 }
 
 // TestHTTPFaceXEFace404sAPathTheSpecDoesNotServe: this model's spec has no
@@ -1903,9 +1929,16 @@ func TestHTTPFaceM4300ServesEveryReadOpFromState(t *testing.T) {
 		modelKey string
 		seed     func() *State
 		hasPoE   bool
+		// usersSeeded is true only for m4300-24x: SeedM4300_16X leaves
+		// State.Users/Services unset (unmeasured on that SKU -- see its
+		// own doc comment), even though webui.HTTPModelSpec inherits
+		// m4300-24x's UsersPath/*ServicePath paths unchanged. This proves
+		// the fake honestly 404s those paths on m4300-16x rather than
+		// serving m4300-24x's data under a different model's name.
+		usersSeeded bool
 	}{
-		{"m4300-24x", SeedM4300_24X, false},
-		{"m4300-16x", SeedM4300_16X, true},
+		{"m4300-24x", SeedM4300_24X, false, true},
+		{"m4300-16x", SeedM4300_16X, true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.modelKey, func(t *testing.T) {
@@ -2004,6 +2037,38 @@ func TestHTTPFaceM4300ServesEveryReadOpFromState(t *testing.T) {
 				}
 				if len(poe) != len(st.Poe) {
 					t.Errorf("GetPoE() returned %d ports, want %d (seeded)", len(poe), len(st.Poe))
+				}
+			}
+
+			if tt.usersSeeded {
+				users, err := reader.GetUsers(ctx)
+				if err != nil {
+					t.Fatalf("GetUsers() error = %v", err)
+				}
+				if len(users) != 2 || users[0].Name != "admin" || users[0].AccessMode != "Super User" {
+					t.Errorf("GetUsers() = %+v, want [admin/Super User, guest/Read Only]", users)
+				}
+				services, err := reader.GetServices(ctx)
+				if err != nil {
+					t.Fatalf("GetServices() error = %v", err)
+				}
+				byName := make(map[string]model.ServiceStatus, len(services))
+				for _, s := range services {
+					byName[s.Name] = s
+				}
+				if !byName["http"].Enabled || byName["http"].Port == nil || *byName["http"].Port != 80 {
+					t.Errorf("GetServices()[http] = %+v, want enabled=true, port=80", byName["http"])
+				}
+			} else {
+				// The spec inherits m4300-24x's UsersPath/*ServicePath
+				// unchanged, but this SKU's own seed never populated
+				// State.Users/Services -- the fake must 404 those paths
+				// honestly rather than serving another model's data.
+				if _, err := reader.GetUsers(ctx); err == nil {
+					t.Error("GetUsers() on m4300-16x (unseeded) error = nil, want a 404")
+				}
+				if _, err := reader.GetServices(ctx); err == nil {
+					t.Error("GetServices() on m4300-16x (unseeded) error = nil, want a 404")
 				}
 			}
 		})

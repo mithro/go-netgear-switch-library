@@ -25,24 +25,28 @@ import (
 // can model "this backend serves ports+vlans but not macs/lldp/sensors"
 // (Snapshot's per-field degrade tests) without needing a new type per case.
 type stubReader struct {
-	ports      []model.PortStatus
-	portsErr   error
-	stats      []model.PortStats
-	statsErr   error
-	vlans      []model.VLANInfo
-	vlansErr   error
-	pvids      []model.Pvid
-	pvidsErr   error
-	lldp       []model.LLDPNeighbor
-	lldpErr    error
-	macs       []model.MacEntry
-	macsErr    error
-	poe        []model.PoEStatus
-	poeErr     error
-	sensors    []model.Sensor
-	sensorsErr error
-	mgmtIP     model.MgmtIPConfig
-	mgmtIPErr  error
+	ports       []model.PortStatus
+	portsErr    error
+	stats       []model.PortStats
+	statsErr    error
+	vlans       []model.VLANInfo
+	vlansErr    error
+	pvids       []model.Pvid
+	pvidsErr    error
+	lldp        []model.LLDPNeighbor
+	lldpErr     error
+	macs        []model.MacEntry
+	macsErr     error
+	poe         []model.PoEStatus
+	poeErr      error
+	sensors     []model.Sensor
+	sensorsErr  error
+	mgmtIP      model.MgmtIPConfig
+	mgmtIPErr   error
+	users       []model.SwitchUser
+	usersErr    error
+	services    []model.ServiceStatus
+	servicesErr error
 }
 
 func (s *stubReader) GetPorts(context.Context) ([]model.PortStatus, error) {
@@ -98,6 +102,18 @@ func (s *stubReader) GetMgmtIP(context.Context) (model.MgmtIPConfig, error) {
 		return model.MgmtIPConfig{}, s.mgmtIPErr
 	}
 	return s.mgmtIP, nil
+}
+func (s *stubReader) GetUsers(context.Context) ([]model.SwitchUser, error) {
+	if s.usersErr != nil {
+		return nil, s.usersErr
+	}
+	return s.users, nil
+}
+func (s *stubReader) GetServices(context.Context) ([]model.ServiceStatus, error) {
+	if s.servicesErr != nil {
+		return nil, s.servicesErr
+	}
+	return s.services, nil
 }
 
 // wrapUnsupported/wrapCredential build an error that errors.Is-matches the
@@ -331,6 +347,66 @@ func TestSwitch_GetMgmtIP_DelegatesToBackend(t *testing.T) {
 	}
 	if got.Mode != model.IPModeStatic || *got.Address != "10.0.0.1" {
 		t.Fatalf("GetMgmtIP() = %v, want %v", got, want)
+	}
+}
+
+// --- GetUsers/GetServices: plain delegation, no facade-level gate ----------
+
+func TestSwitch_GetUsers_DelegatesToBackend(t *testing.T) {
+	clearBackendRegistry(t)
+	want := []model.SwitchUser{{Name: "admin", AccessMode: "Read/Write", Privileged: model.Ptr(true)}}
+	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
+		return &stubReader{users: want}, nil
+	})
+	sw := mustSwitch(t, fakeModel("fake", model.BackendSNMP), "10.0.0.1")
+
+	got, err := sw.GetUsers(context.Background())
+	if err != nil {
+		t.Fatalf("GetUsers() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "admin" {
+		t.Fatalf("GetUsers() = %v, want %v", got, want)
+	}
+}
+
+func TestSwitch_GetUsers_PropagatesBackendError(t *testing.T) {
+	clearBackendRegistry(t)
+	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
+		return &stubReader{usersErr: wrapUnsupported("this backend does not expose local user accounts")}, nil
+	})
+	sw := mustSwitch(t, fakeModel("fake", model.BackendSNMP), "10.0.0.1")
+
+	if _, err := sw.GetUsers(context.Background()); !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("GetUsers() error = %v, want wrapping ErrUnsupportedCapability", err)
+	}
+}
+
+func TestSwitch_GetServices_DelegatesToBackend(t *testing.T) {
+	clearBackendRegistry(t)
+	want := []model.ServiceStatus{{Name: "http", Enabled: true, Port: model.Ptr(80)}}
+	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
+		return &stubReader{services: want}, nil
+	})
+	sw := mustSwitch(t, fakeModel("fake", model.BackendSNMP), "10.0.0.1")
+
+	got, err := sw.GetServices(context.Background())
+	if err != nil {
+		t.Fatalf("GetServices() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "http" || got[0].Port == nil || *got[0].Port != 80 {
+		t.Fatalf("GetServices() = %v, want %v", got, want)
+	}
+}
+
+func TestSwitch_GetServices_PropagatesBackendError(t *testing.T) {
+	clearBackendRegistry(t)
+	withRegisteredBackend(t, model.BackendSNMP, func(_ *Switch) (BackendReader, error) {
+		return &stubReader{servicesErr: wrapUnsupported("this backend does not expose management-service state")}, nil
+	})
+	sw := mustSwitch(t, fakeModel("fake", model.BackendSNMP), "10.0.0.1")
+
+	if _, err := sw.GetServices(context.Background()); !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Fatalf("GetServices() error = %v, want wrapping ErrUnsupportedCapability", err)
 	}
 }
 

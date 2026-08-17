@@ -295,6 +295,28 @@ type HTTPModelSpec struct {
 	// FASTPATH XUI form. nil for the Plus/GoAhead models, whose mgmt-IP
 	// pages are a different shape entirely.
 	MgmtIPFields *XuiMgmtIPFields
+
+	// UsersPath is the local login-account page (GetUsers). "" = no such
+	// page located for this model's UI -- deliberately NOT
+	// "userConfiguration.html", which is the SNMPv3 user page on every
+	// managed model (see _FASTPATH_USERS's Python doc comment). Only set
+	// for m4300-24x/m4300-16x and gsm7252ps; NOT set for gsm7228ps (its
+	// userManagement.html 404s -- an unbuilt implementation to find, not a
+	// device limitation).
+	UsersPath string
+	// HTTPServicePath/HTTPSServicePath/SSHServicePath/TelnetServicePath are
+	// the four management-service config pages (GetServices). ALL FOUR
+	// must be populated for the op to be offered -- reporting three of four
+	// would look like "this switch has no SSH" rather than "this UI does
+	// not say" (see webui.Reader's requireServicePaths). Only set for
+	// m4300-24x/m4300-16x and gsm7252ps; gsm7228ps's pages were measured to
+	// be incomplete (httpConfiguration.html carries no admin control,
+	// sshConfiguration.html 404s), so all four stay "" there and the op is
+	// refused by name rather than reporting three of four.
+	HTTPServicePath   string
+	HTTPSServicePath  string
+	SSHServicePath    string
+	TelnetServicePath string
 }
 
 // Shared FASTPATH/XUI path fragments, mirroring the Python module-level
@@ -313,6 +335,28 @@ const (
 	m4300MgmtIPPath          = "/v1/mgmtVlanIpv4Configuration.html"
 	m4300PortConfigPath      = "/v1" + fastpathPortConfig
 	m4300PoEConfigPath       = "/v1" + fastpathPoEConfig
+
+	// fastpathUsers is the LOGIN-ACCOUNT page, transcribed from Python's
+	// _FASTPATH_USERS: "the obvious name is a trap" -- both families' nav
+	// trees also list userConfiguration.html, and on every managed switch
+	// that page is the SNMPv3 user page, carrying no login accounts at all.
+	// LIVE-FETCHED 2026-08-03: 10.1.5.22 -> 200 "NetGear - User
+	// Management", admin/Super User + guest; 10.1.5.13 -> 200 "NETGEAR -
+	// User Management", the same two rows.
+	fastpathUsers  = "/userManagement.html"
+	m4300UsersPath = "/v1" + fastpathUsers
+	// fastpathHTTPServicePath/.../fastpathTelnetServicePath are the four
+	// management-service pages, transcribed from Python's
+	// _FASTPATH_SERVICE_PAGES. Same filenames on both families; only the
+	// /v1 prefix differs (applied per model below).
+	fastpathHTTPServicePath   = "/httpConfiguration.html"
+	fastpathHTTPSServicePath  = "/httpsConfiguration.html"
+	fastpathSSHServicePath    = "/sshConfiguration.html"
+	fastpathTelnetServicePath = "/telnet.html"
+	m4300HTTPServicePath      = "/v1" + fastpathHTTPServicePath
+	m4300HTTPSServicePath     = "/v1" + fastpathHTTPSServicePath
+	m4300SSHServicePath       = "/v1" + fastpathSSHServicePath
+	m4300TelnetServicePath    = "/v1" + fastpathTelnetServicePath
 )
 
 func intPtr(v int) *int { return &v }
@@ -548,6 +592,16 @@ var m430024xSpec = HTTPModelSpec{
 	PvidPath:               "/v1/portPvidConfiguration.html",
 	// reboot_path / logout_path: never captured -- stay "".
 
+	// UsersPath/*ServicePath: LIVE-FETCHED 2026-08-03 on 10.1.5.13 -- see
+	// fastpathUsers/fastpathHTTPServicePath's doc comments. m430016xSpec
+	// (below) inherits these unchanged, exactly as Python's
+	// dataclasses.replace(_M4300, ...) never touches them.
+	UsersPath:         m4300UsersPath,
+	HTTPServicePath:   m4300HTTPServicePath,
+	HTTPSServicePath:  m4300HTTPSServicePath,
+	SSHServicePath:    m4300SSHServicePath,
+	TelnetServicePath: m4300TelnetServicePath,
+
 	IsEPXPoE:      false,
 	ReadsVerified: true,
 	HTMLDialect:   HTMLDialectM4300,
@@ -622,6 +676,14 @@ var gsm7252psSpec = HTTPModelSpec{
 	VlanMembershipPostPath: fastpathVlanMembershipRW,
 	PvidPath:               "/portPvidConfiguration.html",
 	// reboot_path / logout_path: never captured -- stay "".
+
+	// UsersPath/*ServicePath: LIVE-FETCHED 2026-08-03 on 10.1.5.22 -- see
+	// fastpathUsers/fastpathHTTPServicePath's doc comments.
+	UsersPath:         fastpathUsers,
+	HTTPServicePath:   fastpathHTTPServicePath,
+	HTTPSServicePath:  fastpathHTTPSServicePath,
+	SSHServicePath:    fastpathSSHServicePath,
+	TelnetServicePath: fastpathTelnetServicePath,
 
 	IsEPXPoE:      false,
 	ReadsVerified: true, // live HTTP<->SNMP cross-verified 2026-07-23
