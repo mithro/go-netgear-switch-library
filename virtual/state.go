@@ -105,6 +105,26 @@ type VlanSim struct {
 	// default) = configured and current coincide, the normal case. Mirrors
 	// Python VlanSim.configured_only.
 	ConfiguredOnly map[int]bool
+	// NoStaticRow is true when this VLAN has NO dot1qVlanStaticTable row at
+	// all -- present only in dot1qVlanCurrentTable. Mirrors Python
+	// VlanSim.static_row, INVERTED (Python defaults True; Go's bool zero
+	// value is false) so the Go zero value is the normal case and every
+	// existing seed is unaffected without touching it.
+	//
+	// MEASURED on the GS728TPP (sw-netgear-gs728tpp.monarto.mithis.com /
+	// 10.2.5.10, firmware 6.0.1.30, 2026-08-02): its default VLAN 1 does
+	// NOT have one. A walk of dot1qVlanStaticName/Egress/Untagged/
+	// RowStatus returns exactly 12 rows -- ids 2,3,4,5,6,7,10,20,31,41,90,99
+	// -- while dot1qVlanCurrentTable returns 13, the extra one being VLAN 1
+	// with dot1qVlanStatus = 1 (other) where every other VLAN reads 2
+	// (permanent). The web UI lists VLAN 1, so a reader that consults only
+	// the static table loses it; see snmp.ParseVlans, which reads both
+	// tables because of this.
+	//
+	// False (the default) is itself measured as the normal case: the
+	// GSM7252PS, both M4300s and the S3300-52X all publish a static VLAN 1
+	// row.
+	NoStaticRow bool
 }
 
 // Configured returns the CONFIGURED egress set: current members plus

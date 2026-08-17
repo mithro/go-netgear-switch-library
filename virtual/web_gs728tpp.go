@@ -60,11 +60,35 @@ func goAheadMacText(raw [6]byte) string {
 	return strings.Join(parts, ":")
 }
 
+// physicalGS728TPPPorts returns the switch's PHYSICAL ports only, in
+// order, mirroring Python web_gs728tpp._physical_ports.
+//
+// The seed carries ifIndex-keyed entries for the eight LAG pseudo-
+// interfaces ("po 1".."po 8" at 1000-1007, ifType 161) because the
+// switch's Q-BRIDGE bitmaps really do include them (see
+// SeedGS728TPP -- GAP-2 fix parity with Python commit 3f25b0b). The real
+// wcd pages list ONLY physical ports: a live Standard802_3List fetch
+// returns 28 <Entry> rows, and the per-port VLANInterfaceList likewise.
+// Rendering the LAGs would make the HTTP reader report interfaces the web
+// UI never shows -- and disagree with SNMP, which filters them by ifType
+// (snmp.ParseVlans/ParsePvids).
+func physicalGS728TPPPorts(state *State) []int {
+	portCount := state.mustModel().PortCount
+	all := sortedIntKeys(state.Ports)
+	out := make([]int, 0, len(all))
+	for _, p := range all {
+		if p <= portCount {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // RenderGS728TPPPorts renders the Standard802_3List wcd section. Mirrors
 // Python web_gs728tpp.render_ports.
 func RenderGS728TPPPorts(state *State) string {
 	var rows strings.Builder
-	for _, p := range sortedIntKeys(state.Ports) {
+	for _, p := range physicalGS728TPPPorts(state) {
 		sim := state.Ports[p]
 		desc := ""
 		if sim.Description != nil {
@@ -87,7 +111,7 @@ func RenderGS728TPPPorts(state *State) string {
 // web_gs728tpp.render_pvids_membership.
 func RenderGS728TPPPvidsMembership(state *State) string {
 	var rows strings.Builder
-	for _, p := range sortedIntKeys(state.Ports) {
+	for _, p := range physicalGS728TPPPorts(state) {
 		var entries strings.Builder
 		for _, vid := range sortedIntKeys(state.Vlans) {
 			vlan := state.Vlans[vid]

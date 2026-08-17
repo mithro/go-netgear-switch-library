@@ -1213,12 +1213,27 @@ func TestHTTPFaceGoAheadFaceServesEveryReadOpFromState(t *testing.T) {
 		t.Fatalf("webui.NewReader: %v", err)
 	}
 
+	// physicalCount counts only the set's members at or below the model's
+	// physical port count: the seed also carries ifIndex-keyed entries for
+	// the eight LAG pseudo-interfaces (1000-1007, GAP-2 fix parity with
+	// Python commit 3f25b0b), which the real wcd pages never list -- see
+	// physicalGS728TPPPorts's own doc comment.
+	physicalCount := func(set map[int]bool) int {
+		n := 0
+		for p := range set {
+			if p <= m.PortCount {
+				n++
+			}
+		}
+		return n
+	}
+
 	ports, err := reader.GetPorts(ctx)
 	if err != nil {
 		t.Fatalf("GetPorts() error = %v", err)
 	}
-	if len(ports) != len(st.Ports) {
-		t.Fatalf("GetPorts() returned %d ports, want %d (seeded)", len(ports), len(st.Ports))
+	if len(ports) != m.PortCount {
+		t.Fatalf("GetPorts() returned %d ports, want %d (physical only -- the seed's 8 LAG pseudo-interfaces are never listed by the real wcd pages)", len(ports), m.PortCount)
 	}
 	for _, p := range ports {
 		sim, ok := st.Ports[p.Port]
@@ -1234,8 +1249,8 @@ func TestHTTPFaceGoAheadFaceServesEveryReadOpFromState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPVIDs() error = %v", err)
 	}
-	if len(pvids) != len(st.Pvids) {
-		t.Errorf("GetPVIDs() returned %d rows, want %d (seeded)", len(pvids), len(st.Pvids))
+	if len(pvids) != m.PortCount {
+		t.Errorf("GetPVIDs() returned %d rows, want %d (physical only)", len(pvids), m.PortCount)
 	}
 
 	vlans, err := reader.GetVLANs(ctx)
@@ -1247,8 +1262,9 @@ func TestHTTPFaceGoAheadFaceServesEveryReadOpFromState(t *testing.T) {
 	}
 	for _, v := range vlans {
 		vsim := st.Vlans[v.VlanID]
-		if len(v.MemberPorts) != len(vsim.Member) {
-			t.Errorf("VLAN %d MemberPorts = %v, want len %d (seeded)", v.VlanID, v.MemberPorts, len(vsim.Member))
+		wantMembers := physicalCount(vsim.Member)
+		if len(v.MemberPorts) != wantMembers {
+			t.Errorf("VLAN %d MemberPorts = %v, want len %d (seeded, physical members only)", v.VlanID, v.MemberPorts, wantMembers)
 		}
 	}
 
