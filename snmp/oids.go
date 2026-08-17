@@ -164,6 +164,29 @@ const (
 	// shape: <column>.<group>.<port>; only columns 3 (admin) and 6 (detect)
 	// are honoured -- never column 1.
 	PethPsePortTable = "1.3.6.1.2.1.105.1.1.1"
+	// PethPsePortAdmin/PethPsePortDetect are the ONLY two columns ParsePoe
+	// honours (pethPsePortAdminEnable / pethPsePortDetectionStatus) --
+	// walked as two column-scoped GETBULKs instead of the whole table
+	// (GetPoE, reader.go), per python-netgear-switch-library commit
+	// 86af0a9. Not a micro-optimisation on real hardware: MEASURED on
+	// sw-netgear-gs728tpp.monarto.mithis.com (10.2.5.10, firmware 6.0.1.30,
+	// via the ten64 jump host), each figure the mean of repeated runs on an
+	// otherwise idle switch --
+	//
+	//	ifName (69 rows)                    1.5s
+	//	whole PethPsePortTable (288 rows) 102.0s
+	//	PethPsePortAdmin       (24 rows)   11.7s
+	//	PethPsePortDetect      (24 rows)   11.4s
+	//
+	// -- so the agent answers this MIB at roughly 0.35s/varbind: two column
+	// walks cost ~23s where the table walk cost 102s. That is what made a
+	// PoE WRITE (which verifies by re-reading) unusable rather than merely
+	// slow. Raising max-repetitions is NOT an alternative -- it is actively
+	// unsafe here: -Cr25 returned a TRUNCATED 50 rows in 44s, i.e. this
+	// agent mishandles large GETBULKs on this table. Fetching fewer
+	// varbinds is the only sound speed-up.
+	PethPsePortAdmin  = PethPsePortTable + ".3" // pethPsePortAdminEnable
+	PethPsePortDetect = PethPsePortTable + ".6" // pethPsePortDetectionStatus
 
 	// IPAdEntAddr is ipAdEntAddr (RFC-1213 ipAddrTable).
 	IPAdEntAddr = "1.3.6.1.2.1.4.20.1.1"

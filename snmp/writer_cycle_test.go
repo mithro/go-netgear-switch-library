@@ -112,10 +112,17 @@ func (c *stuckOffPoeClient) Set(_ context.Context, vb SetVarbind) error {
 // (offAfter+1)th / (onAfter+1)th round (and every one after it) sees the
 // transitioned state. This lets a test pin the EXACT number of poll
 // iterations -- and therefore the exact sleep count -- a phase takes
-// before its predicate is satisfied. Only Walk(PethPsePortTable) advances
+// before its predicate is satisfied. Only Walk(PethPsePortAdmin) advances
 // the per-phase counter (every other walk, e.g. GetPorts' ifAdminStatus/
 // ifOperStatus/etc. walks, passes straight through unmodified), since
-// poeRearm's poll loop reads PoE status exactly once per iteration.
+// poeRearm's poll loop reads PoE status exactly once per iteration --
+// GetPoE now issues TWO column walks per call (PethPsePortAdmin then
+// PethPsePortDetect, parity 86af0a9), so the counter must advance on only
+// ONE of the pair to keep "one poll = one counter increment"; it advances
+// on the FIRST of the two (PethPsePortAdmin) so any table transition
+// decided there is already in place -- consistently, not torn -- by the
+// time the SECOND walk of the same poll (PethPsePortDetect) reads the same
+// underlying c.tables[PethPsePortTable].
 type stepPoeClient struct {
 	*fakeWriteClient
 	port              int
@@ -145,7 +152,7 @@ func (c *stepPoeClient) Set(_ context.Context, vb SetVarbind) error {
 }
 
 func (c *stepPoeClient) Walk(ctx context.Context, base string) ([]Row, error) {
-	if base == PethPsePortTable && c.lastSet != 0 {
+	if base == PethPsePortAdmin && c.lastSet != 0 {
 		need := c.offAfter
 		if c.lastSet == 1 {
 			need = c.onAfter

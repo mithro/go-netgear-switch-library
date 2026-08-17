@@ -47,6 +47,8 @@ func TestOIDConstants(t *testing.T) {
 		{"EntPhysicalName", snmp.EntPhysicalName, "1.3.6.1.2.1.47.1.1.1.1.7"},
 		{"LldpRemTable", snmp.LldpRemTable, "1.0.8802.1.1.2.1.4.1"},
 		{"PethPsePortTable", snmp.PethPsePortTable, "1.3.6.1.2.1.105.1.1.1"},
+		{"PethPsePortAdmin", snmp.PethPsePortAdmin, "1.3.6.1.2.1.105.1.1.1.3"},
+		{"PethPsePortDetect", snmp.PethPsePortDetect, "1.3.6.1.2.1.105.1.1.1.6"},
 		{"IPAdEntAddr", snmp.IPAdEntAddr, "1.3.6.1.2.1.4.20.1.1"},
 		{"IPAdEntIfIndex", snmp.IPAdEntIfIndex, "1.3.6.1.2.1.4.20.1.2"},
 		{"IPAdEntNetmask", snmp.IPAdEntNetmask, "1.3.6.1.2.1.4.20.1.3"},

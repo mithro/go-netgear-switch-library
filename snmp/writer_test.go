@@ -10,9 +10,11 @@ import (
 	"github.com/mithro/go-netgear-switch-library/model"
 )
 
-// fakeWriteClient serves canned Rows by exact walked/get-requested base OID
-// (a missing key answers an empty walk/get, mirroring a real agent's
-// noSuchObject/empty-subtree response) and records every SET it receives,
+// fakeWriteClient serves canned Rows by exact get-requested OID (Get) but by
+// OID PREFIX for a walked base OID (Walk, via walkByPrefix -- shared with
+// fakeReaderClient in reader_test.go: both in package snmp), mirroring a
+// real agent's noSuchObject/empty-subtree response for either, and records
+// every SET it receives,
 // both flattened (sets) and per-PDU (calls, so a test can distinguish N
 // separate single-varbind SET calls from one set_many call carrying
 // multiple varbinds). When apply is true, SetMany also does a "crude
@@ -41,7 +43,7 @@ func (f *fakeWriteClient) Get(_ context.Context, oids []string) ([]Row, error) {
 }
 
 func (f *fakeWriteClient) Walk(_ context.Context, base string) ([]Row, error) {
-	return append([]Row(nil), f.tables[base]...), nil
+	return walkByPrefix(f.tables, base), nil
 }
 
 func (f *fakeWriteClient) Set(ctx context.Context, vb SetVarbind) error {

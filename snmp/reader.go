@@ -181,19 +181,28 @@ func (r *Reader) GetMACs(ctx context.Context) ([]model.MacEntry, error) {
 // raises an error wrapping model.ErrUnsupportedCapability BEFORE any walk,
 // mirroring the CLI/HTTP readers, so PoE is reported unsupported
 // CONSISTENTLY across every backend rather than SNMP silently returning []
-// from an empty PethPsePortTable while CLI/HTTP raise. Otherwise walks the
-// standard PethPsePortTable always, plus the Netgear vendor per-port
-// delivered-power (mW) column ONLY when the model has a vendor OID subtree
-// (HasVendorOids); a model with none (e.g. gs728tpp) leaves power_mw
-// honestly nil for every port.
+// from an empty PethPsePortTable while CLI/HTTP raise. Otherwise walks TWO
+// column-scoped OIDs (PethPsePortAdmin, PethPsePortDetect) rather than the
+// whole PethPsePortTable -- ParsePoe honours only those two columns, and on
+// real hardware the whole-table walk is over 4x slower than the two column
+// walks combined (see PethPsePortAdmin's doc comment for the measurement;
+// parity python-netgear-switch-library commit 86af0a9) -- plus the Netgear
+// vendor per-port delivered-power (mW) column ONLY when the model has a
+// vendor OID subtree (HasVendorOids); a model with none (e.g. gs728tpp)
+// leaves power_mw honestly nil for every port.
 func (r *Reader) GetPoE(ctx context.Context) ([]model.PoEStatus, error) {
 	if r.model.PoEPortCount == 0 {
 		return nil, fmt.Errorf("model %q has no PoE (no PSE ports): %w", r.model.Key, model.ErrUnsupportedCapability)
 	}
-	status, err := r.client.Walk(ctx, PethPsePortTable)
+	admin, err := r.client.Walk(ctx, PethPsePortAdmin)
 	if err != nil {
 		return nil, err
 	}
+	detect, err := r.client.Walk(ctx, PethPsePortDetect)
+	if err != nil {
+		return nil, err
+	}
+	status := append(admin, detect...)
 	var power []Row
 	if HasVendorOids(r.model) {
 		vendor, verr := GetVendorOids(r.model)
