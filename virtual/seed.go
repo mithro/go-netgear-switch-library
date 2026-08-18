@@ -1,13 +1,17 @@
 package virtual
 
 // Code in this file (SeedGSM7252PS, SeedGSM7228PS, SeedM4300_24X,
-// SeedM4300_16X, SeedGS728TPP, SeedGS110EMX, SeedGS305EP, SeedGS105PE,
-// BuildState) is a byte-for-byte transcription of
-// src/netgear_switch/virtual/seed.py's seed_gsm7252ps/seed_gsm7228ps/
-// seed_m4300_24x/seed_m4300_16x/seed_gs728tpp/seed_gs110emx/seed_gs305ep/
-// seed_gs105pe/_build_state (the normative source; that repo is read-only
-// from here -- pin 1aa1274, branch fix/s3300-52x-live-verify). Any
-// discrepancy between this file and the Python source is a bug here. See
+// SeedM4300_16X, SeedGS728TPP, SeedGS110EMX, SeedGS305EP, SeedGS105PE) is a
+// byte-for-byte transcription of src/netgear_switch/virtual/seed.py's
+// seed_gsm7252ps/seed_gsm7228ps/seed_m4300_24x/seed_m4300_16x/
+// seed_gs728tpp/seed_gs110emx/seed_gs305ep/seed_gs105pe (the normative
+// source; that repo is read-only from here -- pin b26eb1f). BuildState
+// instead mirrors _build_state, which lives in server.py (not seed.py) as
+// of pin b26eb1f: a small model-key -> seed-builder dict (_SEEDS) plus the
+// one-line dispatch/fallback function itself (server.py:45-59) --
+// BuildState's switch below is that dict-lookup-or-blank-state shape, just
+// spelled as a Go switch. Any discrepancy between this file and the Python
+// source is a bug here. See
 // D-VIRT §4 for the SNMP-model seeds' dossier transcription (NOTE: §4.2's
 // gsm7228ps text is documented STALE there -- this file transcribes
 // gsm7228ps from the CURRENT, capture-based seed.py function, not the

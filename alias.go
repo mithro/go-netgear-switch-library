@@ -249,12 +249,12 @@ func Models() []*SwitchModel {
 	return model.Models()
 }
 
-// Operations is the full 21-entry read+write operation table, re-exported
-// from capabilities.Operations. ReadOperations/WriteOperations/
-// OperationByName are DELIBERATELY not re-exported here -- reach them via
-// the capabilities package directly, mirroring Python's netgear_switch
-// top-level package re-exporting only a subset of netgear_switch.capabilities
-// (dossier §2).
+// Operations is the full 32-entry read+write operation table (14 read + 18
+// write), re-exported from capabilities.Operations. ReadOperations/
+// WriteOperations/OperationByName are DELIBERATELY not re-exported here --
+// reach them via the capabilities package directly, mirroring Python's
+// netgear_switch top-level package re-exporting only a subset of
+// netgear_switch.capabilities (dossier §2).
 var Operations = capabilities.Operations
 
 // For is the capability oracle's top-level verdict function; see

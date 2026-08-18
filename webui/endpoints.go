@@ -37,8 +37,11 @@ import (
 //   - HTMLDialect has 7 members, not 6: the dossier's own enum listing
 //     (and prose) includes S3300 ("s3300", used by gsm7228ps) alongside the
 //     6 the section header claims.
-//   - HTTPModelSpec has 36 fields, not 34: a literal field-by-field count
-//     of the dataclass (dossier's own §1.4 code block) totals 36.
+//   - HTTPModelSpec has 43 fields, not 34: a literal field-by-field count
+//     of the dataclass (dossier's own §1.4 code block) totalled 36 when this
+//     note was first written; the pin's dataclass has since grown to 43
+//     fields (recounted directly against pin b26eb1f), so the Go struct
+//     below (also 43) still matches it field-for-field.
 //   - gsm7228ps's cert_upload_form_fields has 22 entries, not the "19-key"
 //     the dossier's §1.5 prose claims; the transcribed table below has all
 //     22, copied verbatim from source lines 567-590.
@@ -200,7 +203,7 @@ var mgmtIPFieldsM4300 = XuiMgmtIPFields{
 
 // HTTPModelSpec records how one model logs in and which page each read/
 // write op uses, mirroring Python protocols.http.endpoints.HTTPModelSpec
-// (all 36 fields -- see the SOURCE DISCREPANCIES note above; the dossier's
+// (all 43 fields -- see the SOURCE DISCREPANCIES note above; the dossier's
 // "34" is wrong). SchemeVerified/ReadsVerified mark whether that model's
 // flows are grounded in captured prior art or still
 // UNVERIFIED-pending-capture; see HTTPSpecs's per-model vars for the
