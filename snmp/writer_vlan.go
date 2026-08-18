@@ -141,12 +141,34 @@ func (w *Writer) SetVlanMembership(ctx context.Context, vlanID, port int, mode m
 	if err := w.guard(port, force); err != nil {
 		return err
 	}
-	before, err := w.vlan(ctx, vlanID)
+	// Fetch every VLAN once (mirrors Python's `vlans = self._reader.get_vlans()`
+	// at the top of set_vlan_membership): the switchport dialect below needs
+	// the FULL list (existing_vlans, and every VLAN's current membership of
+	// `port`), not just the target VLAN.
+	vlans, err := w.reader.GetVLANs(ctx)
 	if err != nil {
 		return err
 	}
+	var before *model.VLANInfo
+	for i := range vlans {
+		if vlans[i].VlanID == vlanID {
+			before = &vlans[i]
+			break
+		}
+	}
 	if before == nil {
+		// Precondition failure: no SET has been attempted, so this is NOT a
+		// verification divergence.
 		return errSNMP("VLAN %d does not exist", vlanID)
+	}
+	if w.model.SnmpVlanWrite == model.SNMPVlanWriteFastpathSwitchport {
+		// FASTPATH 12.x (both M4300 SKUs): the Q-BRIDGE PortLists below are
+		// read-only mirrors on this dialect -- membership must go through
+		// the vendor switchport table instead. See writer_switchport.go's
+		// PlanSwitchportMembership for the full derivation and live
+		// evidence, mirroring Python SnmpWriter.set_vlan_membership's own
+		// dispatch (snmp_write.py:673-675).
+		return w.setVlanSwitchport(ctx, vlanID, port, mode, before, vlans)
 	}
 	rawEgress, err := w.rawBitmap(ctx, Dot1qVlanStaticEgress, vlanID)
 	if err != nil {
@@ -174,8 +196,26 @@ func (w *Writer) SetVlanMembership(ctx context.Context, vlanID, port int, mode m
 	if err != nil {
 		return err
 	}
-	if err := w.client.SetMany(ctx, []SetVarbind{egressVb, untaggedVb}); err != nil {
-		return err
+	if w.model.SnmpVlanSplitMembershipWrites {
+		// Egress FIRST, then untagged, in SEPARATE PDUs: this firmware
+		// (verified live on the S3300-52X-PoE+, 10.1.5.11) auto-untags a
+		// port when its egress bit is set, and that side effect overrides
+		// an untagged varbind in the SAME PDU -- see
+		// model.SwitchModel.SnmpVlanSplitMembershipWrites's own doc comment
+		// for the live before/after evidence. Mirrors Python
+		// SnmpWriter.set_vlan_membership (snmp_write.py:702-708).
+		if err := w.client.Set(ctx, egressVb); err != nil {
+			return err
+		}
+		if err := w.client.Set(ctx, untaggedVb); err != nil {
+			return err
+		}
+	} else {
+		// One atomic PDU everywhere else -- the device applies both or
+		// neither.
+		if err := w.client.SetMany(ctx, []SetVarbind{egressVb, untaggedVb}); err != nil {
+			return err
+		}
 	}
 	after, err := w.vlan(ctx, vlanID)
 	if err != nil {

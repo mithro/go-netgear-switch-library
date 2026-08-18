@@ -917,7 +917,12 @@ func applyGoAheadVLANList(state *State, action string, vlans []goaheadVLANEntry)
 		if sim, exists := state.Vlans[vid]; exists {
 			sim.Name = name
 		} else {
-			state.Vlans[vid] = &VlanSim{Name: name}
+			// Member/Untagged non-nil: a switchport-model port write
+			// (state_switchport.go's applySwitchport) mutates every VLAN's
+			// Member/Untagged INCREMENTALLY, which panics on a nil map --
+			// see state.go's matching SNMP-creation fix for the full
+			// rationale.
+			state.Vlans[vid] = &VlanSim{Name: name, Member: map[int]bool{}, Untagged: map[int]bool{}}
 		}
 	}
 	return "", true
@@ -1893,7 +1898,9 @@ func (f *HTTPFace) applyVlanConfig(form map[string]string) {
 			return
 		}
 		if _, exists := f.state.Vlans[vid]; !exists {
-			f.state.Vlans[vid] = &VlanSim{Name: ""}
+			// Member/Untagged non-nil -- see the other VLAN-creation sites'
+			// matching comment (state.go) for why.
+			f.state.Vlans[vid] = &VlanSim{Name: "", Member: map[int]bool{}, Untagged: map[int]bool{}}
 		}
 	case "Delete":
 		for key, val := range form {

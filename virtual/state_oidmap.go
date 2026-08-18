@@ -170,6 +170,33 @@ func (s *State) OIDMap() map[string]OIDEntry {
 		}
 	}
 
+	// FASTPATH vendor switchport table, for a model whose VLAN membership is
+	// owned by switchport mode. Emitted for every physical port so the
+	// table has a row per interface exactly like the real agent, and so the
+	// writer's read-modify-write of the allowed-VLAN column finds octets to
+	// modify. Mirrors Python's oid_map() switchport block (state.py:
+	// 951-988) -- INCLUDING that block's own side effect of calling
+	// switchportDefaults(port) (Python's _switchport_defaults) while
+	// building this read-only projection, so a fresh mock answers every
+	// switchport column for every port on its very first GET/walk, exactly
+	// like a real agent (which has a row per interface from power-on).
+	if isSwitchportModel(m) {
+		for port := range s.Ports {
+			s.switchportDefaults(port)
+			out[colKey(snmp.FastpathSwitchportMode, port)] = entry("INTEGER", strconv.Itoa(s.SwitchportMode[port]))
+			out[colKey(snmp.FastpathSwitchportAccessVlan, port)] = entry("Gauge32", strconv.Itoa(s.SwitchportAccessVlan[port]))
+			out[colKey(snmp.FastpathSwitchportNativeVlan, port)] = entry("Gauge32", strconv.Itoa(s.SwitchportNativeVlan[port]))
+			out[colKey(snmp.FastpathSwitchportAllowedVlans, port)] = entry("OCTETSTR", string(s.SwitchportAllowedVlans[port]))
+			// The two notWritable columns: the GENERAL-mode participation
+			// lists. Emitted from their own stored config, NOT derived from
+			// effective membership -- live proof they are independent is
+			// m4300-24x port 1/0/15, an access port on VLAN 10 (so really
+			// untagged in 10) whose column 7 still read VLAN 1.
+			out[colKey(snmp.FastpathSwitchportTaggedVlans, port)] = entry("OCTETSTR", string(vlanBitmapBytes(s.SwitchportGeneralTagged[port])))
+			out[colKey(snmp.FastpathSwitchportUntaggedVlans, port)] = entry("OCTETSTR", string(vlanBitmapBytes(s.SwitchportGeneralUntagged[port])))
+		}
+	}
+
 	for vid, vsim := range s.Vlans {
 		// dot1qVlanCurrentTable -- the OPERATIONAL view, indexed
 		// <timeMark>.<vlanIndex>. Real agents publish it for EVERY VLAN,

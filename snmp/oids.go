@@ -211,6 +211,52 @@ const (
 	// ports/stats/pvids reads.
 	EthernetCsmacd = 6
 
+	// --- Netgear FASTPATH vendor switchport table --------------------------
+	//
+	// 1.3.6.1.4.1.4526.10.1.2.8.37.1.<column>.<ifIndex>. On FASTPATH 12.x the
+	// standard Q-BRIDGE dot1qVlanStaticEgress/UntaggedPorts PortLists above
+	// are READ-ONLY MIRRORS -- writing them returns commitFailed even for
+	// byte-identical values -- because per-port SWITCHPORT MODE owns VLAN
+	// membership. These columns are the writable control plane. Ported from
+	// protocols/snmp/oids.py's FASTPATH_SWITCHPORT_* block (pin b26eb1f).
+	//
+	// Column meanings and writability were established EMPIRICALLY on a real
+	// M4300-24X (10.1.5.13, firmware 12.0.13.8): a full snmpwalk was
+	// captured, VLAN membership was changed through the switch's own CLI,
+	// the tree was walked again, and the two walks were diffed -- so every
+	// column below is grounded in an observed change, not a MIB guess (no
+	// Netgear MIB file was available).
+
+	// FastpathSwitchportMode is agentSwitchportMode -- writable.
+	FastpathSwitchportMode = "1.3.6.1.4.1.4526.10.1.2.8.37.1.2"
+	// FastpathSwitchportAccessVlan is the port's access VLAN (col3) --
+	// writable.
+	FastpathSwitchportAccessVlan = "1.3.6.1.4.1.4526.10.1.2.8.37.1.3"
+	// FastpathSwitchportNativeVlan is the port's trunk native VLAN (col4) --
+	// writable, but only to an EXISTING VLAN in 1..4093 (see
+	// PlanSwitchportMembership's own doc comment).
+	FastpathSwitchportNativeVlan = "1.3.6.1.4.1.4526.10.1.2.8.37.1.4"
+	// FastpathSwitchportAllowedVlans is the trunk-mode allowed-VLAN 512-byte
+	// bitmap (col6, 4096 VLANs, MSB-first, VLAN 1 = bit 7 of byte 0) --
+	// writable.
+	FastpathSwitchportAllowedVlans = "1.3.6.1.4.1.4526.10.1.2.8.37.1.6"
+	// FastpathSwitchportUntaggedVlans is the general-mode untagged
+	// participation VLAN bitmap (col7) -- notWritable.
+	FastpathSwitchportUntaggedVlans = "1.3.6.1.4.1.4526.10.1.2.8.37.1.7"
+	// FastpathSwitchportTaggedVlans is the general-mode tagged participation
+	// VLAN bitmap (col8) -- notWritable.
+	FastpathSwitchportTaggedVlans = "1.3.6.1.4.1.4526.10.1.2.8.37.1.8"
+
+	// SwitchportModeAccess/Trunk/General are the agentSwitchportMode enum
+	// values, confirmed by CLI<->SNMP correlation: `switchport mode access`
+	// reads 1 and `switchport mode general` reads 3.
+	SwitchportModeAccess  = 1
+	SwitchportModeTrunk   = 2
+	SwitchportModeGeneral = 3
+	// SwitchportVlanBitmapBytes is the VLAN bitmap width for the switchport
+	// VLAN-list columns: 4096 VLANs / 8.
+	SwitchportVlanBitmapBytes = 512
+
 	// DHCPModeOIDSuffix is the UNVERIFIED Netgear private OID suffix for
 	// DHCP-vs-static management-IP mode.
 	//

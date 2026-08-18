@@ -21,14 +21,17 @@ import "fmt"
 //     reproduced on SwitchModel below (key, display_name, switch_class,
 //     port_count, poe_port_count, backends, snmp_vendor_base, verified),
 //     the computed has_mac_table property (ported as the HasMACTable
-//     method), and one capability-flag field the capabilities oracle reads
-//     directly -- snmp_can_create_vlan, ported as SNMPCanCreateVLAN (see its
-//     own doc comment). Two further Python fields (snmp_vlan_write,
-//     snmp_vlan_split_membership_writes) govern SNMP VLAN-membership write
-//     ENCODING, a mechanism detail the capabilities oracle never reads
-//     (capabilities.py's _snmp_support touches only snmp_can_create_vlan);
-//     they are deliberately NOT ported here -- porting them is unrelated
-//     follow-up work for whichever package implements that encoding.
+//     method), and three capability/mechanism fields: snmp_can_create_vlan
+//     (ported as SNMPCanCreateVLAN -- see its own doc comment, read by the
+//     capabilities oracle), plus snmp_vlan_write and
+//     snmp_vlan_split_membership_writes (ported as SnmpVlanWrite and
+//     SnmpVlanSplitMembershipWrites -- see their own doc comments), which
+//     govern the SNMP VLAN-membership write ENCODING that
+//     snmp.Writer.SetVlanMembership and the virtual fake's switchport
+//     control plane dispatch on. The capabilities oracle does not read
+//     either of these two: registry.py's _model(...) default
+//     ("qbridge"/False) never changes a support verdict, only which wire
+//     encoding a supported write uses.
 //   - Python's backends field is a frozenset[Backend] (membership only, no
 //     order). The Go Backends field is a slice for a concrete, orderable
 //     Go type; the per-model order chosen below is arbitrary (matches the
@@ -84,6 +87,22 @@ const (
 	vendorBaseSmartManagedPro = "1.3.6.1.4.1.4526.11" // Smart Managed Pro (S3300/GSM7228PS)
 )
 
+// SnmpVlanWrite values, mirroring the two strings Python's
+// SwitchModel.snmp_vlan_write ever holds (registry.py's own field docstring,
+// reproduced on SwitchModel.SnmpVlanWrite below).
+const (
+	// SNMPVlanWriteQBridge is the default: a membership change is a
+	// read-modify-write of the standard Q-BRIDGE
+	// dot1qVlanStaticEgress/UntaggedPorts PortLists.
+	SNMPVlanWriteQBridge = "qbridge"
+	// SNMPVlanWriteFastpathSwitchport is FASTPATH 12.x's dialect (both
+	// M4300 SKUs): the Q-BRIDGE PortLists are read-only mirrors, so
+	// membership writes go through the vendor switchport table instead
+	// (see package snmp's FASTPATH_SWITCHPORT_* OIDs and
+	// snmp.PlanSwitchportMembership).
+	SNMPVlanWriteFastpathSwitchport = "fastpath_switchport"
+)
+
 // SwitchModel describes one known Netgear switch model, mirroring Python
 // registry.SwitchModel. Values obtained from Models() or GetModel are
 // canonical registry data; treat them as read-only (see each function's
@@ -121,6 +140,48 @@ type SwitchModel struct {
 	// instead (support_snmp.go) rather than treating this as "no SNMP VLAN
 	// support" wholesale.
 	SNMPCanCreateVLAN bool
+	// SnmpVlanWrite says how this model's SNMP agent accepts a VLAN
+	// port-membership WRITE, mirroring Python SwitchModel.snmp_vlan_write
+	// (registry.py:59-82, pin b26eb1f). One of the SNMPVlanWrite* constants
+	// above.
+	//
+	// SNMPVlanWriteQBridge (the default): the standard Q-BRIDGE
+	// dot1qVlanStaticEgressPorts/UntaggedPorts PortLists are read-WRITE, so a
+	// membership change is a read-modify-write of those bitmaps. VERIFIED
+	// live on the GSM7252PS (10.1.5.22) and the S3300-52X (10.1.5.11) -- and
+	// it is the ONLY membership mechanism either publishes: a walk of the
+	// vendor switchport table 1.3.6.1.4.1.4526.10.1.2.8.37 returned ZERO
+	// rows on both (2026-07-30, community "public"), versus 1520 rows on
+	// the m4300-24x and 1440 on the m4300-16x.
+	//
+	// SNMPVlanWriteFastpathSwitchport: on FASTPATH 12.x (VERIFIED live on
+	// BOTH M4300 SKUs) membership is owned by the per-port SWITCHPORT MODE,
+	// so writes go to the vendor switchport table (see package snmp's
+	// FASTPATH_SWITCHPORT_* OIDs and PlanSwitchportMembership, which
+	// documents the full derivation and the live evidence).
+	// dot1qVlanStaticEgressPorts is writable ONLY while no interface on the
+	// switch is in access mode -- and since an UNTAGGED write is expressed
+	// as access mode, the qbridge dialect cannot be used here at all.
+	// dot1qVlanStaticUntaggedPorts is worse than read-only: a SET returns
+	// noError and is then silently discarded (proved on the -24X).
+	SnmpVlanWrite string
+	// SnmpVlanSplitMembershipWrites, when true, means the writer must send
+	// the egress and untagged PortLists in SEPARATE PDUs, egress first,
+	// instead of one atomic multi-varbind SET, mirroring Python
+	// SwitchModel.snmp_vlan_split_membership_writes (registry.py:83-93).
+	//
+	// VERIFIED live on the S3300-52X-PoE+ (10.1.5.11, Smart firmware):
+	// setting a port's egress bit has a side effect -- the firmware makes
+	// that port an UNTAGGED member -- and when both columns travel in ONE
+	// PDU that side effect wins, so a TAGGED request silently comes back
+	// untagged:
+	//
+	//	one PDU  : egress=[1] untagged=[1]  <- untagged intent lost
+	//	two PDUs : egress=[1] untagged=[]   <- correct, CLI confirms "Tagged"
+	//
+	// The GSM7252PS applies a single combined PDU correctly, so this stays
+	// opt-in per model rather than changing that verified path.
+	SnmpVlanSplitMembershipWrites bool
 }
 
 // HasBackend reports whether m supports the given backend.
@@ -148,6 +209,9 @@ func (m *SwitchModel) HasMACTable() bool {
 // on it staying fixed.
 var models = []SwitchModel{
 	{
+		// VERIFIED live @10.1.5.13 (FASTPATH 12.0.13.8): the Q-BRIDGE static
+		// PortLists are read-only mirrors here; membership writes must go
+		// through the vendor switchport table. See SwitchModel.SnmpVlanWrite.
 		Key:               "m4300-24x",
 		DisplayName:       "M4300-24X (XSM4324CS)",
 		Class:             ClassFullyManaged,
@@ -157,8 +221,21 @@ var models = []SwitchModel{
 		SNMPVendorBase:    vendorBaseFullyManaged,
 		Verified:          true,
 		SNMPCanCreateVLAN: true,
+		SnmpVlanWrite:     SNMPVlanWriteFastpathSwitchport,
 	},
 	{
+		// VERIFIED live @10.1.5.20 (FASTPATH 12.0.19.15) on 2026-07-30 --
+		// previously only INFERRED from the -24X. A deterministic A/B/A on
+		// port 1/0/1 (byte-identical writes to a throwaway VLAN, flipping
+		// only that port's mode) settled it: general->noError,
+		// access->commitFailed, general->noError, trunk->noError,
+		// access->commitFailed, general->noError -- i.e.
+		// dot1qVlanStaticEgressPorts is writable only while NO interface on
+		// the switch is in access mode (switch-wide, not per-VLAN). Since an
+		// UNTAGGED membership write is expressed AS access mode, the qbridge
+		// dialect would disable itself on first use, so this SKU belongs on
+		// the switchport dialect too. The same rule explains why the -24X
+		// (21 of 24 ports access-mode) rejects the write in every port mode.
 		Key:               "m4300-16x",
 		DisplayName:       "M4300-16X (XSM4316)",
 		Class:             ClassFullyManaged,
@@ -168,6 +245,7 @@ var models = []SwitchModel{
 		SNMPVendorBase:    vendorBaseFullyManaged,
 		Verified:          true,
 		SNMPCanCreateVLAN: true,
+		SnmpVlanWrite:     SNMPVlanWriteFastpathSwitchport,
 	},
 	{
 		Key:               "gsm7252ps",
@@ -179,6 +257,7 @@ var models = []SwitchModel{
 		SNMPVendorBase:    vendorBaseFullyManaged,
 		Verified:          true,
 		SNMPCanCreateVLAN: true,
+		SnmpVlanWrite:     SNMPVlanWriteQBridge,
 	},
 	{
 		// VERIFIED 2026-07-30 against real hardware: the S3300-52X-PoE+
@@ -202,15 +281,24 @@ var models = []SwitchModel{
 		// tcpConnTable shows only 80/443/60000). Mirrors Python
 		// registry.py's gsm7228ps _model(...) call exactly -- do not
 		// re-add BackendSSH here without a NEW live capture proving it.
-		Key:               "gsm7228ps",
-		DisplayName:       "GSM7228PS (S3300)",
-		Class:             ClassSmartManagedPro,
-		PortCount:         52,
-		PoEPortCount:      48,
-		Backends:          []Backend{BackendSNMP, BackendHTTP, BackendTelnet},
-		SNMPVendorBase:    vendorBaseSmartManagedPro,
-		Verified:          true,
-		SNMPCanCreateVLAN: true,
+		//
+		// VERIFIED live 2026-07-30: this Smart firmware auto-untags a port
+		// when its egress bit is set, and that side effect beats an
+		// untagged varbind carried in the SAME PDU -- so the two columns
+		// must be written in separate PDUs, egress first, or every TAGGED
+		// request silently lands as UNTAGGED. See
+		// SwitchModel.SnmpVlanSplitMembershipWrites.
+		Key:                           "gsm7228ps",
+		DisplayName:                   "GSM7228PS (S3300)",
+		Class:                         ClassSmartManagedPro,
+		PortCount:                     52,
+		PoEPortCount:                  48,
+		Backends:                      []Backend{BackendSNMP, BackendHTTP, BackendTelnet},
+		SNMPVendorBase:                vendorBaseSmartManagedPro,
+		Verified:                      true,
+		SNMPCanCreateVLAN:             true,
+		SnmpVlanWrite:                 SNMPVlanWriteQBridge,
+		SnmpVlanSplitMembershipWrites: true,
 	},
 	{
 		Key:               "gs110emx",
@@ -221,7 +309,8 @@ var models = []SwitchModel{
 		Backends:          []Backend{BackendNSDP, BackendHTTP},
 		SNMPVendorBase:    "",
 		Verified:          true,
-		SNMPCanCreateVLAN: true, // irrelevant: this model has no SNMP backend
+		SNMPCanCreateVLAN: true,                 // irrelevant: this model has no SNMP backend
+		SnmpVlanWrite:     SNMPVlanWriteQBridge, // irrelevant: this model has no SNMP backend
 	},
 	{
 		Key:               "gs305ep",
@@ -232,7 +321,8 @@ var models = []SwitchModel{
 		Backends:          []Backend{BackendNSDP, BackendHTTP},
 		SNMPVendorBase:    "",
 		Verified:          true,
-		SNMPCanCreateVLAN: true, // irrelevant: this model has no SNMP backend
+		SNMPCanCreateVLAN: true,                 // irrelevant: this model has no SNMP backend
+		SnmpVlanWrite:     SNMPVlanWriteQBridge, // irrelevant: this model has no SNMP backend
 	},
 	{
 		// UNVERIFIED-pending-capture: no device capture exists (registered
@@ -240,7 +330,10 @@ var models = []SwitchModel{
 		// PoE) is the assumed/documented variant; which exact SKU is
 		// actually deployed is unverified. Same FASTPATH fully-managed
 		// lineage as M4300, so the fully-managed vendor subtree is the
-		// best spec-guess, itself unverified.
+		// best spec-guess, itself unverified. SnmpVlanWrite stays the
+		// "qbridge" default (Python's registry.py never overrides it for
+		// this model either) since there is no capture to justify claiming
+		// the switchport dialect here.
 		Key:               "m7300",
 		DisplayName:       "M7300-24XF",
 		Class:             ClassFullyManaged,
@@ -250,6 +343,7 @@ var models = []SwitchModel{
 		SNMPVendorBase:    vendorBaseFullyManaged,
 		Verified:          false,
 		SNMPCanCreateVLAN: true,
+		SnmpVlanWrite:     SNMPVlanWriteQBridge,
 	},
 	{
 		// UNVERIFIED-pending-capture: 48x 10G copper (+ SFP+ combo),
@@ -266,6 +360,7 @@ var models = []SwitchModel{
 		SNMPVendorBase:    vendorBaseSmartManagedPro,
 		Verified:          false,
 		SNMPCanCreateVLAN: true,
+		SnmpVlanWrite:     SNMPVlanWriteQBridge,
 	},
 	{
 		// GS728TPP: 24x Gigabit PoE+ + 4x SFP combo = 28 total ports, 24
@@ -290,6 +385,7 @@ var models = []SwitchModel{
 		// surface (membership, PVID, destroy) works over SNMP, and creation
 		// works over HTTP.
 		SNMPCanCreateVLAN: false,
+		SnmpVlanWrite:     SNMPVlanWriteQBridge,
 	},
 	{
 		// GS105PE: a real, distinct SKU from gs305ep -- a 5-port Gigabit
@@ -307,7 +403,8 @@ var models = []SwitchModel{
 		Backends:          []Backend{BackendNSDP, BackendHTTP},
 		SNMPVendorBase:    "",
 		Verified:          true,
-		SNMPCanCreateVLAN: true, // irrelevant: this model has no SNMP backend
+		SNMPCanCreateVLAN: true,                 // irrelevant: this model has no SNMP backend
+		SnmpVlanWrite:     SNMPVlanWriteQBridge, // irrelevant: this model has no SNMP backend
 	},
 }
 
