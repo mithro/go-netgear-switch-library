@@ -202,6 +202,115 @@ func TestVirtualSwitchWithHostAndWithCommunityOptions(t *testing.T) {
 	}
 }
 
+// TestVirtualSwitchWithPortPinsSNMPPort proves WithPort actually reaches
+// the bound SNMP face (not just accepted-and-ignored, "cmd/gngsw-virtual"'s
+// --port flag depends on this): start once with the default ephemeral port
+// to discover a free one, stop, then start a second switch pinned to that
+// exact port number and confirm it binds there -- and is actually live.
+func TestVirtualSwitchWithPortPinsSNMPPort(t *testing.T) {
+	probe, err := NewVirtualSwitch("gsm7252ps")
+	if err != nil {
+		t.Fatalf("NewVirtualSwitch error = %v", err)
+	}
+	if err := probe.Start(); err != nil {
+		t.Fatalf("probe Start() error = %v", err)
+	}
+	free := probe.SnmpPort
+	if err := probe.Stop(); err != nil {
+		t.Fatalf("probe Stop() error = %v", err)
+	}
+
+	sw, err := NewVirtualSwitch("gsm7252ps", WithPort(free))
+	if err != nil {
+		t.Fatalf("NewVirtualSwitch error = %v", err)
+	}
+	if err := sw.Start(); err != nil {
+		t.Fatalf("Start() with WithPort(%d) error = %v", free, err)
+	}
+	t.Cleanup(func() {
+		if err := sw.Stop(); err != nil {
+			t.Errorf("Stop() error = %v", err)
+		}
+	})
+	if sw.SnmpPort != free {
+		t.Errorf("SnmpPort after Start() with WithPort(%d) = %d, want %d", free, sw.SnmpPort, free)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := snmp.NewGoSNMPClient(sw.Host+":"+strconv.Itoa(sw.SnmpPort), "public")
+	if _, err := client.Get(ctx, []string{snmp.SysDescr}); err != nil {
+		t.Errorf("GET against the pinned port failed: %v", err)
+	}
+}
+
+// TestVirtualSwitchWithPortPinsNsdpPort is WithPort's NSDP-face analogue:
+// gs305ep (Plus-class, NSDP+HTTP, no SNMP) binds its one UDP face --
+// NsdpPort, not SnmpPort -- through the exact same requestedPort field
+// (mirroring the Python reference's single shared self.port; see
+// server.go's WithPort doc comment).
+func TestVirtualSwitchWithPortPinsNsdpPort(t *testing.T) {
+	probe, err := NewVirtualSwitch("gs305ep")
+	if err != nil {
+		t.Fatalf("NewVirtualSwitch error = %v", err)
+	}
+	if err := probe.Start(); err != nil {
+		t.Fatalf("probe Start() error = %v", err)
+	}
+	free := probe.NsdpPort
+	if err := probe.Stop(); err != nil {
+		t.Fatalf("probe Stop() error = %v", err)
+	}
+
+	sw, err := NewVirtualSwitch("gs305ep", WithPort(free))
+	if err != nil {
+		t.Fatalf("NewVirtualSwitch error = %v", err)
+	}
+	if err := sw.Start(); err != nil {
+		t.Fatalf("Start() with WithPort(%d) error = %v", free, err)
+	}
+	t.Cleanup(func() {
+		if err := sw.Stop(); err != nil {
+			t.Errorf("Stop() error = %v", err)
+		}
+	})
+	if sw.NsdpPort != free {
+		t.Errorf("NsdpPort after Start() with WithPort(%d) = %d, want %d", free, sw.NsdpPort, free)
+	}
+}
+
+// TestVirtualSwitchWithHTTPPortPinsHTTPPort is WithPort's HTTP-face
+// analogue for WithHTTPPort.
+func TestVirtualSwitchWithHTTPPortPinsHTTPPort(t *testing.T) {
+	probe, err := NewVirtualSwitch("gs305ep")
+	if err != nil {
+		t.Fatalf("NewVirtualSwitch error = %v", err)
+	}
+	if err := probe.Start(); err != nil {
+		t.Fatalf("probe Start() error = %v", err)
+	}
+	free := probe.HTTPPort
+	if err := probe.Stop(); err != nil {
+		t.Fatalf("probe Stop() error = %v", err)
+	}
+
+	sw, err := NewVirtualSwitch("gs305ep", WithHTTPPort(free))
+	if err != nil {
+		t.Fatalf("NewVirtualSwitch error = %v", err)
+	}
+	if err := sw.Start(); err != nil {
+		t.Fatalf("Start() with WithHTTPPort(%d) error = %v", free, err)
+	}
+	t.Cleanup(func() {
+		if err := sw.Stop(); err != nil {
+			t.Errorf("Stop() error = %v", err)
+		}
+	})
+	if sw.HTTPPort != free {
+		t.Errorf("HTTPPort after Start() with WithHTTPPort(%d) = %d, want %d", free, sw.HTTPPort, free)
+	}
+}
+
 // --- GoFakeProvider ---------------------------------------------------------
 
 func TestGoFakeProviderStartModelReturnsLiveEndpoints(t *testing.T) {

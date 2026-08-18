@@ -97,6 +97,7 @@ type HTTPFace struct {
 	state    *State
 	spec     *webui.HTTPModelSpec
 	host     string
+	port     int // 0 (the default) asks the OS for an ephemeral port; see SetPort.
 	password string
 	rand     string
 
@@ -141,9 +142,20 @@ func NewHTTPFace(state *State, spec *webui.HTTPModelSpec, password, host string)
 	}
 }
 
-// Start binds an ephemeral TCP port on f.host and begins serving on a
-// background goroutine, returning the bound port. Calling Start twice
-// without an intervening Stop is an error.
+// SetPort pins the TCP port Start binds to, mirroring the Python
+// reference's VirtualSwitch(http_port=...) constructor argument (server.py's
+// own "self.http_port"). The default, 0, asks the OS for an ephemeral port,
+// same as before this method existed. Call before Start; a call after Start
+// has no effect until the next Start following a Stop.
+func (f *HTTPFace) SetPort(port int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.port = port
+}
+
+// Start binds f.host:f.port (an ephemeral port when f.port is 0, the
+// default) and begins serving on a background goroutine, returning the
+// bound port. Calling Start twice without an intervening Stop is an error.
 func (f *HTTPFace) Start() (port int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -151,7 +163,7 @@ func (f *HTTPFace) Start() (port int, err error) {
 		return 0, fmt.Errorf("virtual: HTTPFace.Start: already started")
 	}
 
-	ln, err := net.Listen("tcp", net.JoinHostPort(f.host, "0"))
+	ln, err := net.Listen("tcp", net.JoinHostPort(f.host, strconv.Itoa(f.port)))
 	if err != nil {
 		return 0, fmt.Errorf("virtual: HTTPFace.Start: listen tcp on %s: %w", f.host, err)
 	}

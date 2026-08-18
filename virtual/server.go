@@ -88,6 +88,16 @@ type VirtualSwitch struct { //nolint:revive // name is mandated by D-VIRT §5/Ta
 	httpPassword string
 	cliUsername  string
 	cliPassword  string
+	// requestedPort/requestedHTTPPort are the caller-pinned ports Start
+	// applies to whichever UDP face (SNMP or NSDP -- never both; no
+	// registered model has both backends, see model/registry.go) and the
+	// HTTP face bind, respectively. 0 (the default) asks the OS for an
+	// ephemeral port, exactly like before WithPort/WithHTTPPort existed.
+	// Mirrors the Python reference's VirtualSwitch(port=..., http_port=...)
+	// constructor arguments (server.py), including its single shared "port"
+	// field covering both SNMP and NSDP.
+	requestedPort     int
+	requestedHTTPPort int
 
 	mu         sync.Mutex
 	snmpFace   *SnmpFace
@@ -130,6 +140,23 @@ func WithCLIUsername(username string) Option {
 // require (default "password", matching WithHTTPPassword's own default).
 func WithCLIPassword(password string) Option {
 	return func(v *VirtualSwitch) { v.cliPassword = password }
+}
+
+// WithPort pins the UDP port Start binds its SNMP-or-NSDP face to (default
+// 0, an ephemeral port). Mirrors the Python reference's
+// VirtualSwitch(port=...) constructor argument. Applies to whichever of
+// SnmpPort/NsdpPort the model actually binds -- no registered model has
+// both backends, so, like the Python reference's single shared self.port,
+// there is never an ambiguity about which one this pins.
+func WithPort(port int) Option {
+	return func(v *VirtualSwitch) { v.requestedPort = port }
+}
+
+// WithHTTPPort pins the TCP port Start binds its HTTP face to (default 0,
+// an ephemeral port). Mirrors the Python reference's
+// VirtualSwitch(http_port=...) constructor argument.
+func WithHTTPPort(port int) Option {
+	return func(v *VirtualSwitch) { v.requestedHTTPPort = port }
 }
 
 // NewVirtualSwitch builds a VirtualSwitch for modelKey: resolves modelKey
@@ -179,6 +206,7 @@ func (v *VirtualSwitch) Start() error {
 	if v.modelInfo.HasBackend(model.BackendSNMP) {
 		view := NewMibView(v.State)
 		face := NewSnmpFace(view, v.community, v.Host)
+		face.SetPort(v.requestedPort)
 		port, err := face.Start()
 		if err != nil {
 			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
@@ -189,6 +217,7 @@ func (v *VirtualSwitch) Start() error {
 
 	if v.modelInfo.HasBackend(model.BackendNSDP) {
 		face := NewNsdpFace(v.State, v.Host)
+		face.SetPort(v.requestedPort)
 		port, err := face.Start()
 		if err != nil {
 			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
@@ -203,6 +232,7 @@ func (v *VirtualSwitch) Start() error {
 			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
 		}
 		face := NewHTTPFace(v.State, spec, v.httpPassword, v.Host)
+		face.SetPort(v.requestedHTTPPort)
 		port, err := face.Start()
 		if err != nil {
 			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
