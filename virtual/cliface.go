@@ -109,6 +109,11 @@ var (
 	// cliModeConfig` check -- a bare "hostname" (no argument) deliberately
 	// does NOT match this regex, so it falls through to the catch-all
 	// "Command not found" response, mirroring the real device rejecting it.
+	// The captured group can carry a wrapping quote ("hostname \"x\"", a
+	// real running-config's own quoted form) or not ("hostname x") -- see
+	// its use below, which strips one exactly like the pin's own
+	// _HOSTNAME_RE capture (cli.py:63, pin b26eb1f) plus its
+	// `.strip().strip('"')` (cli.py:432) [cliface-quote-strip].
 	cliHostnameRE = regexp.MustCompile(`^hostname (.+)$`)
 	// cliLoggingSyslogRE mirrors the global-config remote-logging enable/
 	// disable (set_syslog_enabled): `logging syslog` / `no logging
@@ -555,7 +560,13 @@ func (f *CliFace) configCommand(c string) (string, bool) {
 	}
 	if f.mode() == cliModeConfig {
 		if m := cliHostnameRE.FindStringSubmatch(c); m != nil {
-			f.state.Hostname = m[1]
+			// strip('"') after strip(): a wrapping quote from a real
+			// running-config's own `hostname "x"` form must not become part
+			// of the stored name, mirroring the pin's
+			// m.group(1).strip().strip('"') exactly (cli.py:432, pin
+			// b26eb1f) [cliface-quote-strip]. Inert today: no writer this
+			// codebase builds sends a quoted hostname.
+			f.state.Hostname = strings.Trim(strings.TrimSpace(m[1]), `"`)
 			return cliAccepted, true
 		}
 		if m := cliLoggingSyslogRE.FindStringSubmatch(c); m != nil {

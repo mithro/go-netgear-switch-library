@@ -2,6 +2,7 @@ package netgearswitch
 
 import (
 	"github.com/mithro/go-netgear-switch-library/capabilities"
+	"github.com/mithro/go-netgear-switch-library/fastpath"
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/snmp"
 )
@@ -227,6 +228,13 @@ var (
 	ErrHTTP                  = model.ErrHTTP
 	ErrHTTPAuth              = model.ErrHTTPAuth
 	ErrHTTPUnexpectedPage    = model.ErrHTTPUnexpectedPage
+	// ErrCliCommandRejected is re-exported from fastpath (not model, like
+	// the sentinels above): the CLI backend's own "any non-empty output ==
+	// rejected" sentinel (fastpath/session.go), matching Python's
+	// CliCommandError. A caller matching a CLI write's error with
+	// errors.Is shouldn't need to import fastpath just for this one
+	// sentinel when every SNMP/NSDP/HTTP equivalent is already here.
+	ErrCliCommandRejected = fastpath.ErrCliCommandRejected
 )
 
 // GetModel looks up a switch model by its canonical registry key or a known

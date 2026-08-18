@@ -654,6 +654,37 @@ func TestHostnameCLIRoundTrip(t *testing.T) {
 	}
 }
 
+// TestHostnameCLIStripsWrappingQuote mirrors the pin's own quote-stripping
+// contract for a raw `hostname "x"` running-config line (cli.py:63/432, pin
+// b26eb1f) [cliface-quote-strip]: a wrapping quote must not become part of
+// the stored name. Inert today -- no writer this codebase builds sends a
+// quoted hostname (fastpath.Writer.SetHostname always posts the bare
+// name) -- so this drives CliFace.Run directly with the quoted form a real
+// running-config could carry.
+func TestHostnameCLIStripsWrappingQuote(t *testing.T) {
+	st := SeedM4300_24X()
+	face, _ := newTestCliFace(t, "m4300-24x", st)
+	ctx := context.Background()
+	run := func(cmd string) string {
+		t.Helper()
+		out, err := face.Run(ctx, cmd)
+		if err != nil {
+			t.Fatalf("Run(%q): %v", cmd, err)
+		}
+		return out
+	}
+
+	if out := run("configure"); out != cliAccepted {
+		t.Fatalf("Run(%q) = %q, want %q", "configure", out, cliAccepted)
+	}
+	if out := run(`hostname "quoted-name"`); out != cliAccepted {
+		t.Fatalf(`Run("hostname \"quoted-name\"") = %q, want %q`, out, cliAccepted)
+	}
+	if st.Hostname != "quoted-name" {
+		t.Errorf("state.Hostname = %q, want %q (wrapping quote stripped)", st.Hostname, "quoted-name")
+	}
+}
+
 // TestHostnameEmptyIsRefusedNotSent mirrors Python's
 // test_empty_hostname_is_refused_not_sent: "hostname" with no argument is
 // rejected by the device itself, so this library refuses client-side
