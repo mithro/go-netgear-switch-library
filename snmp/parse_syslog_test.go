@@ -54,15 +54,42 @@ func TestParseSyslogEnabledWithOneCollector(t *testing.T) {
 // host table's own index (1 and 3, nothing at 2 -- measured on m4300-24x
 // 10.1.5.13) is preserved rather than renumbered, and that each column is
 // matched to its row by INDEX, not by walk/slice position.
+//
+// The input rows are built by hand in a deliberately ADVERSARIAL order
+// instead of via the strRows/intRows map helpers used elsewhere in this
+// file: index 3's row precedes index 1's in hostAddr/hostSeverity, while
+// hostPort/hostStatus list index 1 first -- no two columns share the same
+// row order, and neither matches ascending-index order. Go's map iteration
+// order is unspecified per range (and can even vary between two range
+// statements over the identical map within the same process), so building
+// this input via map[int]... helpers -- as an earlier version of this test
+// did -- verified "matched by index, not position" only by luck: a
+// position-derived-index regression (row 0 -> index 1, row 1 -> index 2,
+// or any column zipped with another by slice position rather than by its
+// own OID-derived index) could pass or fail depending on incidental
+// iteration order. This fixed, cross-column-misaligned order instead
+// deterministically fails such a regression every run.
 func TestParseSyslogSparseIndexNeverDerivedFromPosition(t *testing.T) {
 	vo := syslogVendor(t)
 	cfg, err := ParseSyslog(
 		[]Row{NewIntRow(vo.SyslogAdminMode, 1)},
 		[]Row{NewIntRow(vo.SyslogLocalPort, 514)},
-		strRows(vo.SyslogHostAddr, map[int]string{1: "10.1.5.1", 3: "10.1.5.3"}),
-		intRows(vo.SyslogHostPort, map[int]int64{1: 514, 3: 601}),
-		intRows(vo.SyslogHostSeverity, map[int]int64{1: 6, 3: 3}),
-		intRows(vo.SyslogHostStatus, map[int]int64{1: 1, 3: 1}),
+		[]Row{ // hostAddr: index 3, THEN index 1
+			NewStrRow(vo.SyslogHostAddr+".3", "10.1.5.3"),
+			NewStrRow(vo.SyslogHostAddr+".1", "10.1.5.1"),
+		},
+		[]Row{ // hostPort: index 1, THEN index 3 (opposite order from hostAddr)
+			NewIntRow(vo.SyslogHostPort+".1", 514),
+			NewIntRow(vo.SyslogHostPort+".3", 601),
+		},
+		[]Row{ // hostSeverity: index 3, THEN index 1 (same order as hostAddr)
+			NewIntRow(vo.SyslogHostSeverity+".3", 3),
+			NewIntRow(vo.SyslogHostSeverity+".1", 6),
+		},
+		[]Row{ // hostStatus: index 1, THEN index 3
+			NewIntRow(vo.SyslogHostStatus+".1", 1),
+			NewIntRow(vo.SyslogHostStatus+".3", 1),
+		},
 		vo.SyslogHostAddr, vo.SyslogHostPort, vo.SyslogHostSeverity, vo.SyslogHostStatus,
 	)
 	if err != nil {

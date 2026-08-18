@@ -9,6 +9,7 @@ package virtual
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/mithro/go-netgear-switch-library/model"
@@ -188,6 +189,65 @@ func TestHTTPFaceAddSyslogCollectorUnsupported(t *testing.T) {
 	err := writer.AddSyslogCollector(context.Background(), "192.0.2.1", 514, 6, false)
 	if !errors.Is(err, model.ErrUnsupportedCapability) {
 		t.Fatalf("AddSyslogCollector() error = %v, want errors.Is(..., model.ErrUnsupportedCapability)", err)
+	}
+}
+
+// TestApplyXUISyslogRowsRefusesAdd drives ApplyXUISyslogRows's ADD-refusal
+// branch DIRECTLY, rather than through webui.Writer.AddSyslogCollector:
+// that facade method refuses unconditionally before any HTTP I/O (see
+// TestHTTPFaceAddSyslogCollectorUnsupported above), so this fake's own
+// "Error! Failed to Set 'Host Address' with ..." branch -- reproducing what
+// the live M4300 actually answers a filled ADD template row with (see
+// ApplyXUISyslogRows's own doc comment, driven live against m4300-24x
+// 10.1.5.13 on 2026-08-05) -- is otherwise never exercised by any test.
+// This constructs the fake state and calls the apply+render path exactly as
+// renderFastpathXUIPage does, so the measured refusal behavior itself is
+// covered, not just the facade's independent (and earlier) refusal.
+func TestApplyXUISyslogRowsRefusesAdd(t *testing.T) {
+	st := seedByKey(t, "m4300-24x")
+	before := append([]SyslogCollectorSim(nil), st.Syslog.Collectors...)
+
+	const addr = "192.0.2.55"
+	form := map[string]string{
+		"v_g_2_1_1": addr, // filled ADD template row's Host Address field
+		"v_g_2_1_5": "Active",
+	}
+	errMsg := ApplyXUISyslogRows(st, form)
+
+	wantErr := "Error! Failed to Set 'Host Address' with '" + addr + "'"
+	if errMsg != wantErr {
+		t.Fatalf("ApplyXUISyslogRows() errMsg = %q, want %q", errMsg, wantErr)
+	}
+	if len(st.Syslog.Collectors) != len(before) {
+		t.Fatalf("ApplyXUISyslogRows() changed Collectors count from %d to %d, want unchanged (refused)",
+			len(before), len(st.Syslog.Collectors))
+	}
+	for _, c := range st.Syslog.Collectors {
+		if c.Host == addr {
+			t.Fatalf("ApplyXUISyslogRows() added %q to Collectors despite refusing it", addr)
+		}
+	}
+
+	m, err := model.GetModel("m4300-24x")
+	if err != nil {
+		t.Fatalf("model.GetModel(m4300-24x): %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec(m4300-24x): %v", err)
+	}
+	html := RenderXUISyslog(st, spec.SyslogPath, errMsg)
+	if !strings.Contains(html, `NAME="err_flag" XC=hidden VALUE="1"`) {
+		t.Errorf("RenderXUISyslog() did not set err_flag=1 on the refused add:\n%s", html)
+	}
+	if !strings.Contains(html, `NAME="err_msg" XC=hidden VALUE="`+wantErr+`"`) {
+		t.Errorf("RenderXUISyslog() did not surface %q as err_msg:\n%s", wantErr, html)
+	}
+	// The refused address legitimately appears inside err_msg's own text
+	// above; it must NOT also appear as a v_2_1_1 data-row cell value (that
+	// would mean the fake actually added it despite refusing).
+	if strings.Contains(html, `v_2_1_1 VALUE="`+addr+`"`) {
+		t.Errorf("RenderXUISyslog() rendered the refused address %q as a v_2_1_1 data row", addr)
 	}
 }
 

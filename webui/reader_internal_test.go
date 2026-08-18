@@ -22,6 +22,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/mithro/go-netgear-switch-library/model"
@@ -322,6 +323,42 @@ func TestGS105PEGetVLANsReusesSelectedPageWithoutRePOST(t *testing.T) {
 	}
 	if len(vlans[0].TaggedPorts) != 0 {
 		t.Errorf("vlans[0].TaggedPorts = %v, want empty", vlans[0].TaggedPorts)
+	}
+}
+
+// TestUnsupportedReadMatchesPythonProse pins unsupportedRead's exact text
+// against http_read.py's `_unsupported` (http_read.py:65-68, pin b26eb1f:
+// `f"model {model_key!r} web UI does not expose {op}"`), used by
+// get_sensors/get_hostname/get_mgmt_ip. Before this fix, all three routed
+// through unsupportedOp's write-style template, producing ungrammatical
+// prose for the hostname case ("model \"x\" has no a host name field
+// page..."); unsupportedRead restores Python's own (grammatical) wording
+// for exactly those three ops.
+func TestUnsupportedReadMatchesPythonProse(t *testing.T) {
+	err := unsupportedRead("gs305ep", "a host name field")
+	if err == nil {
+		t.Fatal("unsupportedRead() = nil, want an error")
+	}
+	// The sentinel's own Error() text is appended by %w; assert the PREFIX
+	// (the part this function controls) is exactly Python's prose.
+	want := `model "gs305ep" web UI does not expose a host name field`
+	if !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("unsupportedRead() = %q, want it to start with %q", err.Error(), want)
+	}
+	if !errors.Is(err, model.ErrUnsupportedCapability) {
+		t.Errorf("unsupportedRead() error = %v, want wrapping model.ErrUnsupportedCapability", err)
+	}
+}
+
+// TestUnsupportedOpStillUsesWriteStyleTemplate proves the general
+// unsupportedOp/requirePath path (used by every OTHER read and every
+// write) is UNCHANGED by the unsupportedRead split above -- it still
+// mirrors http_write.py's _require_path wording verbatim.
+func TestUnsupportedOpStillUsesWriteStyleTemplate(t *testing.T) {
+	err := unsupportedOp("gs305ep", "port status")
+	want := `model "gs305ep" has no port status page in its HTTP endpoint spec (see webui/endpoints.go for whether that is a measured absence or an undiscovered page)`
+	if !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("unsupportedOp() = %q, want it to start with %q", err.Error(), want)
 	}
 }
 

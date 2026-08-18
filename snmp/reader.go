@@ -202,7 +202,14 @@ func (r *Reader) GetPoE(ctx context.Context) ([]model.PoEStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	status := append(admin, detect...)
+	// A fresh slice, not append(admin, detect...): that form can reuse
+	// admin's backing array when it has spare capacity, aliasing a slice
+	// this function received from the client -- harmless single-threaded
+	// today (admin is never read again below), but a latent trap for a
+	// future caller that keeps its own reference to admin.
+	status := make([]Row, 0, len(admin)+len(detect))
+	status = append(status, admin...)
+	status = append(status, detect...)
 	var power []Row
 	if HasVendorOids(r.model) {
 		vendor, verr := GetVendorOids(r.model)
