@@ -1496,6 +1496,62 @@ func TestHTTPFaceGS728TPPWriterCreateDeleteVlanRoundTrips(t *testing.T) {
 	}
 }
 
+// TestHTTPFaceGS728TPPApplyGoAheadWriteAppliesEveryPresentSection posts a
+// SINGLE "wcd" write body carrying TWO top-level sections at once
+// (VLANList and DeviceBasicInfo) and confirms BOTH apply -- mirroring
+// Python web_gs728tpp.apply_write's `for section in root:` loop (pin
+// b26eb1f, lines 327-429), which applies every recognized section present,
+// not just the first [GOAHEAD-MULTI-SECTION]. No production writer in this
+// codebase builds a multi-section body today (webui/goahead_write.go posts
+// exactly one object per write), so this constructs the body by hand the
+// way a real GoAhead client legitimately could -- proving the fake would
+// answer it the way the real firmware does rather than silently dropping
+// every section after the first, which applyGoAheadWrite's earlier
+// first-match-wins dispatch would have done (VLANList matched first in
+// that fixed field order, so DeviceBasicInfo's deviceName would never have
+// been reached).
+func TestHTTPFaceGS728TPPApplyGoAheadWriteAppliesEveryPresentSection(t *testing.T) {
+	st := SeedGS728TPP()
+	m, err := model.GetModel("gs728tpp")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+	addr, _ := startHTTPFace(t, st, spec, "password")
+	client := webui.NewHTTPClient(addr, "password", clientSpec(spec))
+	ctx := context.Background()
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	reader, err := webui.NewReader(client, m)
+	if err != nil {
+		t.Fatalf("webui.NewReader: %v", err)
+	}
+
+	const vlan = 4020
+	body := "<?xml version='1.0' encoding='utf-8'?><DeviceConfiguration>" +
+		"<VLANList action=\"set\"><VLAN><VLANID>4020</VLANID><VLANName>multi</VLANName></VLAN></VLANList>" +
+		"<DeviceBasicInfo><deviceName>multi-section-host</deviceName></DeviceBasicInfo>" +
+		"</DeviceConfiguration>"
+	if _, err := client.PostXML(ctx, spec.XMLWritePath, body); err != nil {
+		t.Fatalf("PostXML(multi-section body) error = %v", err)
+	}
+
+	if !slices.Contains(gs728tppVlanIDs(t, reader), vlan) {
+		t.Errorf("VLAN %d not present after the multi-section write -- VLANList section did not apply", vlan)
+	}
+	gotName, err := reader.GetHostname(ctx)
+	if err != nil {
+		t.Fatalf("GetHostname: %v", err)
+	}
+	if gotName != "multi-section-host" {
+		t.Errorf("GetHostname() after the multi-section write = %q, want %q -- DeviceBasicInfo section did not apply", gotName, "multi-section-host")
+	}
+}
+
 func gs728tppMembershipModeOf(t *testing.T, reader *webui.Reader, vlan, port int) model.VlanMode {
 	t.Helper()
 	vlans, err := reader.GetVLANs(context.Background())

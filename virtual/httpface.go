@@ -1026,13 +1026,35 @@ func applyGoAheadPoE(state *State, interfaces []goaheadPoEInterface) {
 }
 
 // applyGoAheadWrite applies one "POST wcd" write body and returns the wcd
-// status response, mirroring Python web_gs728tpp.apply_write: the real UI
-// writes EVERYTHING through this one endpoint, with the object name (and
-// its action attribute) selecting the operation, so the mock must dispatch
-// the same way rather than recognizing one special upload. An unrecognized
-// object returns a NON-zero statusCode, never a silent success -- see
-// goaheadWriteXML's own doc comment for exactly which objects this Go port
-// wires versus the pinned Python fake.
+// status response, mirroring Python web_gs728tpp.apply_write (pin b26eb1f,
+// lines 303-433): the real UI writes EVERYTHING through this one endpoint,
+// with the object name (and its action attribute) selecting the operation,
+// so the mock must dispatch the same way rather than recognizing one
+// special upload. An unrecognized object returns a NON-zero statusCode,
+// never a silent success -- see goaheadWriteXML's own doc comment for
+// exactly which objects this Go port wires versus the pinned Python fake.
+//
+// Python's apply_write LOOPS over every top-level child of the parsed
+// document (`for section in root:`), applying EVERY recognized section
+// present -- not just the first -- and only reports the document as
+// unhandled (statusCode 2) if NONE of its sections matched a branch. This
+// is currently unreachable (every production write path this Go port
+// builds posts exactly one section per request), but the fake must still
+// answer a hypothetical multi-section POST the way the real firmware would,
+// so this mirrors that loop rather than returning on the first match: every
+// doc.X field present is applied (an error from an individual section, e.g.
+// a bad VLANID, still returns immediately -- Python's own per-section
+// `return _status_response(...)` calls do too, mid-loop, without rolling
+// back whatever an EARLIER section in the same document already applied),
+// and the aggregate statusCode-0 success is returned once at the end only
+// if at least one section was handled. One deliberate divergence: this
+// walks doc's named fields in a FIXED order (VLANList, VLANMembershipList,
+// VLANInterfaceList, PoEPSEInterfaceList, Standard802_3List,
+// DeviceBasicInfo), not Python's true XML document order -- encoding/xml
+// decodes each recognized element into its own named pointer field
+// regardless of position, and recovering the original element order would
+// need a manual token-by-token walk instead. Immaterial while every real
+// POST carries a single section (so there is only ever one order to walk).
 func applyGoAheadWrite(state *State, xmlBody string) string {
 	if strings.Contains(xmlBody, "<!DOCTYPE") || strings.Contains(xmlBody, "<!ENTITY") {
 		return goaheadStatusResponse(3, "DTD/entity declaration rejected")
@@ -1044,41 +1066,47 @@ func applyGoAheadWrite(state *State, xmlBody string) string {
 	if err := xml.Unmarshal([]byte(xmlBody), &doc); err != nil {
 		return goaheadStatusResponse(1, fmt.Sprintf("malformed XML: %v", err))
 	}
+
+	handled := false
 	if doc.VLANList != nil {
 		if bad, ok := applyGoAheadVLANList(state, doc.VLANList.Action, doc.VLANList.VLANs); !ok {
 			return goaheadStatusResponse(2, fmt.Sprintf("bad VLANID %q", bad))
 		}
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
 	if doc.VLANMembershipList != nil {
 		if missing, ok := applyGoAheadVLANMembership(state, doc.VLANMembershipList.Action, doc.VLANMembershipList.VLANs); !ok {
 			return goaheadStatusResponse(2, fmt.Sprintf("no such VLAN %d", missing))
 		}
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
 	if doc.VLANInterfaceList != nil {
 		applyGoAheadPVIDs(state, doc.VLANInterfaceList.Interfaces)
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
 	if doc.PoEPSEInterfaceList != nil {
 		applyGoAheadPoE(state, doc.PoEPSEInterfaceList.Interfaces)
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
 	if doc.Standard802_3List != nil {
 		applyGoAheadStandard802_3List(state, doc.Standard802_3List.Entries)
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
 	if doc.DeviceBasicInfo != nil {
 		if doc.DeviceBasicInfo.DeviceName != nil {
 			state.Hostname = *doc.DeviceBasicInfo.DeviceName
 		}
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
-	tags := make([]string, len(doc.Other))
-	for i, o := range doc.Other {
-		tags[i] = o.XMLName.Local
+
+	if !handled {
+		tags := make([]string, len(doc.Other))
+		for i, o := range doc.Other {
+			tags[i] = o.XMLName.Local
+		}
+		return goaheadStatusResponse(2, fmt.Sprintf("no handler for %v", tags))
 	}
-	return goaheadStatusResponse(2, fmt.Sprintf("no handler for %v", tags))
+	return goaheadStatusResponse(0, "")
 }
 
 // goaheadStatusResponse mirrors Python web_gs728tpp._status_response: a
