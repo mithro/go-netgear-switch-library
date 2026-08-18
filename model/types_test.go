@@ -69,6 +69,59 @@ func TestPoEStatusDelivering(t *testing.T) {
 	}
 }
 
+// TestPoeCycleComplete pins model.PoeCycleComplete's exact case split,
+// mirroring Python models.poe_cycle_complete verbatim (models.py:140-162,
+// pin b26eb1f): success is relative to the port's PRIOR state, never an
+// absolute DELIVERING requirement -- LIVE-PROVEN on
+// sw-netgear-gs728tpp.monarto.mithis.com (10.2.5.10, firmware 6.0.1.30)
+// 2026-08-03, cycling port 17 with nothing attached left it SEARCHING, not
+// DELIVERING, and that cycle still counts as complete.
+func TestPoeCycleComplete(t *testing.T) {
+	delivering := &model.PoEStatus{Detect: model.PoEDetectDelivering}
+	searching := &model.PoEStatus{Detect: model.PoEDetectSearching}
+	disabled := &model.PoEStatus{Detect: model.PoEDetectDisabled}
+	fault := &model.PoEStatus{Detect: model.PoEDetectFault}
+
+	cases := []struct {
+		name        string
+		before, now *model.PoEStatus
+		want        bool
+	}{
+		{"now nil is never complete, even if before was delivering", delivering, nil, false},
+		{"now nil is never complete, even with no before", nil, nil, false},
+
+		// before was DELIVERING (a PD was attached and powered): success
+		// means it recovered to DELIVERING again -- SEARCHING is NOT
+		// enough, since that would mean the device didn't come back.
+		{"before delivering, now delivering again: complete", delivering, delivering, true},
+		{"before delivering, now only searching: NOT complete", delivering, searching, false},
+		{"before delivering, now disabled: NOT complete", delivering, disabled, false},
+		{"before delivering, now fault: NOT complete", delivering, fault, false},
+
+		// before was anything OTHER than delivering (searching/disabled/
+		// fault/unknown, or before itself unknown/nil): a port with no
+		// powered device can never reach DELIVERING, so re-detection
+		// (SEARCHING or DELIVERING) is success.
+		{"before searching (nothing attached), now searching again: complete", searching, searching, true},
+		{"before searching, now delivering (a PD showed up): complete", searching, delivering, true},
+		{"before nil (unknown prior state), now searching: complete", nil, searching, true},
+		{"before nil, now delivering: complete", nil, delivering, true},
+		{"before disabled, now searching: complete", disabled, searching, true},
+
+		// Re-detection means SEARCHING or DELIVERING specifically --
+		// FAULT/DISABLED after a cycle is still not "back".
+		{"before searching, now fault: NOT complete", searching, fault, false},
+		{"before nil, now disabled: NOT complete", nil, disabled, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := model.PoeCycleComplete(c.before, c.now); got != c.want {
+				t.Errorf("PoeCycleComplete(before=%+v, now=%+v) = %v, want %v", c.before, c.now, got, c.want)
+			}
+		})
+	}
+}
+
 func TestDetectedModelMatched(t *testing.T) {
 	matched := model.DetectedModel{Key: model.Ptr("gs305ep")}
 	if !matched.Matched() {
