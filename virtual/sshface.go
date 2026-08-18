@@ -61,9 +61,16 @@ type SSHFace struct {
 	username string
 	password string
 
-	mu       sync.Mutex // guards srv/listener (Start/Stop lifecycle only)
+	mu       sync.Mutex // guards srv/listener/conns (Start/Stop lifecycle only)
 	srv      *gliderssh.Server
 	listener net.Listener
+	// conns tracks every raw TCP connection accepted so far, keyed by the
+	// value gliderlabs' Server.Accept itself handed to ConnCallback (see
+	// trackConn's own doc comment for why Stop needs this in addition to
+	// gliderlabs' own srv.Close(): srv.conns is only populated AFTER a
+	// connection's SSH handshake completes, a race Stop's force-close must
+	// not depend on winning).
+	conns map[net.Conn]struct{}
 	// wg tracks BOTH the background Serve goroutine Start spawns AND every
 	// per-connection handleSession invocation gliderlabs itself spawns (see
 	// handleSession's own doc comment for why this is the ONLY way to make
@@ -119,6 +126,10 @@ func (f *SSHFace) Start() (port int, err error) {
 		ServerConfigCallback: func(gliderssh.Context) *gossh.ServerConfig {
 			return &gossh.ServerConfig{Config: gossh.Config{KeyExchanges: []string{sshLegacyKeyExchange}}}
 		},
+		// ConnCallback -- see trackConn's own doc comment for why Stop's
+		// force-close needs this hook rather than trusting gliderlabs' own
+		// (handshake-completion-gated) internal connection tracking alone.
+		ConnCallback: f.trackConn,
 	}
 	srv.AddHostKey(signer)
 
@@ -128,6 +139,7 @@ func (f *SSHFace) Start() (port int, err error) {
 	}
 	f.listener = ln
 	f.srv = srv
+	f.conns = map[net.Conn]struct{}{}
 
 	f.wg.Add(1)
 	go func() {
@@ -145,30 +157,134 @@ func (f *SSHFace) Start() (port int, err error) {
 }
 
 // Stop tears the server down deterministically (transport dossier §5's
-// leak-free contract): srv.Close() force-closes the listener AND every
-// currently-active SSH connection at once (unlike srv.Shutdown, which only
-// waits for existing connections to disconnect on their own -- an
-// indefinite hang if a caller forgot to close its client first), which
-// unblocks any in-flight per-connection Read; f.wg.Wait() then blocks until
-// the Serve goroutine AND every handleSession invocation (see its own doc
-// comment) have actually returned, not merely been asked to. Idempotent: a
-// Stop before Start, or a second Stop, is a no-op.
+// leak-free contract): srv.Close() force-closes every SSH connection
+// gliderlabs itself has FINISHED handshaking (unlike srv.Shutdown, which
+// only waits for existing connections to disconnect on their own -- an
+// indefinite hang if a caller forgot to close its client first). That alone
+// is NOT sufficient for a bounded Stop, though -- two gaps, both closed
+// below:
+//
+//  1. srv.Close()'s own force-close only reaches listeners gliderlabs has
+//     itself registered via its internal trackListener, which Start's
+//     background `go srv.Serve(ln)` goroutine calls asynchronously, with NO
+//     happens-before relationship to Stop. If Stop (and its srv.Close())
+//     runs before that goroutine reaches trackListener, srv.Close() closes
+//     ZERO listeners -- a silent no-op -- and the Serve goroutine's own
+//     l.Accept() call, whenever it does start, blocks forever (nothing will
+//     ever close ln again), hanging f.wg.Wait() below on the Serve
+//     goroutine's own f.wg.Done() that never comes. Fix: close the SAME
+//     *net.Listener object (ln, captured directly by Start, independent of
+//     gliderlabs' own bookkeeping) ourselves too -- this unblocks
+//     l.Accept() unconditionally, whether or not trackListener ever ran.
+//  2. Symmetrically, gliderlabs' own srv.conns (what srv.Close() force-
+//     closes) is only populated AFTER a connection's SSH handshake
+//     completes (server.go's HandleConn calls srv.trackConn only once
+//     gossh.NewServerConn returns) -- a connection accepted moments before
+//     Stop runs, still mid-handshake when srv.Close() takes its one-time
+//     pass over srv.conns, is invisible to it and never force-closed. If
+//     that connection's handshake later succeeds, its handleSession
+//     invocation (tracked on f.wg, see that method's own doc comment) can
+//     block forever reading a command nobody will ever send, hanging
+//     f.wg.Wait() the same way. Fix: trackConn (ConnCallback, wired in
+//     Start) records every accepted raw connection in f.conns the moment
+//     gliderlabs hands it to us -- BEFORE any handshake is attempted -- so
+//     Stop can force-close it directly too, independent of whether
+//     gliderlabs' own handshake-gated bookkeeping ever caught up.
+//
+// f.wg.Wait() then blocks until the Serve goroutine AND every handleSession
+// invocation have actually returned, not merely been asked to -- now
+// unconditionally bounded by the two direct closes above, not merely by
+// however much of gliderlabs' own internal state happened to be populated
+// when srv.Close() ran. Idempotent: a Stop before Start, or a second Stop,
+// is a no-op.
 func (f *SSHFace) Stop() error {
 	f.mu.Lock()
 	srv := f.srv
+	ln := f.listener
+	conns := f.conns
 	f.srv = nil
 	f.listener = nil
+	f.conns = nil
 	f.mu.Unlock()
 
 	if srv == nil {
 		return nil
 	}
 	err := srv.Close()
+	// Belt-and-suspenders over srv.Close() -- see this method's own doc
+	// comment for exactly which race each direct close below closes.
+	// Errors are deliberately discarded: in the common (non-racy) case
+	// srv.Close() already closed these, so a second Close here is expected
+	// to report "already closed", not a real failure; in the racy case this
+	// is the ONLY close that ever actually runs. Ordered after srv.Close()
+	// so a genuine srv.Close() error (recorded in err above) is never
+	// masked by one of these redundant closes' own error.
+	if ln != nil {
+		_ = ln.Close()
+	}
+	for c := range conns {
+		_ = c.Close()
+	}
 	f.wg.Wait()
 	if err != nil {
 		return fmt.Errorf("virtual: SSHFace.Stop: %w", err)
 	}
 	return nil
+}
+
+// trackConn is gliderlabs' ConnCallback hook (wired in Start), invoked for
+// every accepted raw TCP connection BEFORE any SSH handshake is attempted
+// on it -- see Stop's own doc comment (gap 2) for exactly why this exists:
+// it lets Stop force-close a connection even if gliderlabs' own handshake-
+// gated srv.conns bookkeeping never catches up. Returning nil tells
+// gliderlabs to close conn immediately and abandon it without attempting a
+// handshake at all -- the correct behavior for a connection accepted AFTER
+// Stop already ran (f.conns == nil): serving it would be pointless (no
+// caller is left to talk to) and dangerous (nothing would ever force-close
+// it again). Otherwise records conn in f.conns and returns it wrapped in
+// sshUntrackOnClose, so f.conns is pruned again the moment ANYTHING in
+// gliderlabs' own stack closes it -- without that, f.conns would grow by
+// one entry for every connection ever accepted over this SSHFace's whole
+// lifetime, never shrinking until Stop.
+func (f *SSHFace) trackConn(_ gliderssh.Context, conn net.Conn) net.Conn {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.conns == nil {
+		return nil
+	}
+	f.conns[conn] = struct{}{}
+	return &sshUntrackOnClose{Conn: conn, face: f}
+}
+
+// untrackConn removes conn from f.conns (a no-op if Stop already cleared it
+// to nil, or if conn was never tracked -- e.g. Stop's own force-close loop
+// closes the raw, unwrapped conn directly, which never reaches
+// sshUntrackOnClose.Close below and so never calls this).
+func (f *SSHFace) untrackConn(conn net.Conn) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.conns != nil {
+		delete(f.conns, conn)
+	}
+}
+
+// sshUntrackOnClose wraps one accepted connection purely to prune it from
+// f.conns (see trackConn's own doc comment) the moment it is closed through
+// ANY path gliderlabs itself takes -- a normal per-session teardown
+// (handleSession's own defers, ultimately gossh.ServerConn.Close), an
+// auth/handshake failure (HandleConn's own `defer conn.Close()`), or Stop's
+// own srv.Close() force-close above. once guards against double-untracking
+// (harmless either way, but avoids a redundant lock acquisition) since more
+// than one of those paths can call Close on the same connection.
+type sshUntrackOnClose struct {
+	net.Conn
+	face *SSHFace
+	once sync.Once
+}
+
+func (c *sshUntrackOnClose) Close() error {
+	c.once.Do(func() { c.face.untrackConn(c.Conn) })
+	return c.Conn.Close()
 }
 
 // handleSession is the gliderlabs/ssh Handler for every accepted, shell-

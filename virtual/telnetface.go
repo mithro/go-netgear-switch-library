@@ -259,6 +259,19 @@ func (f *TelnetFace) Start() (port int, err error) {
 // realistic failure mode here) -- each accepted connection is tracked (so
 // Stop can force-close it) and served on its own goroutine, both counted on
 // f.wg so Stop's Wait is deterministic.
+//
+// A connection Accept hands back AFTER Stop has already run (raced: Accept
+// unblocks with a real connection an instant before ln.Close() takes
+// effect, landing after Stop has already taken its conns snapshot and
+// cleared f.conns to nil) is never force-closed by that snapshot and would
+// otherwise be served forever with nobody left to close it, hanging
+// f.wg.Wait() the same way SSHFace's analogous listener/handshake race
+// does (see sshface.go's Stop doc comment) -- trackConn's own return value
+// closes that gap: it reports whether f.conns was still live at the moment
+// of the SAME f.mu-guarded check Stop's own snapshot-and-clear uses, so
+// "tracked" and "Stop already ran" are mutually exclusive with no gap
+// between them. false means abandon conn immediately, exactly like
+// SSHFace.trackConn returning nil for the same reason.
 func (f *TelnetFace) acceptLoop(ln net.Listener) {
 	defer f.wg.Done()
 	for {
@@ -266,7 +279,10 @@ func (f *TelnetFace) acceptLoop(ln net.Listener) {
 		if err != nil {
 			return
 		}
-		f.trackConn(conn, true)
+		if !f.trackConn(conn, true) {
+			_ = conn.Close()
+			continue
+		}
 		f.wg.Add(1)
 		go func() {
 			defer f.wg.Done()
@@ -277,17 +293,25 @@ func (f *TelnetFace) acceptLoop(ln net.Listener) {
 	}
 }
 
-func (f *TelnetFace) trackConn(c net.Conn, add bool) {
+// trackConn adds or removes c from f.conns, reporting whether f.conns was
+// still live (Stop had not yet run) at the moment of this SAME f.mu-guarded
+// check -- see acceptLoop's own doc comment for why callers with add=true
+// must act on a false return (abandon the connection) rather than ignore
+// it. The return value is meaningless (and ignored by every add=false
+// caller) once Stop has already cleared the map; removing from a nil map
+// is this function's own no-op guard, not the caller's problem.
+func (f *TelnetFace) trackConn(c net.Conn, add bool) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.conns == nil {
-		return // Stop already ran and cleared the map; nothing to track.
+		return false // Stop already ran and cleared the map; nothing to track.
 	}
 	if add {
 		f.conns[c] = struct{}{}
 	} else {
 		delete(f.conns, c)
 	}
+	return true
 }
 
 // serveConn drives the User:/Password: login handshake, then -- only on a

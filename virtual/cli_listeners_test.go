@@ -15,6 +15,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -515,6 +516,151 @@ func TestSSHFaceStopBeforeStartIsNoOp(t *testing.T) {
 	face := NewSSHFace(SeedGSM7252PS(), spec, "admin", "s3cret", "127.0.0.1")
 	if err := face.Stop(); err != nil {
 		t.Errorf("Stop() before Start() error = %v, want nil (no-op)", err)
+	}
+}
+
+// --- 3b. bounded Stop() under a concurrent-connect race (regression) ------
+//
+// TestSSHFaceStopBoundedUnderConcurrentConnectRace and its Telnet analogue
+// below reproduce an intermittent `go test ./...` hang (no -race needed;
+// timing-sensitive, so -race's own slowdown tends to mask it) root-caused
+// to a genuine goroutine dump: `f.wg.Wait()` in Stop blocking forever on a
+// listener/handler goroutine that never returns, because Stop raced the
+// background Serve/acceptLoop goroutine Start spawns and won -- see
+// sshface.go's Stop doc comment (gap 1: the listener itself, closed only
+// via gliderlabs' own trackListener-gated bookkeeping) and
+// telnetface.go's acceptLoop doc comment (the per-connection analogue) for
+// the exact mechanism each fix below closes. Firing MANY concurrent real
+// SSH/Telnet dials at Start's freshly-returned port, with Stop launched
+// concurrently rather than after any of them complete, maximizes the odds
+// of a dial landing in the exact "accepted, not yet registered" window each
+// race depends on -- reliably hitting it well within a handful of cycles
+// pre-fix (see this task's own mutation-verification, not committed: with
+// SSHFace.Stop's direct ln.Close()/conns force-close reverted to the old
+// srv.Close()-only body, cycle 0 already hangs and dumps goroutine 9
+// blocked in net.(*TCPListener).Accept inside gliderlabs'
+// (*Server).Serve).
+func TestSSHFaceStopBoundedUnderConcurrentConnectRace(t *testing.T) {
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel() error = %v", err)
+	}
+	spec, err := fastpath.CLISpec(m)
+	if err != nil {
+		t.Fatalf("fastpath.CLISpec() error = %v", err)
+	}
+
+	// cycles/dialers is deliberately modest: the race this reproduces (see
+	// sshface.go's Stop doc comment) was empirically 100% reproducible on
+	// cycle 0 pre-fix in every run during this test's own development
+	// (including its mutation-verification, not committed) -- a bigger loop
+	// buys negligible extra confidence at real cost to every `go test
+	// ./virtual/...` invocation (SSH's 2048-bit host-key generation on every
+	// Start() dominates this test's runtime).
+	const cycles, dialers = 8, 12
+	for i := 0; i < cycles; i++ {
+		face := NewSSHFace(SeedGSM7252PS(), spec, "admin", "s3cret", "127.0.0.1")
+		port, err := face.Start()
+		if err != nil {
+			t.Fatalf("cycle %d: Start() error = %v", i, err)
+		}
+
+		var dialWG sync.WaitGroup
+		for j := 0; j < dialers; j++ {
+			dialWG.Add(1)
+			go func() {
+				defer dialWG.Done()
+				transport, err := fastpath.NewSSHTransport(fastpath.SSHConfig{
+					Host: "127.0.0.1", Port: port,
+					Username: "admin", Password: "s3cret",
+					Timeout: 2 * time.Second,
+				})
+				if err != nil {
+					return // Stop won the race against this dial -- expected.
+				}
+				driver := fastpath.NewShellDriver(transport, fastpath.ShellDriverConfig{})
+				_ = driver.Setup(context.Background())
+				_ = driver.Close()
+			}()
+		}
+
+		// Launched concurrently with the dialers above, deliberately not
+		// synchronized against them, to maximize overlap with each one's
+		// own accept/handshake window.
+		done := make(chan error, 1)
+		go func() { done <- face.Stop() }()
+
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("cycle %d: Stop() error = %v", i, err)
+			}
+		case <-time.After(5 * time.Second):
+			buf := make([]byte, 4<<20)
+			n := runtime.Stack(buf, true)
+			t.Fatalf("cycle %d: Stop() did not return within 5s (not bounded) -- goroutine dump:\n%s", i, buf[:n])
+		}
+		dialWG.Wait()
+	}
+}
+
+// TestTelnetFaceStopBoundedUnderConcurrentConnectRace is
+// TestSSHFaceStopBoundedUnderConcurrentConnectRace's Telnet analogue --
+// TelnetFace's own race is narrower (its listener close was always direct
+// and race-free; only the PER-CONNECTION acceptLoop/trackConn race applied,
+// see telnetface.go's acceptLoop doc comment), but the reproduction shape
+// and the bound this proves are identical.
+func TestTelnetFaceStopBoundedUnderConcurrentConnectRace(t *testing.T) {
+	m, err := model.GetModel("gsm7228ps")
+	if err != nil {
+		t.Fatalf("model.GetModel() error = %v", err)
+	}
+	spec, err := fastpath.CLISpec(m)
+	if err != nil {
+		t.Fatalf("fastpath.CLISpec() error = %v", err)
+	}
+
+	const cycles, dialers = 20, 16
+	for i := 0; i < cycles; i++ {
+		face := NewTelnetFace(SeedGSM7228PS(), spec, "admin", "s3cret", "127.0.0.1")
+		port, err := face.Start()
+		if err != nil {
+			t.Fatalf("cycle %d: Start() error = %v", i, err)
+		}
+
+		var dialWG sync.WaitGroup
+		for j := 0; j < dialers; j++ {
+			dialWG.Add(1)
+			go func() {
+				defer dialWG.Done()
+				transport, err := fastpath.NewTelnetTransport(fastpath.TelnetConfig{
+					Host: "127.0.0.1", Port: port,
+					Username: "admin", Password: "s3cret",
+					Timeout: 2 * time.Second,
+				})
+				if err != nil {
+					return // Stop won the race against this dial -- expected.
+				}
+				driver := fastpath.NewShellDriver(transport, fastpath.ShellDriverConfig{})
+				_ = driver.Setup(context.Background())
+				_ = driver.Close()
+			}()
+		}
+
+		done := make(chan error, 1)
+		go func() { done <- face.Stop() }()
+
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("cycle %d: Stop() error = %v", i, err)
+			}
+		case <-time.After(5 * time.Second):
+			buf := make([]byte, 4<<20)
+			n := runtime.Stack(buf, true)
+			t.Fatalf("cycle %d: Stop() did not return within 5s (not bounded) -- goroutine dump:\n%s", i, buf[:n])
+		}
+		dialWG.Wait()
 	}
 }
 
