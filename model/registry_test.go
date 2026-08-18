@@ -391,3 +391,58 @@ func TestGSM7228PSHasNoSSH(t *testing.T) {
 		t.Error("gsm7228ps: expected SNMP and HTTP backends unchanged")
 	}
 }
+
+// TestModelsSnmpVlanWriteDialect mirrors Python's
+// test_model_declares_the_switchport_write_dialect
+// (tests/virtual/test_switchport_vlan_write.py): both M4300 SKUs run
+// FASTPATH 12.x, whose Q-BRIDGE PortLists cannot carry a membership write,
+// so both declare SnmpVlanWrite == SNMPVlanWriteFastpathSwitchport; every
+// other SNMP model keeps the standard qbridge dialect. The -16X is no
+// longer an inference from the -24X -- see the registry comment for the
+// live A/B/A that settled it.
+func TestModelsSnmpVlanWriteDialect(t *testing.T) {
+	cases := []struct {
+		key  string
+		want string
+	}{
+		{"m4300-24x", model.SNMPVlanWriteFastpathSwitchport},
+		{"m4300-16x", model.SNMPVlanWriteFastpathSwitchport},
+		{"gsm7252ps", model.SNMPVlanWriteQBridge},
+		{"gsm7228ps", model.SNMPVlanWriteQBridge},
+		{"gs728tpp", model.SNMPVlanWriteQBridge},
+	}
+	for _, c := range cases {
+		m, err := model.GetModel(c.key)
+		if err != nil {
+			t.Fatalf("GetModel(%q): %v", c.key, err)
+		}
+		if m.SnmpVlanWrite != c.want {
+			t.Errorf("%s: SnmpVlanWrite = %q, want %q", c.key, m.SnmpVlanWrite, c.want)
+		}
+	}
+}
+
+// TestModelsSnmpVlanSplitMembershipWrites mirrors Python's
+// test_s3300_declares_the_split_membership_write_quirk: only gsm7228ps
+// (the S3300-52X's Smart firmware) opts into the split-PDU write; the
+// switches that apply a combined PDU correctly (gsm7252ps, m4300-24x) must
+// NOT opt in.
+func TestModelsSnmpVlanSplitMembershipWrites(t *testing.T) {
+	cases := []struct {
+		key  string
+		want bool
+	}{
+		{"gsm7228ps", true},
+		{"gsm7252ps", false},
+		{"m4300-24x", false},
+	}
+	for _, c := range cases {
+		m, err := model.GetModel(c.key)
+		if err != nil {
+			t.Fatalf("GetModel(%q): %v", c.key, err)
+		}
+		if m.SnmpVlanSplitMembershipWrites != c.want {
+			t.Errorf("%s: SnmpVlanSplitMembershipWrites = %v, want %v", c.key, m.SnmpVlanSplitMembershipWrites, c.want)
+		}
+	}
+}
