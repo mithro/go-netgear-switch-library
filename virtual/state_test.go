@@ -5,10 +5,19 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/snmp"
 )
+
+// ignoreStateMutex excludes State.mu from cmp.Diff comparisons below: it's a
+// Go-only synchronization primitive (see State.mu's own doc comment), not
+// device state, and two States built independently (e.g. buildRichState()
+// called twice) legitimately carry two different *sync.Mutex values even
+// when every OTHER field matches -- cmp would otherwise panic on the
+// unexported field.
+var ignoreStateMutex = cmpopts.IgnoreUnexported(State{})
 
 func TestNewStateDefaults(t *testing.T) {
 	st := NewState("gsm7252ps")
@@ -650,7 +659,7 @@ func TestSnapshotIsIndependentDeepCopy(t *testing.T) {
 
 	// The snapshot must be completely unaffected by every mutation above.
 	want := buildRichState()
-	if diff := cmp.Diff(want, snap); diff != "" {
+	if diff := cmp.Diff(want, snap, ignoreStateMutex); diff != "" {
 		t.Errorf("snapshot mutated by post-snapshot changes to original (-want +snap):\n%s", diff)
 	}
 }
@@ -678,10 +687,10 @@ func TestRestorePreservesPointerIdentity(t *testing.T) {
 	if h.St != st {
 		t.Fatal("holder must still reference the exact same *State after Restore")
 	}
-	if diff := cmp.Diff(original, st); diff != "" {
+	if diff := cmp.Diff(original, st, ignoreStateMutex); diff != "" {
 		t.Errorf("state after Restore does not match pre-mutation original (-want +got):\n%s", diff)
 	}
-	if diff := cmp.Diff(original, h.St); diff != "" {
+	if diff := cmp.Diff(original, h.St, ignoreStateMutex); diff != "" {
 		t.Errorf("holder's view after Restore does not match pre-mutation original (-want +got):\n%s", diff)
 	}
 }

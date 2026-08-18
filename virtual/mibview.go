@@ -1,10 +1,9 @@
 package virtual
 
 // mibview.go ports src/netgear_switch/virtual/faces/mibview.py's StateMibView
-// (the normative source; that repo is read-only from here -- pin 1aa1274,
-// branch fix/s3300-52x-live-verify). Any discrepancy between this file and
-// the Python source is a bug here. See D-VIRT §2 for the full porting
-// dossier this mirrors.
+// (the normative source; that repo is read-only from here -- pin b26eb1f).
+// Any discrepancy between this file and the Python source is a bug here.
+// See D-VIRT §2 for the full porting dossier this mirrors.
 //
 // MibView is a pure OID responder over State.OIDMap(): no network, no
 // pysnmp/gosnmp dependency here at all (that lives in snmpface.go) -- just a
@@ -174,6 +173,19 @@ func (v *MibView) RestoreState(snapshot *State) {
 func (v *MibView) IsWritableOID(oid string) bool {
 	return v.state.IsWritableOID(oid)
 }
+
+// LockState is a passthrough to State.LockState: a face's SET handler must
+// hold this across a whole atomic write (snapshot, per-varbind apply,
+// rebuild), not just the individual State mutations inside it, so no other
+// goroutine (another face, or a test reading State directly) ever observes
+// a partial write or races with one. See State.LockState's own doc comment
+// for the full contract -- this is a Go-only concern with no Python
+// equivalent.
+func (v *MibView) LockState() { v.state.LockState() }
+
+// UnlockState is a passthrough to State.UnlockState, releasing the lock
+// LockState acquired.
+func (v *MibView) UnlockState() { v.state.UnlockState() }
 
 // IsImplemented reports false if oid falls under a subtree root this
 // model's SNMP agent has no registration for at all (e.g. the RFC3621 PoE

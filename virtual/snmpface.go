@@ -2,9 +2,8 @@ package virtual
 
 // snmpface.go ports src/netgear_switch/virtual/faces/snmp.py's
 // VirtualSnmpFace (the normative source; that repo is read-only from here --
-// pin 1aa1274, branch fix/s3300-52x-live-verify). Any discrepancy between
-// this file and the Python source is a bug here. See D-VIRT §3/§7 for the
-// full porting dossier this mirrors.
+// pin b26eb1f). Any discrepancy between this file and the Python source is
+// a bug here. See D-VIRT §3/§7 for the full porting dossier this mirrors.
 //
 // SnmpFace is a real SNMPv2c command-responder agent serving a MibView,
 // bound to an ephemeral UDP port on 127.0.0.1. Unlike the Python reference
@@ -309,7 +308,17 @@ func (f *SnmpFace) handleGetBulk(req *gosnmp.SnmpPacket) []gosnmp.SnmpPDU {
 // error status echoing the ORIGINAL request varbinds (never the
 // partially-applied out slice); on full success, rebuild the view exactly
 // once and echo the applied varbinds back.
+//
+// Holds the view's State lock for the whole operation (Go-only; see
+// State.mu's doc comment): this runs on serve()'s background goroutine, and
+// without it a concurrent direct reader of State (e.g. a test inspecting
+// SwitchportMode right after the SNMP client call that drove this SET
+// returns) would race with the writes below, even though the SNMP request/
+// response round trip itself enforces real wall-clock ordering.
 func (f *SnmpFace) handleSet(vars []gosnmp.SnmpPDU) (out []gosnmp.SnmpPDU, errStatus gosnmp.SNMPError, errIndex uint8) {
+	f.view.LockState()
+	defer f.view.UnlockState()
+
 	snapshot := f.view.SnapshotState()
 	applied := make([]gosnmp.SnmpPDU, len(vars))
 	for i, vb := range vars {

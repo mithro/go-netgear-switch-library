@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/nsdp"
@@ -633,6 +634,28 @@ type State struct {
 	// this counter is the only observable record that the request was
 	// issued -- not part of any SNMP/NSDP/HTTP projection.
 	Reboots int
+
+	// mu has no Python equivalent: the pin's VirtualSwitchState is only ever
+	// touched from one goroutine-equivalent (a single asyncio event loop), so
+	// it needs no lock. This Go port instead runs each bound face (SnmpFace,
+	// NsdpFace, HTTPFace, SSHFace, TelnetFace) on its own real goroutine, all
+	// sharing one *State -- and a face's serving goroutine mutating a field
+	// while any other goroutine (another face, or a test reading State
+	// directly after a synchronous protocol round trip) reads it is a real
+	// data race under the Go memory model: a UDP/TCP round trip enforces real
+	// wall-clock ordering but establishes NO happens-before edge the race
+	// detector (or the memory model) recognises. mu guards every mutable
+	// field above; a face's write path must hold it across its whole atomic
+	// operation (see SnmpFace.handleSet's Lock/Unlock), and any code reading
+	// State fields directly from outside a face's own single-threaded
+	// request handling -- never through the safe MibView.Get/GetNext path --
+	// must hold it too (see Lock/Unlock below). A *sync.Mutex, not an
+	// embedded sync.Mutex: Restore below does a whole-struct `*s = *snap`,
+	// which would copy (and, for an embedded Mutex, corrupt) a lock value;
+	// a pointer field survives that assignment by identity instead (Snapshot
+	// carries the same pointer forward), and go vet's copylocks check never
+	// sees a Mutex value being copied.
+	mu *sync.Mutex
 }
 
 // NewState builds a blank-but-valid State for modelKey, with the same
@@ -671,8 +694,30 @@ func NewState(modelKey string) *State {
 		SwitchportGeneralUntagged: map[int]map[int]bool{},
 		SwitchportGeneralTagged:   map[int]map[int]bool{},
 		PDUEgressWrites:           map[int]bool{},
+		mu:                        &sync.Mutex{},
 	}
 }
+
+// LockState acquires this State's mutex -- see mu's own doc comment for the
+// full contract (Go-only; no Python equivalent). A face's write path holds
+// this across a whole atomic operation, not just the individual field
+// assignments inside it (see SnmpFace.handleSet). Code reading State fields
+// directly from outside a face's own single-threaded request handling --
+// e.g. a test inspecting SwitchportMode right after a synchronous SNMP
+// write completes -- must hold it too, for exactly the same reason: without
+// it, the read and the face's write are unsynchronized concurrent accesses
+// to the same map, even though the protocol round trip enforces real
+// ordering in practice.
+//
+// Named LockState/UnlockState, not Lock/Unlock: naming them Lock/Unlock
+// would make *State satisfy sync.Locker while State (the value type) does
+// not -- exactly the shape go vet's copylocks check flags -- and Restore's
+// `*s = *snap` (see its own doc comment) depends on State staying a
+// vet-clean value to assign wholesale.
+func (s *State) LockState() { s.mu.Lock() }
+
+// UnlockState releases the lock acquired by LockState.
+func (s *State) UnlockState() { s.mu.Unlock() }
 
 // SysinfoSensors returns the sensor set the HTTP sysInfo page renders:
 // HTTPSensors when a model's web UI exposes a different sensor set than
@@ -750,6 +795,7 @@ func (s *State) Snapshot() *State {
 		SwitchportGeneralTagged:   cloneIntIntBoolMap(s.SwitchportGeneralTagged),
 		PDUEgressWrites:           cloneIntBoolMap(s.PDUEgressWrites),
 		Reboots:                   s.Reboots,
+		mu:                        s.mu, // same lock object, not a fresh one -- see Restore's own note.
 	}
 	return cp
 }
@@ -764,6 +810,15 @@ func (s *State) Snapshot() *State {
 // copied every map/slice/pointer field: after this assignment s's fields
 // alias snap's already-independent data, never anything still shared with
 // whatever was mutated between Snapshot and Restore.
+//
+// mu is the one field Snapshot deliberately did NOT deep-copy: snap.mu is
+// the SAME *sync.Mutex as s.mu (see Snapshot), so this assignment leaves
+// s.mu pointing at itself, unchanged -- required because Restore always
+// runs from inside a face's own Lock/Unlock critical section (e.g.
+// SnmpFace.handleSet's rollback path); swapping in a different (or fresh,
+// unlocked) mutex here would desync that Unlock from the Lock that's still
+// held, either deadlocking a future caller or panicking on "unlock of
+// unlocked mutex".
 func (s *State) Restore(snap *State) {
 	*s = *snap
 }
