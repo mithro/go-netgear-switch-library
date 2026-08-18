@@ -197,6 +197,44 @@ func TestNsdpFaceReadReturnsSeedPorts(t *testing.T) {
 	}
 }
 
+// TestNsdpFaceReadOfSoleUnservedTagIsAnErrorNotAnEmptySuccess ports the
+// pin's test_face_read_of_a_sole_unserved_tag_is_an_error_not_an_empty_
+// success (test_virtual_nsdp_face.py:162-180): a READ naming exactly one tag
+// this model's fake genuinely has no value for (LOOP_DETECTION -- unlike the
+// pin's fixture, which uses seed_gs110emx_fw1028, this uses SeedGS305EP,
+// whose own doc comment already pins that it leaves NsdpLoopDetection nil/
+// unseeded) comes back error 3 (read-only) with the error attribute naming
+// that tag -- NOT an empty success -- while the SAME tag mixed into a
+// larger read is simply omitted and the read still succeeds. Without this,
+// nothing could tell "this model has no such tag" from "this tag happens to
+// have no value right now".
+func TestNsdpFaceReadOfSoleUnservedTagIsAnErrorNotAnEmptySuccess(t *testing.T) {
+	port, _ := startNsdpFace(t, SeedGS305EP())
+	client := nsdpTestClient(t, port)
+
+	sole, err := client.Read(context.Background(), []nsdp.Tag{nsdp.TagLoopDetection})
+	if err != nil {
+		t.Fatalf("Read (sole): %v", err)
+	}
+	if sole.Result != nsdp.ResultReadOnly {
+		t.Fatalf("Result = %#04x, want ResultReadOnly (%#04x)", sole.Result, nsdp.ResultReadOnly)
+	}
+	if sole.ErrorAttr != uint16(nsdp.TagLoopDetection) {
+		t.Fatalf("ErrorAttr = %#x, want LOOP_DETECTION (%#x)", sole.ErrorAttr, uint16(nsdp.TagLoopDetection))
+	}
+
+	mixed, err := client.Read(context.Background(), []nsdp.Tag{nsdp.TagModel, nsdp.TagLoopDetection})
+	if err != nil {
+		t.Fatalf("Read (mixed): %v", err)
+	}
+	if mixed.Result != nsdp.ResultSuccess {
+		t.Fatalf("mixed Result = %#04x, want ResultSuccess", mixed.Result)
+	}
+	if len(mixed.TLVs) != 1 || mixed.TLVs[0].Tag != nsdp.TagModel {
+		t.Fatalf("mixed TLVs = %+v, want exactly one TagModel TLV (LOOP_DETECTION silently omitted)", mixed.TLVs)
+	}
+}
+
 func TestNsdpFaceAuthenticatedWriteIsReadBack(t *testing.T) {
 	port, _ := startNsdpFace(t, SeedGS110EMX())
 	client := nsdpTestClient(t, port)

@@ -255,6 +255,21 @@ func (f *NsdpFace) readResponse(req nsdp.Packet) nsdp.Packet {
 		salt := f.nextSalt()
 		resp.TLVs = append(resp.TLVs, nsdp.TLVEntry{Tag: nsdp.TagAuthV2Salt, Value: append([]byte(nil), salt[:]...)})
 	}
+	// A SOLE unanswerable tag is an ERROR, not an empty success. MEASURED on a
+	// real GS110EMX (10.1.5.25, fw 1.0.2.8, 2026-07-30): reading one tag this
+	// firmware does not serve comes back with header error code 3 and the
+	// error-attribute field naming that tag, whereas the same tag mixed into
+	// a multi-tag read is simply OMITTED and the reply is error 0 (checked
+	// directly: [MODEL, LOOP_DETECTION] -> error 0, one MODEL TLV). Mirrors
+	// pin faces/nsdp.py:135-147 exactly, including the END_OF_MARK exclusion
+	// (a bare END_OF_MARK read produces a legitimately empty, still-success
+	// response). Without this, nothing in CI could tell a tag this model
+	// lacks from a tag it merely has no value for -- which is exactly how
+	// "NSDP has no PoE/FDB/LLDP tag" stayed an unfalsifiable claim.
+	if len(resp.TLVs) == 0 && len(req.TLVs) == 1 && req.TLVs[0].Tag != nsdp.TagEndOfMark {
+		resp.Result = nsdp.ResultReadOnly
+		resp.ErrorAttr = uint16(req.TLVs[0].Tag)
+	}
 	return resp
 }
 
