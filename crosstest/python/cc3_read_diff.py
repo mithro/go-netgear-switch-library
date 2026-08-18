@@ -25,7 +25,10 @@ Reads ONE JSON object from stdin::
         "community": "public", "http_password": "password"
       },
       "cli_username": "admin", "cli_password": "password",
-      "triples": [{"backend": "snmp", "op": "get_ports"}, ...]
+      "triples": [
+        {"backend": "snmp", "op": "get_ports"},
+        {"backend": "telnet", "op": "get_users", "expected": [...]}
+      ]
     }
 
 A Go endpoint port of 0 means the Go fake does not serve that backend (mirrors
@@ -33,6 +36,15 @@ virtual.Endpoints' own convention on the Go side); this driver only builds a
 client for a backend whose port is nonzero. ``ssh_port`` is accepted but
 NEVER used to build a client -- see ``build_go_switch``'s own docstring for
 why this driver is telnet-only for the CLI backend.
+
+A triple carrying an ``expected`` key (test/crosslang/python_driver_test.go's
+``referenceUnavailableInPythonFake`` set) is Go's OWN library's reading of
+its OWN fake, already JSON-marshalled field-for-field compatible with the
+matching Python dataclass -- see ``process_reference_unavailable_triple``'s
+own docstring for why and how this driver substitutes a READER-PARITY check
+(Python-lib(Go-fake) == Go-lib(Go-fake)) for the normal fidelity differential
+on exactly these triples, and how it stays self-verifying rather than a
+silent, permanent exception.
 
 Writes a JSON ARRAY to stdout, one entry per input triple, in the same order::
 
@@ -74,6 +86,53 @@ from typing import Any, Callable
 # "[] == []" pass this driver's non-vacuity guard exists to catch.
 _NEVER_EMPTY_OPS = frozenset({"get_ports", "get_vlans"})
 
+# (model_key, backend) -> the exact set of LLDP `local_port` rows whose
+# `remote_port_id` is EXCLUDED from the get_lldp equality check -- controller
+# triage decision on the CC3 delivery report's finding #1 (2026-08-18). Root
+# cause (unchanged from that report, re-verified against a live
+# GoFakeProvider instance): these specific neighbours advertise a raw,
+# non-ASCII/binary MAC-address-subtype LLDP Port ID (e.g. the 6 bytes
+# 88:A2:9E:80:87:01), and the two fakes' HTTP text layers round-trip that raw
+# byte string differently -- Go's virtual/web_gsm7252ps.go xeCell writes the
+# Go byte-string verbatim onto the wire, while the pinned Python fake's
+# LldpSim.port_id is stored latin-1-decoded and re-encoded UTF-8 on serve
+# (faces/http.py Handler._send: `text.encode()`); httpx's unforced "utf-8"
+# guess then decodes the two wire encodings to different strings. Neither
+# fake's own behaviour is provably what real hardware sends for a binary
+# Port ID (a real device might hex-format it, the way BOTH fakes already do
+# for remote_chassis_id) -- this is flagged pending a hardware LLDP Port ID
+# capture, not attributed to either fake.
+#
+# EVERY OTHER FIELD of these same rows (local_port, remote_sys_name,
+# remote_port_desc, remote_chassis_id), and EVERY OTHER ROW of the same
+# get_lldp table (e.g. m4300-24x/http local_port 2, whose plain-text
+# "1/0/49" Port ID already matches and stays fully compared), is UNCHANGED
+# by this exclusion -- a regression anywhere else in the same triple still
+# fails it. Self-verifying: process_triple additionally checks (BEFORE
+# stripping) whether remote_port_id has, in the meantime, come to match
+# WITHOUT the exclusion; if it has, this table is stale and the triple
+# fails loudly instead of silently carrying a no-longer-needed exception
+# forever.
+_KNOWN_LLDP_PORT_ID_DIVERGENCE: dict[tuple[str, str], frozenset[int]] = {
+    ("m4300-24x", "http"): frozenset({1, 6}),
+    ("m4300-16x", "telnet"): frozenset({16}),
+}
+
+
+def _strip_excluded_lldp_port_ids(rows: Any, affected_ports: frozenset[int]) -> Any:
+    """Drop the `remote_port_id` key from every row in `rows` (a normalized
+    get_lldp list of dicts) whose `local_port` is in `affected_ports`. Every
+    other row, and every other field of an affected row, passes through
+    unchanged -- see _KNOWN_LLDP_PORT_ID_DIVERGENCE's own doc comment."""
+    if not isinstance(rows, list):
+        return rows
+    out = []
+    for row in rows:
+        if isinstance(row, dict) and row.get("local_port") in affected_ports:
+            row = {k: v for k, v in row.items() if k != "remote_port_id"}
+        out.append(row)
+    return out
+
 
 def _normalize(value: Any) -> Any:
     """Recursively turn a facade return value into a plain, order-independent,
@@ -94,6 +153,13 @@ def _normalize(value: Any) -> Any:
         return {f.name: _normalize(getattr(value, f.name)) for f in dataclasses.fields(value)}
     if isinstance(value, enum.Enum):
         return value.value
+    if isinstance(value, dict):
+        # Reached for an "expected" value straight off JSON (Go's own
+        # library reading, already marshalled field-for-field compatible
+        # with the matching Python dataclass) rather than a live Python
+        # object -- recurse into values so it normalizes exactly like the
+        # dataclass case above would.
+        return {k: _normalize(v) for k, v in value.items()}
     if isinstance(value, (frozenset, set)):
         items = [_normalize(v) for v in value]
         items.sort(key=lambda v: json.dumps(v, sort_keys=True, default=str))
@@ -216,7 +282,106 @@ def build_go_switch(
     return SyncSwitch(model, host, **kwargs)
 
 
-def process_triple(go_sw: Any, ref_sw: Any, backend_str: str, op_name: str) -> dict[str, Any]:
+def process_reference_unavailable_triple(
+    go_sw: Any, ref_sw: Any, backend_str: str, op_name: str, expected: Any
+) -> dict[str, Any]:
+    """READER-PARITY check for a triple whose Python REFERENCE fake cannot
+    serve this op at all -- controller triage decision on the CC3 delivery
+    report's finding #2 (2026-08-18): the pinned Python reference's own
+    in-process VirtualCliFace.run() dispatch (virtual/faces/cli.py:505-563)
+    has no case at all for `show users`, `show ip http`, `show ip ssh` or
+    `show telnetcon` -- every one falls through to its final line-563
+    "Command not found / Incomplete command..." -- so there is genuinely no
+    Python reference to differential against for get_users/get_services over
+    telnet on m4300-24x/gsm7252ps (test/crosslang/python_driver_test.go's
+    referenceUnavailableInPythonFake documents exactly which four triples and
+    why only these two models: m4300-16x/gsm7228ps's Go seeds carry no Users
+    at all either, so their telnet/get_users trivially agrees with Python's
+    empty fallback and never needed this substitution).
+
+    Rather than DROP these triples (losing Python-lib<->Go-fake coverage for
+    two real ops), this asks a different, still fully genuine question: does
+    Python's OWN library, reading THIS repo's Go fake over the wire, get the
+    SAME answer Go's OWN library gets reading that IDENTICAL running fake
+    instance? `expected` is that Go-library reading, already JSON-marshalled
+    field-for-field compatible with the matching Python dataclass (model.
+    SwitchUser/ServiceStatus's own `json:"..."` tags mirror models.SwitchUser/
+    ServiceStatus's field names exactly) by
+    test/crosslang/python_driver_test.go's goLibraryReadJSON. This is NOT a
+    hardcoded expectation table: the reference value is derived LIVE from
+    Go's own fake on every run, never a hand-copied literal.
+
+    Self-verifying, the OTHER direction: this ALSO re-attempts the ordinary
+    Python-fake reference read (best-effort, exceptions swallowed -- the
+    documented state is that it can't serve this op at all). If it now
+    SUCCEEDS and agrees with the Go-library reading too, Python's reference
+    fake has evidently been extended to answer this command since -- this
+    exclusion is stale, and this triple FAILS loudly (rather than silently
+    continuing to substitute reader-parity forever) so the fix is to remove
+    it from referenceUnavailableInPythonFake and let it run the normal full
+    differential.
+    """
+    from netgear_switch.registry import Backend
+
+    backend = Backend(backend_str)
+    result: dict[str, Any] = {"backend": backend_str, "op": op_name}
+    expected_repr = repr(_normalize(expected))
+
+    try:
+        go_val = _dispatch(go_sw, backend, op_name)
+    except Exception as exc:  # noqa: BLE001 -- a raise here is itself a result to report
+        result["equal"] = False
+        result["go"] = f"{type(exc).__name__}: {exc}"
+        result["py"] = expected_repr
+        result["error"] = "reader-parity: Python-lib(Go-fake) raised where Go-lib(Go-fake) succeeded"
+        return result
+
+    go_repr = repr(_normalize(go_val))
+    equal = go_repr == expected_repr
+    error: str | None = None
+    if not equal:
+        error = (
+            "reader-parity MISMATCH: Python's library and Go's own library "
+            "disagree reading the exact SAME running Go fake -- this is a "
+            "genuine parser divergence (Python's CliReader vs Go's own "
+            "reader for the same telnet output), independent of the "
+            "Python-fake-has-no-reference gap this substitution exists for"
+        )
+
+    stale = _check_reference_became_available(ref_sw, backend, op_name, expected_repr)
+    if stale is not None:
+        equal = False
+        error = stale
+
+    result["equal"] = equal
+    result["go"] = go_repr
+    result["py"] = expected_repr
+    result["error"] = error
+    return result
+
+
+def _check_reference_became_available(ref_sw: Any, backend: Any, op_name: str, expected_repr: str) -> str | None:
+    """Best-effort: has Python's OWN in-process reference fake, in the
+    meantime, come to agree with Go's library reading too? Returns a
+    stale-exclusion error message if so, else None (including on any
+    exception -- the documented, currently-expected state IS that this
+    raises or disagrees; only a NEW agreement is news)."""
+    try:
+        py_val = _dispatch(ref_sw, backend, op_name)
+    except Exception:  # noqa: BLE001 -- still unavailable, the documented state.
+        return None
+    if repr(_normalize(py_val)) != expected_repr:
+        return None
+    return (
+        f"STALE EXCLUSION: {op_name} over this backend is listed in "
+        "referenceUnavailableInPythonFake, but Python's OWN in-process "
+        "reference fake now answers this op and AGREES with Go's library "
+        "reading -- remove this triple from the exclusion set and let it "
+        "run the normal full differential"
+    )
+
+
+def process_triple(go_sw: Any, ref_sw: Any, backend_str: str, op_name: str, model_key: str) -> dict[str, Any]:
     """Read (backend_str, op_name) from both switches and diff the results.
 
     ANY exception on EITHER side (transport error, UnsupportedCapabilityError,
@@ -227,7 +392,8 @@ def process_triple(go_sw: Any, ref_sw: Any, backend_str: str, op_name: str) -> d
     unequal if EITHER side's raw (pre-normalize) result is empty for an op
     known to always carry data, even if both sides happen to agree on empty
     -- see _NEVER_EMPTY_OPS's own doc comment for why that is never a
-    legitimate pass.
+    legitimate pass. get_lldp additionally strips remote_port_id from the
+    documented, narrowly-scoped rows in _KNOWN_LLDP_PORT_ID_DIVERGENCE.
     """
     from netgear_switch.registry import Backend
 
@@ -254,6 +420,25 @@ def process_triple(go_sw: Any, ref_sw: Any, backend_str: str, op_name: str) -> d
 
     go_norm = _normalize(go_val)
     py_norm = _normalize(py_val)
+
+    lldp_stale_error: str | None = None
+    if op_name == "get_lldp":
+        affected = _KNOWN_LLDP_PORT_ID_DIVERGENCE.get((model_key, backend_str))
+        if affected:
+            # Self-verifying, both directions: compare WITH remote_port_id
+            # included first (the un-excluded truth) so a table that now
+            # matches in full flags the exclusion as stale, THEN strip it
+            # for the comparison that actually decides `equal` below.
+            if repr(go_norm) == repr(py_norm):
+                lldp_stale_error = (
+                    f"STALE EXCLUSION: ({model_key!r}, {backend_str!r}) is listed in "
+                    "_KNOWN_LLDP_PORT_ID_DIVERGENCE, but remote_port_id now matches "
+                    "WITHOUT the exclusion too -- remove this entry and let get_lldp "
+                    "run the normal, full differential for it"
+                )
+            go_norm = _strip_excluded_lldp_port_ids(go_norm, affected)
+            py_norm = _strip_excluded_lldp_port_ids(py_norm, affected)
+
     # Compared by repr, not `==`: a Sensor.value of float('nan') (this repo's
     # own honest encoding for an inventory-only sensor reading with no
     # numeric value -- see model/seed data for gs728tpp's fan/PSU rows) is
@@ -274,6 +459,9 @@ def process_triple(go_sw: Any, ref_sw: Any, backend_str: str, op_name: str) -> d
             f"py_empty={not py_val}) -- every seeded model must have "
             "non-empty data for this op on both fakes"
         )
+    elif lldp_stale_error is not None:
+        equal = False
+        error = lldp_stale_error
 
     result["equal"] = equal
     result["go"] = go_repr
@@ -286,7 +474,8 @@ def main() -> int:
     payload = json.loads(sys.stdin.read())
     from netgear_switch.registry import get_model
 
-    model = get_model(payload["model"])
+    model_key = payload["model"]
+    model = get_model(model_key)
     go_ep = payload["go"]
     cli_username = payload.get("cli_username", "admin")
     cli_password = payload.get("cli_password", "password")
@@ -297,7 +486,14 @@ def main() -> int:
         ref_sw = build_reference_switch(model, cleanup)
         go_sw = build_go_switch(model, go_ep, cli_username, cli_password, cleanup)
 
-        results = [process_triple(go_sw, ref_sw, t["backend"], t["op"]) for t in triples]
+        results = []
+        for t in triples:
+            if "expected" in t:
+                results.append(
+                    process_reference_unavailable_triple(go_sw, ref_sw, t["backend"], t["op"], t["expected"])
+                )
+            else:
+                results.append(process_triple(go_sw, ref_sw, t["backend"], t["op"], model_key))
     finally:
         for fn in reversed(cleanup):
             with contextlib.suppress(Exception):

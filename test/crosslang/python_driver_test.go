@@ -37,15 +37,24 @@ package crosslang
 // transports share transport/cli/session.py's ShellDriver), so CLI fidelity
 // is still fully exercised for every FASTPATH model here -- only the
 // transport differs, and that is recorded, not hidden.
+//
+// Six of the 183 triples this suite compares are NOT a plain Go-fake-vs-
+// Python-fake differential: TestPythonLibVsGoFake_AllBackends' own doc
+// comment, referenceUnavailableInPythonFake's doc comment, and
+// cc3_read_diff.py's _KNOWN_LLDP_PORT_ID_DIVERGENCE explain exactly which
+// six, why, and how each substitution stays self-verifying rather than a
+// silent, permanent exception.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"testing"
 	"time"
 
+	netgearswitch "github.com/mithro/go-netgear-switch-library"
 	"github.com/mithro/go-netgear-switch-library/capabilities"
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/virtual"
@@ -93,9 +102,18 @@ type cc3GoEndpoints struct {
 // Triple, whose ModelKey field has no place in a per-model payload and whose
 // Op field is a capabilities.Operation, not the bare name string the driver
 // wants) so the wire contract stays exactly what cc3_read_diff.py documents.
+//
+// Expected is set ONLY for a triple in referenceUnavailableInPythonFake:
+// Go's OWN library's reading of THIS SAME running Go fake, JSON-marshalled
+// (via goLibraryReadJSON) field-for-field compatible with the matching
+// Python dataclass. Its presence (cc3_read_diff.py checks `"expected" in
+// t`, not truthiness) is what tells the driver to substitute a
+// reader-parity check for the normal fake-vs-fake differential on this one
+// triple -- see referenceUnavailableInPythonFake's own doc comment.
 type cc3Triple struct {
-	Backend string `json:"backend"`
-	Op      string `json:"op"`
+	Backend  string          `json:"backend"`
+	Op       string          `json:"op"`
+	Expected json.RawMessage `json:"expected,omitempty"`
 }
 
 // cc3Payload is cc3_read_diff.py's complete stdin contract.
@@ -131,6 +149,82 @@ func cc3ServedBackends(modelKey string, ep virtual.Endpoints) map[model.Backend]
 	served := servedBackends(modelKey, ep)
 	delete(served, model.BackendSSH)
 	return served
+}
+
+// referenceUnavailableInPythonFake is the exact set of (model, backend, op)
+// triples -- keyed "model/backend/op", matching Triple.String() -- for which
+// this suite substitutes a READER-PARITY check for the normal Go-fake-vs-
+// Python-fake differential: controller triage decision on the CC3 delivery
+// report's finding #2 (2026-08-18).
+//
+// Root cause: the pinned Python reference implementation's own in-process
+// VirtualCliFace.run() dispatch (go-port-pin-b26eb1f's src/netgear_switch/
+// virtual/faces/cli.py:505-563) has NO case at all for `show users`,
+// `show ip http`, `show ip ssh` or `show telnetcon` -- every one of those
+// four commands falls through to that function's final line-563 "Command
+// not found / Incomplete command. Use ? to list commands." -- so there is
+// genuinely no Python REFERENCE fake to differential against for
+// get_users/get_services over telnet on these two models specifically. Not
+// listed here despite also lacking a working Python reference: m4300-16x's
+// and gsm7228ps's telnet/get_users -- their own Go seeds carry NO Users at
+// all either (see opmap.go's own usersKnownEmpty), so their reading
+// trivially agrees with Python's "Command not found" -> empty fallback and
+// never surfaced a divergence needing this substitution. This repo's OWN
+// CLI fake (virtual/cliface_render.go) DOES implement all four commands --
+// if anything, this is the MORE complete fake of the two here, not a Go
+// fidelity bug.
+//
+// Every triple listed here still gets a genuine, non-hardcoded differential
+// (see buildCC3Payload/goLibraryReadJSON and cc3_read_diff.py's
+// process_reference_unavailable_triple): does Python's library, reading
+// THIS repo's Go fake over the wire, get the SAME answer Go's OWN library
+// gets reading that IDENTICAL running fake instance? The reference value is
+// derived LIVE from Go's fake on every run, never a hand-copied literal.
+//
+// Self-verifying: the driver additionally re-attempts the ordinary
+// Python-fake reference read for each of these triples and fails loudly if
+// it has, in the meantime, come to agree with Go's library reading too
+// (i.e. Python's reference fake has been extended to answer the command) --
+// see cc3_read_diff.py's own doc comment on that check. This Go-side map is
+// also asserted, once per full run, to have every one of its entries
+// actually visited among the enumerated triples (TestPythonLibVsGoFake_
+// AllBackends' own visitedExclusions tracking, checked at the end of that
+// test) -- a model/backend pairing removed from the registry, or a
+// capabilities change that drops one of these ops, would otherwise leave a
+// stale, silently-unreachable entry here forever.
+var referenceUnavailableInPythonFake = map[string]bool{
+	"m4300-24x/telnet/get_users":    true,
+	"m4300-24x/telnet/get_services": true,
+	"gsm7252ps/telnet/get_users":    true,
+	"gsm7252ps/telnet/get_services": true,
+}
+
+// goLibraryReadJSON runs opName over sw (already pinned to backend) via
+// Go's OWN public facade and returns its result JSON-marshalled --
+// field-for-field compatible with the matching Python dataclass, since
+// model.SwitchUser/ServiceStatus's own `json:"..."` struct tags already
+// mirror models.SwitchUser/ServiceStatus's field names exactly (name,
+// access_mode, privileged, snmpv3_access/auth/encryption; name, enabled,
+// port) -- for referenceUnavailableInPythonFake's reader-parity check. Only
+// ever called for an op in that map, so the two cases below are the only
+// ones this ever needs.
+func goLibraryReadJSON(ctx context.Context, sw *netgearswitch.Switch, backend model.Backend, opName string) ([]byte, error) {
+	switch opName {
+	case "get_users":
+		v, err := sw.GetUsers(ctx, netgearswitch.WithReadBackend(backend))
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(v)
+	case "get_services":
+		v, err := sw.GetServices(ctx, netgearswitch.WithReadBackend(backend))
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(v)
+	default:
+		return nil, fmt.Errorf("goLibraryReadJSON: no case for op %q -- referenceUnavailableInPythonFake needs a matching case added here", opName)
+	}
 }
 
 // runCC3Driver shells cc3_read_diff.py once for modelKey, feeding it payload
@@ -201,10 +295,34 @@ func runCC3Driver(ctx context.Context, t *testing.T, payload cc3Payload) []cc3Re
 // Go fake's own announced endpoint (verbatim -- never re-derived) and the
 // same CLI credentials suite.go's buildSwitch uses for the Go-library-vs-Go-
 // fake suites, so a mismatch there cannot be this test's own bug.
-func buildCC3Payload(modelKey string, ep virtual.Endpoints, trips []Triple) cc3Payload {
+//
+// For a triple in referenceUnavailableInPythonFake, this ALSO builds a
+// *netgearswitch.Switch pinned to the SAME running Go fake (buildSwitch --
+// the identical helper suite.go's own Go-lib-vs-Go-fake suite uses) and
+// attaches Go's own live reading as cc3Triple.Expected, so the driver can
+// run the reader-parity check instead of the normal differential. visited
+// records every referenceUnavailableInPythonFake key this call actually
+// exercised, so the caller can assert none of that map's entries went
+// unvisited across the whole suite.
+func buildCC3Payload(ctx context.Context, t *testing.T, modelKey string, m *model.SwitchModel, ep virtual.Endpoints, trips []Triple, visited map[string]bool) cc3Payload {
+	t.Helper()
 	triples := make([]cc3Triple, len(trips))
 	for i, tr := range trips {
-		triples[i] = cc3Triple{Backend: string(tr.Backend), Op: tr.Op.Name}
+		ct := cc3Triple{Backend: string(tr.Backend), Op: tr.Op.Name}
+		if referenceUnavailableInPythonFake[tr.String()] {
+			visited[tr.String()] = true
+			sw := buildSwitch(t, ep, m, tr.Backend)
+			expected, err := goLibraryReadJSON(ctx, sw, tr.Backend, tr.Op.Name)
+			closeErr := sw.Close()
+			if err != nil {
+				t.Fatalf("%s: goLibraryReadJSON (reader-parity reference, Go's OWN library reading Go's OWN fake): %v", tr, err)
+			}
+			if closeErr != nil {
+				t.Errorf("%s: sw.Close() after goLibraryReadJSON: %v", tr, closeErr)
+			}
+			ct.Expected = expected
+		}
+		triples[i] = ct
 	}
 	return cc3Payload{
 		Model: modelKey,
@@ -234,81 +352,40 @@ func buildCC3Payload(modelKey string, ep virtual.Endpoints, trips []Triple) cc3P
 // passing, exactly the vacuity this number exists to catch.
 const wantCC3TripleCount = 183
 
-// Known, root-caused CC3 divergences (as of this suite's introduction --
-// D-VIRT §5/slice CC3). This suite deliberately carries NO allowlist or
-// exception table for these: every one below still fails its triple, loudly,
-// on every run -- silently swallowing a known divergence is exactly the
-// "loosen a comparison to hide it" failure mode this differential exists to
-// refuse. They are recorded here only as a map for a future reader (or
-// controller-triage pass) deciding whether/how to resolve each one,
-// mirroring opmap.go's own precedent of naming every known gap explicitly
-// rather than leaving a bare, unexplained red test.
+// TestPythonLibVsGoFake_AllBackends is CC3's own deliverable: for every
+// model in suite1Models, starts a real Go fake (virtual.GoFakeProvider,
+// exactly like Suite 1), enumerates its Supported read triples (SNMP/NSDP/
+// HTTP + CLI-over-telnet; never SSH -- see cc3ServedBackends), and asserts
+// Python's library reads the SAME thing from the Go fake as it does from its
+// own in-process Python reference fake for every one of them -- except the
+// two documented, self-verifying substitutions below, applied to exactly
+// six triples out of 183 (all six discovered, root-caused and reported by
+// this suite's own first run; see this slice's delivery reports):
 //
-//  1. m4300-24x/http/get_lldp and m4300-16x/telnet/get_lldp: the two LLDP
-//     neighbours whose remote_port_id is raw, non-ASCII/binary bytes (a
-//     MAC-address-subtype LLDP Port ID, e.g. 88:A2:9E:80:87:01) come back
-//     DIFFERENT from the two fakes -- NOT a wire corruption on either
-//     side's own transport (verified: Go's HTTP response bytes contain the
-//     original 6 raw bytes VERBATIM; a plain `go vet`-clean diagnostic
-//     confirmed this against a live GoFakeProvider instance). The two fakes
-//     choose different representations for a raw byte string when handing
-//     it to their own HTTP text layer: virtual/web_gsm7252ps.go's xeCell
-//     (shared by the M4300 dialect) writes the Go byte-string straight onto
-//     the wire unmodified, while the pinned Python fake's LldpSim.port_id is
-//     stored as a str decoded latin-1-safe from the same captured bytes and
-//     then re-encoded UTF-8 (its own faces/http.py Handler._send: `text.
-//     encode()`) when served -- multi-byte for every byte above 0x7F. Since
-//     httpx guesses "utf-8" for BOTH responses (neither fake declares an
-//     explicit charset), Go's raw bytes decode as mangled U+FFFD replacement
-//     characters while Python's already-UTF-8-encoded bytes decode back to
-//     the original latin-1 codepoints losslessly -- by construction, not
-//     because Python's wire bytes are "more correct" per se. m4300-16x's
-//     case additionally has one raw byte (0x0A, a literal LF) land inside an
-//     HTML attribute value, which appears to truncate BOTH fakes' answers
-//     differently once decoded (Go: None; Python: only the leading NUL
-//     survives) -- consistent with a single-line-oriented parse of the
-//     VALUE="..." attribute somewhere in the shared (read-only, pinned)
-//     Python http_read.py. CLASSIFICATION: legitimate-normalization-
-//     artifact / needs-hardware-reverification -- neither fake's own wire
-//     behaviour is provably the one a real M4300 emits for a binary,
-//     MAC-subtype LLDP Port ID (a real device might render it as a
-//     formatted hex string, the way BOTH fakes already do for
-//     remote_chassis_id -- see formatChassisHex / the Python `":".join(f"{
-//     ord(c):02X}"...)` twin -- rather than dumping raw bytes as text at
-//     all; that would sidestep this whole class of divergence, but is an
-//     independent modeling gap in BOTH languages' LLDP fake, not something
-//     this differential's own scope covers). NOT fixed here: changing only
-//     Go's side cannot make the two fakes AGREE (Python's pinned worktree is
-//     read-only), and the "more real" fix needs a hardware LLDP Port ID
-//     capture neither fake currently has.
+//   - referenceUnavailableInPythonFake (4 triples): the Python reference
+//     fake genuinely cannot serve get_users/get_services over telnet on
+//     m4300-24x/gsm7252ps at all (see that map's own doc comment for the
+//     virtual/faces/cli.py citation) -- these run a READER-PARITY check
+//     (Go-lib(Go-fake) == Python-lib(Go-fake), both reading the SAME live
+//     fake instance) instead of dropping the coverage entirely.
+//   - _KNOWN_LLDP_PORT_ID_DIVERGENCE (2 triples, defined in
+//     cc3_read_diff.py): get_lldp on m4300-24x/http and m4300-16x/telnet
+//     excludes ONLY the remote_port_id field of the specific rows whose Port
+//     ID is a raw binary MAC-subtype value the two fakes' HTTP/CLI text
+//     layers round-trip differently (pending a hardware LLDP Port ID
+//     capture) -- every other field, and every other row of the same
+//     table, stays fully compared.
 //
-//  2. m4300-24x/telnet/get_users, gsm7252ps/telnet/get_users,
-//     m4300-24x/telnet/get_services, gsm7252ps/telnet/get_services: the
-//     PINNED PYTHON reference fake's own in-process VirtualCliFace (virtual/
-//     faces/cli.py's `run()` dispatch) has NO case at all for `show users`,
-//     `show ip http`, `show ip ssh` or `show telnetcon` -- every one falls
-//     through to its final "Command not found" line, which CliReader then
-//     parses as zero rows / all-disabled defaults. This repo's OWN CLI fake
-//     (virtual/cliface_render.go) DOES implement all four. Confirmed by
-//     reading virtual/faces/cli.py directly (pinned worktree, read-only):
-//     its command table stops at `show interface ethernet`, with nothing
-//     for user-management or per-service admin-state pages at all --
-//     capabilities.Matrix marks both ops Supported over CLI for these
-//     models (cross-verified against Python's own capabilities.py, so
-//     Python's OWN oracle agrees they should work), but its OWN reference
-//     fake was simply never extended to answer them. CLASSIFICATION:
-//     Python-fake incomplete -- not a Go-fake fidelity bug at all (if
-//     anything, this repo's fake is the MORE complete of the two here); out
-//     of scope to fix (the pinned worktree is read-only). An audit
-//     follow-up for the Python side, not this slice.
-//
-// Every triple above genuinely, reproducibly fails this suite -- see this
-// slice's own delivery report for the live run output each classification
-// is grounded in.
+// Neither substitution is a bare allowlist: both are self-verifying (a
+// per-triple check that FAILS this suite loudly the moment the substitution
+// stops being necessary) and both are scoped as narrowly as the evidence
+// supports, so a regression anywhere else -- a different model, a different
+// field, a different row -- still fails normally.
 func TestPythonLibVsGoFake_AllBackends(t *testing.T) {
 	provider := &virtual.GoFakeProvider{}
 	t.Cleanup(func() { _ = provider.CloseAll() })
 
+	visitedExclusions := make(map[string]bool, len(referenceUnavailableInPythonFake))
 	total := 0
 	for _, modelKey := range suite1Models {
 		t.Run(modelKey, func(t *testing.T) {
@@ -318,6 +395,10 @@ func TestPythonLibVsGoFake_AllBackends(t *testing.T) {
 			ep, err := provider.StartModel(ctx, modelKey)
 			if err != nil {
 				t.Fatalf("StartModel(%q): %v", modelKey, err)
+			}
+			m, err := model.GetModel(modelKey)
+			if err != nil {
+				t.Fatalf("GetModel(%q): %v", modelKey, err)
 			}
 
 			served := cc3ServedBackends(modelKey, ep)
@@ -330,7 +411,7 @@ func TestPythonLibVsGoFake_AllBackends(t *testing.T) {
 			}
 			total += len(trips)
 
-			payload := buildCC3Payload(modelKey, ep, trips)
+			payload := buildCC3Payload(ctx, t, modelKey, m, ep, trips, visitedExclusions)
 			results := runCC3Driver(ctx, t, payload)
 
 			gotByKey := make(map[string]cc3Result, len(results))
@@ -358,6 +439,18 @@ func TestPythonLibVsGoFake_AllBackends(t *testing.T) {
 
 	if total != wantCC3TripleCount {
 		t.Errorf("total CC3 read triples across all %d models = %d, want %d -- see wantCC3TripleCount's own doc comment", len(suite1Models), total, wantCC3TripleCount)
+	}
+
+	// The other direction of "asserted both-ways" for
+	// referenceUnavailableInPythonFake: every entry in that map must have
+	// actually been reached by SOME model's enumerated triples above. An
+	// entry that goes unvisited (a model renamed, a backend dropped, a
+	// capabilities change) would otherwise sit in that map forever, dead
+	// and unnoticed -- this fails loudly instead.
+	for key := range referenceUnavailableInPythonFake {
+		if !visitedExclusions[key] {
+			t.Errorf("referenceUnavailableInPythonFake[%q] was never visited by any enumerated triple this run -- stale entry, remove it (or triples()/cc3ServedBackends stopped generating it)", key)
+		}
 	}
 }
 

@@ -1359,16 +1359,23 @@ func setDifference(a, b map[int]bool) map[int]bool {
 // value PortSim.Speed holds while down) is byte 0x00 (down/unrecognized).
 //
 // 10G emits model.LinkSpeedTenGigabit (0x06), MEASURED off real hardware --
-// see that constant's own doc comment for the GS110EMX capture and Python's
-// matching, independently-corrected `_mbps_to_speed_byte` (virtual/state.py:
-// "This mock previously emitted 0xFF here, the same unverified prior-art
-// guess the DECODER carried ... 0xFF is still decoded ... but is never
-// emitted"). This function used to return the same stale 0xFF
-// (model.LinkSpeedTenGigabitPriorArt) Python's docstring describes -- an
-// undetected Go-fake-vs-Python-fake fidelity gap that test/crosslang's CC3
-// differential (Python's library reading this fake's raw NsdpDevice) caught
-// by comparing this fake's nsdp_device reading against Python's own
-// already-corrected fake for the same seeded gs110emx ports.
+// see that constant's own doc comment (model/nsdp.go) for the GS110EMX
+// capture. This Go fake had DRIFTED BEHIND the pinned Python reference: this
+// function used to return the stale, unverified 0xFF (model.
+// LinkSpeedTenGigabitPriorArt) while go-port-pin-b26eb1f's own
+// src/netgear_switch/virtual/state.py:112 `_mbps_to_speed_byte` already
+// returned 0x06 for `10000` -- that pin file's docstring at lines 104-110
+// says so explicitly: "10G is 0x06, MEASURED off real hardware ... This
+// mock previously emitted 0xFF here, the same unverified prior-art guess
+// the DECODER carried, so mock and code agreed with each other while both
+// disagreed with every real GS110EMX ... 0xFF is still decoded (see
+// LinkSpeed.TEN_GIGABIT_PRIOR_ART) but is never emitted." This was an
+// undetected GO-BEHIND-PIN parity gap, not a speculative change: this
+// package simply had not been re-synced with the pin's own prior
+// correction. test/crosslang's CC3 differential (Python's library reading
+// this fake's raw NsdpDevice) caught it by comparing this fake's
+// nsdp_device reading against Python's own already-corrected fake for the
+// same seeded gs110emx ports.
 func mbpsToSpeedByte(mbps int) byte {
 	switch mbps {
 	case 10:
