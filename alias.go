@@ -152,13 +152,14 @@ const (
 
 // LinkSpeed values, re-exported from model.
 const (
-	LinkSpeedDown       = model.LinkSpeedDown
-	LinkSpeedHalf10M    = model.LinkSpeedHalf10M
-	LinkSpeedFull10M    = model.LinkSpeedFull10M
-	LinkSpeedHalf100M   = model.LinkSpeedHalf100M
-	LinkSpeedFull100M   = model.LinkSpeedFull100M
-	LinkSpeedGigabit    = model.LinkSpeedGigabit
-	LinkSpeedTenGigabit = model.LinkSpeedTenGigabit
+	LinkSpeedDown               = model.LinkSpeedDown
+	LinkSpeedHalf10M            = model.LinkSpeedHalf10M
+	LinkSpeedFull10M            = model.LinkSpeedFull10M
+	LinkSpeedHalf100M           = model.LinkSpeedHalf100M
+	LinkSpeedFull100M           = model.LinkSpeedFull100M
+	LinkSpeedGigabit            = model.LinkSpeedGigabit
+	LinkSpeedTenGigabit         = model.LinkSpeedTenGigabit
+	LinkSpeedTenGigabitPriorArt = model.LinkSpeedTenGigabitPriorArt
 )
 
 // LinkSpeedFromByte decodes a raw NSDP wire byte into a LinkSpeed; see

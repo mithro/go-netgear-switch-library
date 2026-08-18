@@ -18,22 +18,38 @@ const (
 	LinkSpeedHalf100M LinkSpeed = 0x03
 	LinkSpeedFull100M LinkSpeed = 0x04
 	LinkSpeedGigabit  LinkSpeed = 0x05
-	// LinkSpeedTenGigabit is ASSUMED/UNVERIFIED — the reference spec states
-	// 2.5G/5G/10G speed byte values are undocumented and require a hardware
-	// capture; 0xFF is carried over from prior art without independent
-	// confirmation.
-	LinkSpeedTenGigabit LinkSpeed = 0xFF
+	// LinkSpeedTenGigabit is MEASURED off real hardware -- a GS110EMX
+	// (10.1.5.25/.26, firmware 1.0.2.8, 2026-07-30) answers PORT_STATUS
+	// "09 06 01" / "0a 06 01" for the two uplinks its own web UI shows as
+	// "10G Full", mirroring Python protocols.nsdp.types.LinkSpeed.
+	// TEN_GIGABIT (corrected the same day -- see that constant's own doc
+	// comment for the byte-for-byte capture). This is the value this
+	// repo's own virtual-switch fake now EMITS for a 10G port (virtual/
+	// state.go's mbpsToSpeedByte); it used to emit LinkSpeedTenGigabitPriorArt
+	// below instead, an undetected fidelity gap CC3 (test/crosslang) caught
+	// by diffing this fake's raw NsdpDevice reading against Python's own
+	// fake's, which Python had already corrected.
+	LinkSpeedTenGigabit LinkSpeed = 0x06
+	// LinkSpeedTenGigabitPriorArt is UNVERIFIED prior art carried over from
+	// the reference spec as "the 10G code" without independent confirmation,
+	// mirroring Python's LinkSpeed.TEN_GIGABIT_PRIOR_ART: still DECODED as
+	// 10 Gbps (a real device this library has not yet talked to might still
+	// emit it), but never EMITTED by this repo's own fake -- see
+	// LinkSpeedTenGigabit's own doc comment for the measurement that
+	// replaced it there.
+	LinkSpeedTenGigabitPriorArt LinkSpeed = 0xFF
 )
 
 // linkSpeedMbps mirrors Python's module-level _MBPS lookup table.
 var linkSpeedMbps = map[LinkSpeed]int{
-	LinkSpeedDown:       0,
-	LinkSpeedHalf10M:    10,
-	LinkSpeedFull10M:    10,
-	LinkSpeedHalf100M:   100,
-	LinkSpeedFull100M:   100,
-	LinkSpeedGigabit:    1000,
-	LinkSpeedTenGigabit: 10000,
+	LinkSpeedDown:               0,
+	LinkSpeedHalf10M:            10,
+	LinkSpeedFull10M:            10,
+	LinkSpeedHalf100M:           100,
+	LinkSpeedFull100M:           100,
+	LinkSpeedGigabit:            1000,
+	LinkSpeedTenGigabit:         10000,
+	LinkSpeedTenGigabitPriorArt: 10000,
 }
 
 // LinkSpeedFromByte decodes a raw NSDP wire byte into a LinkSpeed, mirroring

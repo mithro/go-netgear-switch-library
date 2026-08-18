@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/nsdp"
 	"github.com/mithro/go-netgear-switch-library/snmp"
 )
@@ -1356,6 +1357,18 @@ func setDifference(a, b map[int]bool) map[int]bool {
 // byte, mirroring Python's `_mbps_to_speed_byte` helper exactly: only
 // 10/100/1000/10000 Mbps have a mapping; anything else (including 0, the
 // value PortSim.Speed holds while down) is byte 0x00 (down/unrecognized).
+//
+// 10G emits model.LinkSpeedTenGigabit (0x06), MEASURED off real hardware --
+// see that constant's own doc comment for the GS110EMX capture and Python's
+// matching, independently-corrected `_mbps_to_speed_byte` (virtual/state.py:
+// "This mock previously emitted 0xFF here, the same unverified prior-art
+// guess the DECODER carried ... 0xFF is still decoded ... but is never
+// emitted"). This function used to return the same stale 0xFF
+// (model.LinkSpeedTenGigabitPriorArt) Python's docstring describes -- an
+// undetected Go-fake-vs-Python-fake fidelity gap that test/crosslang's CC3
+// differential (Python's library reading this fake's raw NsdpDevice) caught
+// by comparing this fake's nsdp_device reading against Python's own
+// already-corrected fake for the same seeded gs110emx ports.
 func mbpsToSpeedByte(mbps int) byte {
 	switch mbps {
 	case 10:
@@ -1365,7 +1378,7 @@ func mbpsToSpeedByte(mbps int) byte {
 	case 1000:
 		return 0x05
 	case 10000:
-		return 0xFF
+		return byte(model.LinkSpeedTenGigabit)
 	default:
 		return 0x00
 	}
