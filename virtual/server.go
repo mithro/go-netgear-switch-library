@@ -384,9 +384,14 @@ func (v *VirtualSwitch) CliSession() (fastpath.Session, error) {
 // exposes, for a caller (e.g. a cross-language conformance-harness client,
 // slice 10) that wants only connection details, not this package's
 // concrete VirtualSwitch type. NsdpPort mirrors VirtualSwitch.NsdpPort;
-// HTTPPort/HTTPPassword mirror VirtualSwitch.HTTPPort/httpPassword now that
-// the HTTP face has landed (this slice); later slices add SSHPort/
-// TelnetPort the same way, mirroring VirtualSwitch's own reserved fields.
+// HTTPPort/HTTPPassword mirror VirtualSwitch.HTTPPort/httpPassword;
+// SSHPort/TelnetPort mirror VirtualSwitch.SSHPort/TelnetPort (this slice) --
+// every port field is 0 when the model the provider started has no such
+// backend (or, for a provider that only serves a subset of backends, e.g. a
+// future Python fake with no CLI listener, when this provider simply never
+// bound that face at all): a cross-language harness reads a 0 port as "this
+// provider does not serve that backend" and skips triples needing it,
+// exactly like it already does for SnmpPort/NsdpPort/HTTPPort.
 type Endpoints struct {
 	Host         string
 	SnmpPort     int
@@ -394,6 +399,8 @@ type Endpoints struct {
 	Community    string
 	HTTPPort     int
 	HTTPPassword string
+	SSHPort      int
+	TelnetPort   int
 }
 
 // EndpointProvider is the conformance-harness seam a cross-language test
@@ -467,6 +474,8 @@ func (p *GoFakeProvider) StartModel(ctx context.Context, modelKey string) (Endpo
 		Community:    sw.community,
 		HTTPPort:     sw.HTTPPort,
 		HTTPPassword: sw.httpPassword,
+		SSHPort:      sw.SSHPort,
+		TelnetPort:   sw.TelnetPort,
 	}, nil
 }
 
