@@ -473,6 +473,65 @@ func TestGoFakeProviderStartModelReturnsLiveNsdpEndpoint(t *testing.T) {
 	}
 }
 
+// TestGoFakeProviderStartModelReturnsLiveSSHAndTelnetEndpoints proves
+// Endpoints.SSHPort/Endpoints.TelnetPort mirror VirtualSwitch.SSHPort/
+// TelnetPort through the provider seam (this slice's Endpoints extension):
+// m4300-24x (registry backends {SNMP, HTTP, SSH, Telnet}) comes back with
+// BOTH a nonzero, LIVE SSHPort and a nonzero, LIVE TelnetPort, while
+// gsm7228ps (registry backends {SNMP, HTTP, Telnet} -- no SSH; the real
+// S3300 genuinely runs no ssh listener on any port, see model/registry.go's
+// own doc comment) comes back with SSHPort == 0 and only TelnetPort live --
+// the same "0 means this provider doesn't serve that backend" contract
+// SnmpPort/NsdpPort already establish, extended to the two fields this
+// slice adds.
+func TestGoFakeProviderStartModelReturnsLiveSSHAndTelnetEndpoints(t *testing.T) {
+	p := &GoFakeProvider{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ep, err := p.StartModel(ctx, "m4300-24x")
+	if err != nil {
+		t.Fatalf("StartModel(m4300-24x) error = %v", err)
+	}
+	if ep.SSHPort == 0 {
+		t.Fatal("Endpoints.SSHPort = 0, want nonzero bound port (m4300-24x has BackendSSH)")
+	}
+	if ep.TelnetPort == 0 {
+		t.Fatal("Endpoints.TelnetPort = 0, want nonzero bound port (m4300-24x has BackendTelnet)")
+	}
+	assertTCPPortLive(t, ep.Host, ep.SSHPort)
+	assertTCPPortLive(t, ep.Host, ep.TelnetPort)
+
+	ep2, err := p.StartModel(ctx, "gsm7228ps")
+	if err != nil {
+		t.Fatalf("StartModel(gsm7228ps) error = %v", err)
+	}
+	if ep2.SSHPort != 0 {
+		t.Errorf("Endpoints.SSHPort = %d, want 0 (gsm7228ps has no BackendSSH -- real S3300 hardware, measured absent)", ep2.SSHPort)
+	}
+	if ep2.TelnetPort == 0 {
+		t.Fatal("Endpoints.TelnetPort = 0, want nonzero bound port (gsm7228ps has BackendTelnet)")
+	}
+	assertTCPPortLive(t, ep2.Host, ep2.TelnetPort)
+
+	if err := p.CloseAll(); err != nil {
+		t.Errorf("CloseAll() error = %v", err)
+	}
+}
+
+// assertTCPPortLive dials host:port over TCP and immediately closes the
+// connection, proving a real listener is bound there -- not merely that the
+// Endpoints field holds a nonzero int.
+func assertTCPPortLive(t *testing.T, host string, port int) {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 2*time.Second)
+	if err != nil {
+		t.Errorf("net.DialTimeout(%s:%d) error = %v, want a live listener", host, port, err)
+		return
+	}
+	_ = conn.Close()
+}
+
 func TestGoFakeProviderUnknownModelPropagatesError(t *testing.T) {
 	p := &GoFakeProvider{}
 	_, err := p.StartModel(context.Background(), "not-a-real-model")
