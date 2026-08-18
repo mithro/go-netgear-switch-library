@@ -88,12 +88,14 @@ import (
 const cc4PythonNgsw = "/home/tim/github/mithro/python-netgear-switch-library/.claude/worktrees/go-port-pin-b26eb1f/.venv/bin/ngsw"
 
 // cc4Timeout bounds StartModel plus every CLI invocation one top-level CC4
-// test issues -- generous for a loopback round trip (each read command
-// spawns a fresh net-snmp CLI subprocess on the Python side) under
-// scripts/jail.sh's CPU/memory limits, short enough that a genuinely wedged
-// CLI still fails the test rather than hanging `make crosslang` forever.
-// Mirrors suite.go's own suiteTimeout.
-const cc4Timeout = 30 * time.Second
+// test issues. A single model's subtest fans out to ~22 comparisons, each
+// spawning TWO fresh CLI subprocesses (gngsw + a net-snmp-backed ngsw) over
+// real loopback round trips under scripts/jail.sh's CPU/memory limits, so the
+// per-model wall time is dominated by subprocess startup: gsm7252ps measured
+// ~29s on this host. 90s leaves comfortable headroom for a slower CI runner
+// while still failing (rather than hanging `make crosslang` forever) if a CLI
+// genuinely wedges.
+const cc4Timeout = 90 * time.Second
 
 // cc4Models are the two SNMP-rich models this suite byte-diffs -- see this
 // file's own doc comment for why these two specifically.
@@ -244,12 +246,12 @@ func compareCLIOutputs(t *testing.T, desc string, goRes, pyRes cliResult) {
 // live pair of runs: 11 SNMP-Supported read ops for gsm7252ps (including
 // get_syslog) plus 10 for gs728tpp (get_syslog excluded -- see cc4Models'
 // own doc comment), each compared in BOTH text and --json form:
-// (11 + 10) * 2 = 42. Asserted as a floor against silent shrinkage (a model
-// losing a backend, an op being dropped from cc4ReadCmd, triples() itself
-// changing) exactly like wantCC3TripleCount/wantPythonReadTripleCount
-// elsewhere in this package -- a regression that silently shrank coverage
-// would otherwise still show green as long as every comparison that DID
-// run kept passing.
+// (11 + 10) * 2 = 42. Asserted as an EXACT count (the check is `!=`, so it
+// catches silent shrinkage -- a model losing a backend, an op dropped from
+// cc4ReadCmd, triples() changing -- AND unexplained growth) exactly like
+// wantCC3TripleCount/wantPythonReadTripleCount elsewhere in this package: a
+// regression that silently shrank coverage would otherwise still show green
+// as long as every comparison that DID run kept passing.
 const wantCC4ReadComparisons = 42
 
 // TestCLIByteDiff_SNMPReads is CC4's own deliverable: for every model in
