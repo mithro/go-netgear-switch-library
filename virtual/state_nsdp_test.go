@@ -85,6 +85,49 @@ func TestNsdpTlvsProjectsPortsAndIdentity(t *testing.T) {
 	}
 }
 
+// TestNsdpTlvsPortStatusEmitsSeededFlowControlByte is the [NSDP-FC]
+// regression test: PORT_STATUS TLV byte 2 must be DERIVED from
+// PortSim.FlowControl (mirroring pin state.py:1489-1499's `1 if
+// sim.flow_control else 0`), not a hardcoded constant. A State whose ports
+// disagree on FlowControl must emit disagreeing bytes -- a hardcoded 0x01
+// would pass every currently-seeded model (all three NSDP Plus-family
+// seeds have FlowControl: true on every port) without ever proving this.
+func TestNsdpTlvsPortStatusEmitsSeededFlowControlByte(t *testing.T) {
+	st := NewState("gs110emx")
+	st.Ports[1] = &PortSim{Name: "g1", Admin: true, Link: true, Speed: 1000, FlowControl: true}
+	st.Ports[2] = &PortSim{Name: "g2", Admin: true, Link: true, Speed: 1000, FlowControl: false}
+
+	tlvs := st.NsdpTlvs(map[nsdp.Tag]bool{nsdp.TagModel: true, nsdp.TagPortStatus: true})
+	byPort := map[int]nsdp.TLVEntry{}
+	for _, tlv := range tlvs {
+		if tlv.Tag != nsdp.TagPortStatus {
+			continue
+		}
+		byPort[int(tlv.Value[0])] = tlv
+	}
+	if len(byPort[1].Value) != 3 || byPort[1].Value[2] != 0x01 {
+		t.Errorf("port 1 (FlowControl=true) PORT_STATUS byte 2 = %+v, want 0x01", byPort[1].Value)
+	}
+	if len(byPort[2].Value) != 3 || byPort[2].Value[2] != 0x00 {
+		t.Errorf("port 2 (FlowControl=false) PORT_STATUS byte 2 = %+v, want 0x00", byPort[2].Value)
+	}
+
+	// Round-trip through the real parser too, proving the *bool decode
+	// path (nsdp.ParsePortStatus / model.NsdpPortStatus.FlowControl) agrees
+	// with the raw byte assertions above.
+	dev := deviceFrom(t, tlvs)
+	decoded := map[int]model.NsdpPortStatus{}
+	for _, p := range dev.PortStatus {
+		decoded[p.PortID] = p
+	}
+	if decoded[1].FlowControl == nil || !*decoded[1].FlowControl {
+		t.Errorf("decoded port 1 FlowControl = %v, want non-nil true", decoded[1].FlowControl)
+	}
+	if decoded[2].FlowControl == nil || *decoded[2].FlowControl {
+		t.Errorf("decoded port 2 FlowControl = %v, want non-nil false", decoded[2].FlowControl)
+	}
+}
+
 func TestNsdpTlvsProjectsVlansAndPvidsAndMgmt(t *testing.T) {
 	st := SeedGS110EMX()
 

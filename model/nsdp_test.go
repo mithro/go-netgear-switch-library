@@ -92,7 +92,7 @@ func TestLinkSpeedJSONMarshalsAsRawInt(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	want := `{"port_id":3,"speed":5}`
+	want := `{"port_id":3,"speed":5,"flow_control":null}`
 	if string(b) != want {
 		t.Errorf("got  %s\nwant %s", string(b), want)
 	}

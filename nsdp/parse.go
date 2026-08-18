@@ -42,17 +42,25 @@ func ParseMAC(data []byte) (string, error) {
 }
 
 // ParsePortStatus decodes a 3-byte PORT_STATUS TLV value (tag 0x0C00),
-// mirroring Python parsers.parse_port_status: byte 0 is the port ID, byte 1
-// is the raw LinkSpeed wire byte (decoded via model.LinkSpeedFromByte, which
-// never errors on an unrecognized value), and byte 2 is unused/ignored.
-// Returns an error wrapping model.ErrNSDP if data is not exactly 3 bytes.
+// mirroring Python parsers.parse_port_status (pin protocols/nsdp/
+// parsers.py:47-56): byte 0 is the port ID, byte 1 is the raw LinkSpeed wire
+// byte (decoded via model.LinkSpeedFromByte, which never errors on an
+// unrecognized value), and byte 2 is flow control -- `bool(data[2])`,
+// MEASURED against three real GS110EMX units (see
+// model.NsdpPortStatus.FlowControl's own doc comment) -- not unused/ignored.
+// Returns an error wrapping model.ErrNSDP if data is not exactly 3 bytes,
+// mirroring the pin's own `len(data) != 3` guard; since the only caller
+// (below) never invokes this with a shorter slice, FlowControl is always
+// non-nil on a successful parse today.
 func ParsePortStatus(data []byte) (model.NsdpPortStatus, error) {
 	if len(data) != 3 {
 		return model.NsdpPortStatus{}, errNSDP("PORT_STATUS TLV must be 3 bytes, got %d", len(data))
 	}
+	flowControl := data[2] != 0
 	return model.NsdpPortStatus{
-		PortID: int(data[0]),
-		Speed:  model.LinkSpeedFromByte(data[1]),
+		PortID:      int(data[0]),
+		Speed:       model.LinkSpeedFromByte(data[1]),
+		FlowControl: &flowControl,
 	}, nil
 }
 

@@ -79,14 +79,29 @@ type PortSim struct {
 	// is entirely absent (never configured) -- never a fabricated "".
 	Description *string
 	// FlowControl is IEEE 802.3x flow control, as reported in the FASTPATH
-	// CLI's "Flow Mode" column and the GoAhead web UI's flowControlOperType/
-	// flowControlAdminType. Zero value (false) matches every model this
-	// field currently drives: MEASURED False on all 28 GS728TPP ports
+	// CLI's "Flow Mode" column, the GoAhead web UI's flowControlOperType/
+	// flowControlAdminType, AND (as of the NSDP flow-control slice) NSDP
+	// PORT_STATUS byte 2 -- the SAME field Python's PortSim.flow_control
+	// drives for all three (pin virtual/state.py:164-170: "IEEE 802.3x flow
+	// control, as reported in NSDP PORT_STATUS byte 2 and in the Plus web
+	// UI's 'Flow Control' column").
+	//
+	// Zero value (false) matches every FASTPATH/GoAhead model this field
+	// drove before that slice: MEASURED False on all 28 GS728TPP ports
 	// (2026-08-03, both the SNMP dot3PauseOperMode walk and the GoAhead wcd
 	// page agreed) and False in every captured `show port all` Flow Mode
-	// column (gsm7252ps/gsm7228ps/m4300-16x/m4300-24x) -- so no seed needs
-	// to set this explicitly today; a future seed with a measured True port
-	// sets it directly.
+	// column (gsm7252ps/gsm7228ps/m4300-16x/m4300-24x).
+	//
+	// UNLIKE those models, Python's dataclass default for this field is
+	// `True` (pin state.py:170), not False -- the factory default the two
+	// GS110EMX units 10.1.5.25/.26 are still on. Go has no per-field
+	// struct-literal default, so any Plus-family (NSDP) seed that wants that
+	// same True default must set FlowControl: true explicitly per port
+	// (e.g. SeedGS110EMX) rather than relying on the Go zero value, which
+	// would silently disagree with the pin's implicit default for that
+	// family. FASTPATH/GoAhead-only seeds are unaffected: their measured
+	// value already IS false, so leaving this field unset still agrees with
+	// the pin there.
 	FlowControl bool
 	// ServesEtherlike reports whether this model's SNMP agent publishes the
 	// EtherLike-MIB dot3StatsDuplexStatus/dot3Pause{Admin,Oper}Mode columns
@@ -242,10 +257,20 @@ type PoeSim struct {
 	// made a single immediate read-back report a perfectly good SetPoE as
 	// a verification failure. The mock reproduces the lag (one stale read)
 	// so fastpath.Writer.SetPoE's polling is actually exercised instead of
-	// passing by accident; SNMP's pethPsePortAdminEnable has no such lag
-	// and is deliberately unaffected. Consumed (and decremented) by
-	// cliPoeStatusText in cliface_render.go; set by CliFace.applyPoeAdmin
-	// on an off->on transition.
+	// passing by accident.
+	//
+	// Set by State.ApplyPoeAdmin on an off->on transition REGARDLESS of
+	// which backend drove the write -- the SNMP SET path (ApplyWrite's
+	// pethPsePortAdminEnable branch) and the CLI `poe` command both funnel
+	// through that one shared method (mirroring pin state.py's own
+	// apply_poe_admin, state.py:1135-1157), so a port re-enabled over SNMP
+	// shows the SAME CLI status lag on the next CLI read as one re-enabled
+	// over the CLI directly. Only CONSUMED (decremented) by cliPoeStatusText
+	// in cliface_render.go, since the lag is specifically a `show poe port
+	// info all` rendering artifact -- SNMP reads of PETH-PSE-MIB
+	// (pethPsePortDetectionStatus) are NOT gated by this counter and see
+	// Detect's new value immediately, matching the pin (which has no
+	// SNMP-side equivalent of cli_status_lag_reads consumption either).
 	CliStatusLagReads int
 }
 
@@ -1153,6 +1178,48 @@ func sliceFromPortSet(ports map[int]bool) []int {
 	return out
 }
 
+// ApplyPoeAdmin switches a PSE port's admin state, with the coherence a
+// real PoE switch shows: admin off -> detect=1 (unused) and the data link
+// drops; admin on -> detect=3 (delivering). ONE rule shared by EVERY
+// protocol face -- the SNMP SET path (ApplyWrite's pethPsePortAdminEnable
+// branch below) and the CLI `poe`/`no poe` commands (CliFace.applyPoeAdmin,
+// cliface.go) both come through here, so the mock cannot behave differently
+// depending on which backend a test drove (which would make cross-backend
+// write parity meaningless) -- mirroring Python State.apply_poe_admin
+// verbatim (pin state.py:1135-1157), including its own docstring's framing:
+// "ONE rule shared by every protocol face -- the SNMP SET path (apply_write)
+// and the CLI poe/no poe commands both come through here."
+//
+// On an off->on transition, PoeSim.CliStatusLagReads is set to 1
+// REGARDLESS of which backend drove the write -- Python does not
+// special-case this per protocol either: it is one dataclass field mutated
+// by one shared method (state.py:1152-1155). MEASURED ON HARDWARE
+// (M4300-16X, 10.1.5.20, FASTPATH 12.0.19.15, 2026-07-30) that a re-enabled
+// port's `show poe port info all` Status column still reads "Disabled" for
+// one more read before catching up -- see PoeSim.CliStatusLagReads's own
+// doc comment. Unknown port: deliberate no-op.
+func (s *State) ApplyPoeAdmin(port int, on bool) {
+	psim, exists := s.Poe[port]
+	if !exists {
+		return
+	}
+	wasOn := psim.Admin
+	psim.Admin = on
+	if on {
+		psim.Detect = 3 // delivering
+	} else {
+		psim.Detect = 1 // unused/disabled
+	}
+	if on && !wasOn {
+		psim.CliStatusLagReads = 1
+	}
+	if !on {
+		if p, exists2 := s.Ports[port]; exists2 {
+			p.Link = false
+		}
+	}
+}
+
 // ApplyWrite mutates this state from one SNMP SET varbind, with device
 // coherence. Applies the same coherence a real PoE switch shows so a
 // cycle_poe operation (later slice) terminates against the mock: admin off
@@ -1193,22 +1260,12 @@ func (s *State) ApplyWrite(oid string, value any) {
 		return
 	}
 
-	// 3. pethPsePortAdminEnable = PethPsePortTable.3.1.<port>
+	// 3. pethPsePortAdminEnable = PethPsePortTable.3.1.<port> -- routed
+	// through the SAME ApplyPoeAdmin helper CliFace.applyPoeAdmin uses (see
+	// its own doc comment), so this backend cannot disagree with the CLI
+	// path on CliStatusLagReads or any other PoE-admin side effect.
 	if port, ok := isPoeAdminColumn(oid); ok {
-		if poe, exists := s.Poe[port]; exists {
-			on := mustInt(oid, value) == 1
-			poe.Admin = on
-			if on {
-				poe.Detect = 3 // delivering
-			} else {
-				poe.Detect = 1 // unused/disabled
-			}
-			if !on {
-				if p, exists2 := s.Ports[port]; exists2 {
-					p.Link = false
-				}
-			}
-		}
+		s.ApplyPoeAdmin(port, mustInt(oid, value) == 1)
 		return
 	}
 
@@ -1771,7 +1828,17 @@ func (s *State) NsdpTlvs(tags map[nsdp.Tag]bool) []nsdp.TLVEntry {
 			if sim.Link {
 				speedByte = mbpsToSpeedByte(sim.Speed)
 			}
-			out = append(out, nsdp.TLVEntry{Tag: nsdp.TagPortStatus, Value: []byte{byte(port), speedByte, 0x01}}) //nolint:gosec // port is a 1-based port number, always well under 256
+			// Byte 2 is flow control, driven from the SAME PortSim.FlowControl
+			// field the FASTPATH CLI/GoAhead/SNMP paths read -- NOT a constant
+			// 0x01. Mirrors pin virtual/state.py:1489-1499 exactly: "Byte 2 is
+			// flow control, not a constant 0x01 -- measured on real GS110EMX
+			// units, see PortSim.flow_control." See PortSim.FlowControl's own
+			// doc comment for the GS110EMX measurement this reproduces.
+			flowByte := byte(0x00)
+			if sim.FlowControl {
+				flowByte = 0x01
+			}
+			out = append(out, nsdp.TLVEntry{Tag: nsdp.TagPortStatus, Value: []byte{byte(port), speedByte, flowByte}}) //nolint:gosec // port is a 1-based port number, always well under 256
 		}
 	}
 	if tags[nsdp.TagPortName] {
@@ -1967,6 +2034,22 @@ func (s *State) ApplyNsdpWrite(tag nsdp.Tag, value []byte) {
 		// is accepted as a genuine "" hostname rather than a no-op: nsdp.
 		// Writer.SetHostname itself refuses to send one, but a raw TLV from
 		// any other caller should still round-trip honestly.
+		//
+		// DELIBERATE DIVERGENCE FROM THE PIN, documented rather than
+		// silent: pin state.py's apply_nsdp_write (state.py:1604-1649) has
+		// NO branch for Tag.HOSTNAME at all -- an NSDP hostname write is a
+		// silent no-op in the pinned Python fake. Go APPLIES it instead.
+		// This is a Go-ahead, not a bug: the C4 (hostname get/set) slice
+		// LIVE-VERIFIED that a real GS110EMX ACCEPTS an NSDP 0x0003
+		// hostname write (reversible -- write the old name back), disproving
+		// sync_api's stale docstring claim that "Plus switches can't be
+		// renamed" (see go-netgear-progress ledger, C4 slice notes:
+		// "NSDP 0x0003 + HTTP GS110EMX both work live"). Since the pin fake
+		// is the one that is factually incomplete here (it just never grew
+		// a HOSTNAME branch), aligning Go DOWN to no-op this write would
+		// make the mock LESS faithful to real hardware, not more -- so this
+		// stays applied. Mirrors the same reasoning already applied to the
+		// CLI `show users` gap (Go's fake serves it; the pin's never did).
 		s.Hostname = string(value)
 	case nsdp.TagDHCPMode:
 		if len(value) == 0 {

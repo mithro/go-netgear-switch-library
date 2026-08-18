@@ -1362,6 +1362,14 @@ func SeedGS110EMX() *State {
 			Admin: true,
 			Link:  realSpeed[port] != 0,
 			Speed: realSpeed[port],
+			// Pin's PortSim.flow_control dataclass DEFAULT is True (pin
+			// state.py:170), and seed_gs110emx (pin seed.py:1864-1962) never
+			// overrides it -- so every port on the pin's seed is True,
+			// matching the factory default 10.1.5.25/.26 (the unit this seed
+			// transcribes) are still on. Go has no per-field struct-literal
+			// default, so this is set explicitly per PortSim.FlowControl's
+			// own doc comment.
+			FlowControl: true,
 		}
 		if port == 8 {
 			sim.Description = model.Ptr("rumpus")
@@ -1458,6 +1466,11 @@ func SeedGS305EP() *State {
 			Admin: port != 3,
 			Link:  port == 1,
 			Speed: speed,
+			// Pin's seed_gs305ep (seed.py:2041-2072) never overrides
+			// flow_control, so it falls through to PortSim's dataclass
+			// default True (state.py:170) -- same as SeedGS110EMX's own
+			// FlowControl: true, same citation.
+			FlowControl: true,
 		}
 	}
 	ports[1].RxOctets = model.Ptr(uint64(1_000_000))
@@ -1513,6 +1526,12 @@ func SeedGS105PE() *State {
 			Admin: true,
 			Link:  port == 3 || port == 5,
 			Speed: realSpeed[port],
+			// Pin's seed_gs105pe (seed.py:2075-2127) never overrides
+			// flow_control either, so this unit's captured PORT_STATUS
+			// PROJECTION is the same True dataclass default (state.py:170)
+			// as gs110emx/gs305ep -- not itself a per-unit measurement for
+			// THIS switch, but the value the pin's fake actually emits.
+			FlowControl: true,
 		}
 	}
 	ports[3].TxOctets = model.Ptr(uint64(10_246_512))
