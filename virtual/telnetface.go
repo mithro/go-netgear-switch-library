@@ -308,9 +308,11 @@ func (f *TelnetFace) serveConn(conn net.Conn) {
 	// practice, but SnmpFace's SET rollback path (RestoreState) does write
 	// it back (to the same value) under State's lock -- so this read needs
 	// the SAME lock too, even though the value can never actually differ
-	// (Go-only; see State.mu's own doc comment). A one-off read, not held
-	// across cliListenerLoop: that loop's own State access is entirely
-	// inside face.Run, which takes the lock itself per call.
+	// (Go-only; see State.mu's own doc comment). A one-off read here, but
+	// NOT the only direct State access cliListenerLoop's loop reaches:
+	// cliPrompt -> CliFace.InterfaceName also reads f.state.Ports on every
+	// iteration (locked independently there, cliface.go) -- this call does
+	// not hold a lock across the whole loop, only around this one field.
 	f.state.LockState()
 	modelKey := f.state.ModelKey
 	f.state.UnlockState()

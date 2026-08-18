@@ -731,8 +731,8 @@ func TestSnapshotNilFieldsStayNil(t *testing.T) {
 // TestSnapshotAndRestorePreserveNoStaticRow is a regression test for a
 // GAP-2 fix follow-up: cloneVlansMap's VlanSim{...} literal never listed
 // NoStaticRow, so a Snapshot/Restore round trip -- run by every atomic
-// multi-varbind SNMP SET, taken before applying varbinds and restored
-// wholesale (*s = *snap) on ANY varbind failure -- silently fabricated a
+// multi-varbind SNMP SET, taken before applying varbinds and restored on
+// ANY varbind failure -- silently fabricated a
 // static dot1qVlanStaticTable row for the gs728tpp fake's VLAN 1 after a
 // failed SET. That contradicts the exact MEASURED fact SeedGS728TPP exists
 // to model: the real switch reports dot1qVlanStatus=1 (other) for VLAN 1

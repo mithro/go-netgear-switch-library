@@ -860,10 +860,22 @@ func (f *CliFace) Mode() string {
 // Mode() == cliModeInterface; ("", false) otherwise, including the
 // (unreachable in practice) case of a selected port no longer present in
 // state.Ports.
+//
+// Holds State's lock for the whole call (Go-only; see State.mu's own doc
+// comment): unlike Mode() (f.modes is session-local, never touched by
+// another goroutine), this reads f.state.Ports -- the SAME shared *State
+// every other face's goroutine can mutate. Called from cli_socket.go's
+// cliPrompt on the SSH/Telnet per-connection goroutine, AFTER CliFace.Run's
+// own critical section has already ended (cliListenerLoop calls cliPrompt
+// only once face.Run has fully returned) -- so this is never nested inside
+// another State.mu acquisition; it is its own, independent, outermost
+// critical section, safe to lock directly.
 func (f *CliFace) InterfaceName() (string, bool) {
 	if f.ifacePort == nil {
 		return "", false
 	}
+	f.state.LockState()
+	defer f.state.UnlockState()
 	sim, ok := f.state.Ports[*f.ifacePort]
 	if !ok {
 		return "", false

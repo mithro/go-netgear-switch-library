@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mithro/go-netgear-switch-library/fastpath"
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/nsdp"
 	"github.com/mithro/go-netgear-switch-library/snmp"
@@ -680,5 +681,103 @@ func TestVirtualSwitchConcurrentFacesRaceFree(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Errorf("concurrent SNMP-write/HTTP-read traffic: %v", err)
+	}
+}
+
+// TestVirtualSwitchConcurrentCLIInterfaceModeAndRejectedSNMPSetRaceFree is
+// the regression test for the gap re-review found in the first completeness
+// pass: CliFace.InterfaceName read f.state.Ports with no lock at all. It is
+// called from cli_socket.go's cliPrompt, on the SSH/Telnet per-connection
+// goroutine, EVERY time a fresh prompt is rendered -- both before the
+// command loop starts and after every single command -- which is AFTER
+// CliFace.Run's own `defer UnlockState()` has already fired, so it ran
+// outside any critical section. It races SnmpFace.handleSet's rejection
+// path (f.view.RestoreState(snapshot) -> State.Restore, `*s = *snap`),
+// which reassigns state.Ports to a genuinely different map object under
+// State.mu -- reachable with entirely ordinary traffic: a live SSH/Telnet
+// session parked in `interface <X>` config mode (so every subsequent
+// prompt render re-resolves the interface name) concurrently with any
+// rejected SNMP SET (a not-writable OID, or a later varbind failing in a
+// multi-varbind PDU).
+//
+// Drives a REAL SSH session (fastpath.ShellDriver over fastpath's own SSH
+// transport, the same client cli_listeners_test.go uses) parked in
+// interface mode, issuing show-version commands in a tight loop -- each one
+// renders a fresh prompt afterward via cliPrompt -> CliFace.InterfaceName,
+// re-reading f.state.Ports -- CONCURRENTLY with a real SNMP SET storm
+// against ifOperStatus (explicitly not-writable, D-VIRT §1.8), which
+// SnmpFace.handleSet rejects and rolls back via State.Restore on every
+// single attempt. Must be clean under `go test -race`.
+func TestVirtualSwitchConcurrentCLIInterfaceModeAndRejectedSNMPSetRaceFree(t *testing.T) {
+	sw := startVirtualSwitch(t, "gsm7252ps")
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	cliSpec, err := fastpath.CLISpec(m)
+	if err != nil {
+		t.Fatalf("fastpath.CLISpec: %v", err)
+	}
+
+	driver := dialSSHDriver(t, sw.SSHPort, "admin", "password")
+	defer func() { _ = driver.Close() }()
+	ctx := context.Background()
+
+	if out, err := driver.Run(ctx, "configure"); err != nil || out != "" {
+		t.Fatalf(`Run("configure") = (%q, %v), want ("", nil)`, out, err)
+	}
+	iface := cliSpec.Iface(1)
+	if out, err := driver.Run(ctx, "interface "+iface); err != nil || out != "" {
+		t.Fatalf(`Run("interface %s") = (%q, %v), want ("", nil)`, iface, out, err)
+	}
+
+	const iterations = 30
+	var wg sync.WaitGroup
+	errs := make(chan error, 2*iterations)
+
+	// Goroutine A: parked in interface mode (set up above), issuing
+	// show-version commands in a tight loop over the SAME connection --
+	// SSHFace's per-session goroutine. Each Run() completion is followed,
+	// inside cliListenerLoop, by a fresh cliPrompt() render that calls
+	// CliFace.InterfaceName -- the exact call this test targets.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			if _, err := driver.Run(ctx, cliSpec.VersionCmd); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+
+	// Goroutine B: a real SNMP SET storm against ifOperStatus.1 (D-VIRT
+	// §1.8: explicitly not-writable) -- ALWAYS rejected, so
+	// SnmpFace.handleSet's RestoreState rollback (State.Restore, `*s =
+	// *snap`) fires on EVERY attempt. A NotWritable rejection is the
+	// desired, expected outcome (it's what drives the Restore this test
+	// targets), so it is not treated as a failure -- only a genuine
+	// non-SNMP transport error is.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		snmpClient := snmp.NewGoSNMPClient(sw.Host+":"+strconv.Itoa(sw.SnmpPort), "public")
+		for i := 0; i < iterations; i++ {
+			vb, err := snmp.NewSetVarbind(snmp.IfOperStatus+".1", 2, "i")
+			if err != nil {
+				errs <- err
+				return
+			}
+			if err := snmpClient.Set(context.Background(), vb); err != nil && !errors.Is(err, model.ErrSNMP) {
+				errs <- err
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent CLI-interface-mode/rejected-SNMP-SET traffic: %v", err)
 	}
 }
