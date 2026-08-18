@@ -1252,6 +1252,72 @@ func TestCliFacePoeCliStatusLagRequiresPolling(t *testing.T) {
 	}
 }
 
+// TestPoeAdminCliStatusLagSameOverSNMPAsOverCLI is the [POE-CROSS-BACKEND]
+// regression test: PoE-admin writes from the SNMP SET path (State.ApplyWrite)
+// and the CLI `poe`/`no poe` path must produce IDENTICAL PoeSim side
+// effects, including the CLI-status-read lag, because the pin funnels both
+// through one shared method (state.py apply_poe_admin, state.py:1135-1157:
+// "ONE rule shared by every protocol face ... so the mock cannot behave
+// differently depending on which backend a test drove"). This drives the
+// write over SNMP (State.ApplyWrite against a pethPsePortAdminEnable OID,
+// exactly as snmpface.go's real SET path would) and reads back over the
+// CLI's own `show poe port info all` renderer, asserting the SAME measured
+// one-read lag (MEASURED ON HARDWARE, see PoeSim.CliStatusLagReads's own
+// doc comment) shows up even though nothing CLI-side ever touched this
+// port.
+func TestPoeAdminCliStatusLagSameOverSNMPAsOverCLI(t *testing.T) {
+	st := SeedGSM7252PS()
+	face, _ := newTestCliFace(t, "gsm7252ps", st)
+
+	const port = 6 // starts Detect=6/PowerMw 0 (seed.go:183); force a clean off->on transition
+	st.Poe[port].Admin = false
+	st.Poe[port].Detect = 1
+	st.Poe[port].CliStatusLagReads = 0
+
+	// The SNMP SET path -- NOT the CLI -- re-enables PoE on this port.
+	st.ApplyWrite(fmt.Sprintf("%s.3.1.%d", snmp.PethPsePortTable, port), 1)
+	if !st.Poe[port].Admin || st.Poe[port].Detect != 3 {
+		t.Fatalf("SNMP-driven enable: Poe[%d] = %+v, want Admin=true Detect=3", port, st.Poe[port])
+	}
+	if st.Poe[port].CliStatusLagReads != 1 {
+		t.Fatalf("CliStatusLagReads after SNMP-driven enable = %d, want 1 (same lag as a CLI-driven enable)", st.Poe[port].CliStatusLagReads)
+	}
+
+	// The FIRST CLI read after the SNMP-driven enable must still see the
+	// stale "Disabled" status (the lag), even though the CLI never issued
+	// the enable itself.
+	first := face.renderPoE()
+	if !strings.Contains(rowFor(t, first, port), "Disabled") {
+		t.Errorf("first show-poe read after SNMP enable = %q, want it to still report \"Disabled\" (the lag)", rowFor(t, first, port))
+	}
+	if st.Poe[port].CliStatusLagReads != 0 {
+		t.Errorf("CliStatusLagReads after one CLI read = %d, want 0 (consumed)", st.Poe[port].CliStatusLagReads)
+	}
+
+	// The lag is now consumed: a second CLI read reports the real state.
+	second := face.renderPoE()
+	if !strings.Contains(rowFor(t, second, port), "Delivering Power") {
+		t.Errorf("second show-poe read = %q, want \"Delivering Power\" (lag already consumed)", rowFor(t, second, port))
+	}
+}
+
+// rowFor returns the single line of renderPoE's output naming intf port
+// (as fastpath's own "Intf" cell renders it, e.g. "1/0/6"), for isolating
+// one port's Status column in an assertion. Fails the test if no such line
+// exists.
+func rowFor(t *testing.T, rendered string, port int) string {
+	t.Helper()
+	suffix := fmt.Sprintf("/0/%d", port)
+	for _, line := range strings.Split(rendered, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && strings.HasSuffix(fields[0], suffix) {
+			return line
+		}
+	}
+	t.Fatalf("renderPoE output has no row for port %d:\n%s", port, rendered)
+	return ""
+}
+
 // --- helpers -------------------------------------------------------------
 
 func intersect(a, b map[int]bool) []int {

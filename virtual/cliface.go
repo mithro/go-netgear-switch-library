@@ -282,43 +282,16 @@ func (f *CliFace) poeCapable() bool {
 	return f.state.mustModel().PoEPortCount > 0
 }
 
-// applyPoeAdmin switches a PSE port's admin state, with the SAME coherence
-// State.ApplyWrite's pethPsePortAdminEnable branch applies for the SNMP SET
-// path (admin off -> detect=1 (unused) and the data link drops; admin on ->
-// detect=3 (delivering)) PLUS the CLI-only status-lag quirk, ported
-// verbatim from Python State.apply_poe_admin (state.py:920-943): "ONE rule
-// shared by every protocol face -- the SNMP SET path (apply_write) and the
-// CLI poe/no poe commands both come through here, so the mock cannot
-// behave differently depending on which backend a test drove." On an
-// off->on transition, PoeSim.CliStatusLagReads is set to 1: MEASURED ON
-// HARDWARE (M4300-16X, 10.1.5.20, FASTPATH 12.0.19.15, 2026-07-30) that a
-// re-enabled port's `show poe port info all` Status column still reads
-// "Disabled" for one more read before catching up -- see
-// PoeSim.CliStatusLagReads's own doc comment. Unknown port: deliberate
-// no-op. Kept local to this file (not a shared State method) since
-// ApplyWrite's own PoE branch is itself inlined there rather than factored
-// out; duplicating the rule here is cheaper than a cross-file refactor
-// this task doesn't need.
+// applyPoeAdmin switches a PSE port's admin state via the SAME
+// State.ApplyPoeAdmin helper the SNMP SET path (State.ApplyWrite's
+// pethPsePortAdminEnable branch) now also routes through -- see that
+// method's own doc comment for the full pin citation (state.py:1135-1157)
+// and the CliStatusLagReads side effect it applies identically regardless
+// of backend. Kept as a thin same-file wrapper (not inlined at the call
+// site) purely so `f.applyPoeAdmin(port, ...)` reads the same as it always
+// has at this file's one call site.
 func (f *CliFace) applyPoeAdmin(port int, on bool) {
-	psim, exists := f.state.Poe[port]
-	if !exists {
-		return
-	}
-	wasOn := psim.Admin
-	psim.Admin = on
-	if on {
-		psim.Detect = 3 // delivering
-	} else {
-		psim.Detect = 1 // unused/disabled
-	}
-	if on && !wasOn {
-		psim.CliStatusLagReads = 1
-	}
-	if !on {
-		if p, exists2 := f.state.Ports[port]; exists2 {
-			p.Link = false
-		}
-	}
+	f.state.ApplyPoeAdmin(port, on)
 }
 
 // applyPoeReset re-arms PSE detection on port (the CLI's `poe reset`): the

@@ -257,10 +257,20 @@ type PoeSim struct {
 	// made a single immediate read-back report a perfectly good SetPoE as
 	// a verification failure. The mock reproduces the lag (one stale read)
 	// so fastpath.Writer.SetPoE's polling is actually exercised instead of
-	// passing by accident; SNMP's pethPsePortAdminEnable has no such lag
-	// and is deliberately unaffected. Consumed (and decremented) by
-	// cliPoeStatusText in cliface_render.go; set by CliFace.applyPoeAdmin
-	// on an off->on transition.
+	// passing by accident.
+	//
+	// Set by State.ApplyPoeAdmin on an off->on transition REGARDLESS of
+	// which backend drove the write -- the SNMP SET path (ApplyWrite's
+	// pethPsePortAdminEnable branch) and the CLI `poe` command both funnel
+	// through that one shared method (mirroring pin state.py's own
+	// apply_poe_admin, state.py:1135-1157), so a port re-enabled over SNMP
+	// shows the SAME CLI status lag on the next CLI read as one re-enabled
+	// over the CLI directly. Only CONSUMED (decremented) by cliPoeStatusText
+	// in cliface_render.go, since the lag is specifically a `show poe port
+	// info all` rendering artifact -- SNMP reads of PETH-PSE-MIB
+	// (pethPsePortDetectionStatus) are NOT gated by this counter and see
+	// Detect's new value immediately, matching the pin (which has no
+	// SNMP-side equivalent of cli_status_lag_reads consumption either).
 	CliStatusLagReads int
 }
 
@@ -1168,6 +1178,48 @@ func sliceFromPortSet(ports map[int]bool) []int {
 	return out
 }
 
+// ApplyPoeAdmin switches a PSE port's admin state, with the coherence a
+// real PoE switch shows: admin off -> detect=1 (unused) and the data link
+// drops; admin on -> detect=3 (delivering). ONE rule shared by EVERY
+// protocol face -- the SNMP SET path (ApplyWrite's pethPsePortAdminEnable
+// branch below) and the CLI `poe`/`no poe` commands (CliFace.applyPoeAdmin,
+// cliface.go) both come through here, so the mock cannot behave differently
+// depending on which backend a test drove (which would make cross-backend
+// write parity meaningless) -- mirroring Python State.apply_poe_admin
+// verbatim (pin state.py:1135-1157), including its own docstring's framing:
+// "ONE rule shared by every protocol face -- the SNMP SET path (apply_write)
+// and the CLI poe/no poe commands both come through here."
+//
+// On an off->on transition, PoeSim.CliStatusLagReads is set to 1
+// REGARDLESS of which backend drove the write -- Python does not
+// special-case this per protocol either: it is one dataclass field mutated
+// by one shared method (state.py:1152-1155). MEASURED ON HARDWARE
+// (M4300-16X, 10.1.5.20, FASTPATH 12.0.19.15, 2026-07-30) that a re-enabled
+// port's `show poe port info all` Status column still reads "Disabled" for
+// one more read before catching up -- see PoeSim.CliStatusLagReads's own
+// doc comment. Unknown port: deliberate no-op.
+func (s *State) ApplyPoeAdmin(port int, on bool) {
+	psim, exists := s.Poe[port]
+	if !exists {
+		return
+	}
+	wasOn := psim.Admin
+	psim.Admin = on
+	if on {
+		psim.Detect = 3 // delivering
+	} else {
+		psim.Detect = 1 // unused/disabled
+	}
+	if on && !wasOn {
+		psim.CliStatusLagReads = 1
+	}
+	if !on {
+		if p, exists2 := s.Ports[port]; exists2 {
+			p.Link = false
+		}
+	}
+}
+
 // ApplyWrite mutates this state from one SNMP SET varbind, with device
 // coherence. Applies the same coherence a real PoE switch shows so a
 // cycle_poe operation (later slice) terminates against the mock: admin off
@@ -1208,22 +1260,12 @@ func (s *State) ApplyWrite(oid string, value any) {
 		return
 	}
 
-	// 3. pethPsePortAdminEnable = PethPsePortTable.3.1.<port>
+	// 3. pethPsePortAdminEnable = PethPsePortTable.3.1.<port> -- routed
+	// through the SAME ApplyPoeAdmin helper CliFace.applyPoeAdmin uses (see
+	// its own doc comment), so this backend cannot disagree with the CLI
+	// path on CliStatusLagReads or any other PoE-admin side effect.
 	if port, ok := isPoeAdminColumn(oid); ok {
-		if poe, exists := s.Poe[port]; exists {
-			on := mustInt(oid, value) == 1
-			poe.Admin = on
-			if on {
-				poe.Detect = 3 // delivering
-			} else {
-				poe.Detect = 1 // unused/disabled
-			}
-			if !on {
-				if p, exists2 := s.Ports[port]; exists2 {
-					p.Link = false
-				}
-			}
-		}
+		s.ApplyPoeAdmin(port, mustInt(oid, value) == 1)
 		return
 	}
 
