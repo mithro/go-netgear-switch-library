@@ -2,7 +2,7 @@ package virtual
 
 // web_gs110emx_templates.go carries the raw byte-faithful GS110EMX web-UI
 // HTML fragments (data only, no logic), transcribed VERBATIM from
-// src/netgear_switch/virtual/web_gs110emx_templates.py at pin 1841111 (the
+// src/netgear_switch/virtual/web_gs110emx_templates.py at pin b26eb1f (the
 // captures are tests/fixtures/http/gs110emx_*.html on a real physical unit --
 // see webui/testdata/http/gs110emx_*.html for the Go-side copies). Split out
 // of web_gs110emx.go for the same reason the Python source is split: these

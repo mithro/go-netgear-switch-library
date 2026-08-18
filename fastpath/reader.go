@@ -2,7 +2,7 @@
 // op's command(s) (spec.go, Task 1) through a live Session (session.go +
 // ssh.go/telnet.go/serial.go, Tasks 5-7) to the right parser (parse.go,
 // Tasks 3-4). Ported field-for-field from the pinned
-// python-netgear-switch-library @ 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362,
+// python-netgear-switch-library @ b26eb1f,
 // src/netgear_switch/cli_read.py (107 lines), dossier §3 (§3.1-§3.11). Any
 // discrepancy between this file and the pin is a bug in this file, not a
 // deliberate deviation, unless called out in a comment.

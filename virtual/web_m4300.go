@@ -1,8 +1,8 @@
 package virtual
 
 // web_m4300.go ports src/netgear_switch/virtual/web_m4300.py (the
-// normative source; that repo is read-only from here -- pin 1841111,
-// branch go-port-pin-1841111). Any discrepancy between this file and that
+// normative source; that repo is read-only from here -- pin b26eb1f,
+// branch go-port-pin-b26eb1f). Any discrepancy between this file and that
 // pin is a bug here, unless called out in a comment. See
 // docs/superpowers/plans/2026-07-31-slice-06-dossier-http-readwrite-face.md
 // §4 for the porting dossier this mirrors.

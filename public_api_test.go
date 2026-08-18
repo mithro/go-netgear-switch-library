@@ -94,7 +94,8 @@ func TestPublicAPI_ModelTypesReachableWithoutImportingModelPackage(t *testing.T)
 	snmpBackend := netgearswitch.BackendSNMP
 	_ = netgearswitch.Write{Force: true, Backend: &snmpBackend}
 
-	// Error sentinels must errors.Is-match without importing model.
+	// Error sentinels must errors.Is-match without importing model (or, for
+	// ErrCliCommandRejected, fastpath).
 	sentinels := []error{
 		netgearswitch.ErrUnsupportedCapability,
 		netgearswitch.ErrProtectedPort,
@@ -103,6 +104,7 @@ func TestPublicAPI_ModelTypesReachableWithoutImportingModelPackage(t *testing.T)
 		netgearswitch.ErrConfig,
 		netgearswitch.ErrUnknownModel,
 		netgearswitch.ErrSNMP,
+		netgearswitch.ErrCliCommandRejected,
 	}
 	for _, s := range sentinels {
 		if s == nil {

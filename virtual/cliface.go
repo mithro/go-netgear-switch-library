@@ -1,8 +1,7 @@
 // cliface.go ports src/netgear_switch/virtual/faces/cli.py's
 // VirtualCliFace (421 lines) -- the normative source; that repo is
-// read-only from here -- pin 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362. Any
-// discrepancy between this file and the Python source is a bug here,
-// unless called out in a comment. See
+// read-only from here -- pin b26eb1f. Any discrepancy between this file and
+// the Python source is a bug here, unless called out in a comment. See
 // docs/superpowers/plans/2026-08-01-slice-07-dossier-cli-transport-fake.md
 // §3 for the full porting dossier this mirrors.
 //
@@ -109,6 +108,11 @@ var (
 	// cliModeConfig` check -- a bare "hostname" (no argument) deliberately
 	// does NOT match this regex, so it falls through to the catch-all
 	// "Command not found" response, mirroring the real device rejecting it.
+	// The captured group can carry a wrapping quote ("hostname \"x\"", a
+	// real running-config's own quoted form) or not ("hostname x") -- see
+	// its use below, which strips one exactly like the pin's own
+	// _HOSTNAME_RE capture (cli.py:63, pin b26eb1f) plus its
+	// `.strip().strip('"')` (cli.py:432) [cliface-quote-strip].
 	cliHostnameRE = regexp.MustCompile(`^hostname (.+)$`)
 	// cliLoggingSyslogRE mirrors the global-config remote-logging enable/
 	// disable (set_syslog_enabled): `logging syslog` / `no logging
@@ -555,7 +559,13 @@ func (f *CliFace) configCommand(c string) (string, bool) {
 	}
 	if f.mode() == cliModeConfig {
 		if m := cliHostnameRE.FindStringSubmatch(c); m != nil {
-			f.state.Hostname = m[1]
+			// strip('"') after strip(): a wrapping quote from a real
+			// running-config's own `hostname "x"` form must not become part
+			// of the stored name, mirroring the pin's
+			// m.group(1).strip().strip('"') exactly (cli.py:432, pin
+			// b26eb1f) [cliface-quote-strip]. Inert today: no writer this
+			// codebase builds sends a quoted hostname.
+			f.state.Hostname = strings.Trim(strings.TrimSpace(m[1]), `"`)
 			return cliAccepted, true
 		}
 		if m := cliLoggingSyslogRE.FindStringSubmatch(c); m != nil {
@@ -744,10 +754,23 @@ func (f *CliFace) run(command string) string {
 // --- fastpath.Session --------------------------------------------------
 
 // Run implements fastpath.Session.
+//
+// Holds State's lock for the whole call (Go-only; see State.mu's own doc
+// comment): a *CliFace is constructed fresh per SSH/Telnet session
+// (SSHFace.handleSession/TelnetFace.serveConn), but every session over the
+// same VirtualSwitch -- CLI or otherwise -- shares the SAME *State, mutated
+// concurrently from each session's own goroutine. f.run and everything it
+// calls (configCommand, interfaceCommand, vlanDBCommand, the render*
+// helpers, applyPoeAdmin/applyPoeReset) must NEVER lock again (this mutex
+// is not reentrant); Run/RunSCPCopy/RunWriteMemory are their only callers
+// (fastpath.Session's three write/command entry points), each locking
+// independently since none of the three ever calls another.
 func (f *CliFace) Run(ctx context.Context, command string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	f.state.LockState()
+	defer f.state.UnlockState()
 	return f.run(command), nil
 }
 
@@ -756,10 +779,16 @@ func (f *CliFace) Run(ctx context.Context, command string) (string, error) {
 // `copy <src> <dest>`, records into ScpCertDeploySim, and always reports
 // success -- there is no byte stream here to drive the real TOFU/
 // password/(y/n) handshake fastpath.ShellDriver.RunSCPCopy drives.
+//
+// Holds State's lock for the whole call -- see Run's own doc comment for
+// why (same reasoning, independent lock: RunSCPCopy never calls Run or vice
+// versa).
 func (f *CliFace) RunSCPCopy(ctx context.Context, command, _ string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	f.state.LockState()
+	defer f.state.UnlockState()
 	trimmed := strings.TrimSpace(command)
 	m := cliCopyRE.FindStringSubmatch(trimmed)
 	if m == nil {
@@ -781,10 +810,16 @@ func (f *CliFace) RunSCPCopy(ctx context.Context, command, _ string) (string, er
 // a test prove the right command was issued. prestuff is accepted for
 // Session-interface parity but has no observable effect here -- there is
 // no byte stream to pre-stuff a "y" answer into.
+//
+// Holds State's lock for the whole call -- see Run's own doc comment for
+// why (same reasoning, independent lock: RunWriteMemory never calls Run or
+// vice versa).
 func (f *CliFace) RunWriteMemory(ctx context.Context, command string, _ bool) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	f.state.LockState()
+	defer f.state.UnlockState()
 	c := strings.TrimSpace(command)
 	if c == "reload" {
 		f.state.Reboots++
@@ -825,10 +860,22 @@ func (f *CliFace) Mode() string {
 // Mode() == cliModeInterface; ("", false) otherwise, including the
 // (unreachable in practice) case of a selected port no longer present in
 // state.Ports.
+//
+// Holds State's lock for the whole call (Go-only; see State.mu's own doc
+// comment): unlike Mode() (f.modes is session-local, never touched by
+// another goroutine), this reads f.state.Ports -- the SAME shared *State
+// every other face's goroutine can mutate. Called from cli_socket.go's
+// cliPrompt on the SSH/Telnet per-connection goroutine, AFTER CliFace.Run's
+// own critical section has already ended (cliListenerLoop calls cliPrompt
+// only once face.Run has fully returned) -- so this is never nested inside
+// another State.mu acquisition; it is its own, independent, outermost
+// critical section, safe to lock directly.
 func (f *CliFace) InterfaceName() (string, bool) {
 	if f.ifacePort == nil {
 		return "", false
 	}
+	f.state.LockState()
+	defer f.state.UnlockState()
 	sim, ok := f.state.Ports[*f.ifacePort]
 	if !ok {
 		return "", false

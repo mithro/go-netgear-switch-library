@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/nsdp"
@@ -633,6 +634,37 @@ type State struct {
 	// this counter is the only observable record that the request was
 	// issued -- not part of any SNMP/NSDP/HTTP projection.
 	Reboots int
+
+	// mu has no Python equivalent: the pin's VirtualSwitchState is only ever
+	// touched from one goroutine-equivalent (a single asyncio event loop), so
+	// it needs no lock. This Go port instead runs each bound face (SnmpFace,
+	// NsdpFace, HTTPFace, CliFace via SSHFace/TelnetFace) on its own real
+	// goroutine, all sharing one *State -- and a face's serving goroutine
+	// mutating a field while any other goroutine (another face, or a test
+	// reading State directly after a synchronous protocol round trip) reads
+	// it is a real data race under the Go memory model: a UDP/TCP round trip
+	// enforces real wall-clock ordering but establishes NO happens-before
+	// edge the race detector (or the memory model) recognises. mu guards
+	// every mutable field above; a face's write path must hold it across its
+	// whole atomic operation (see SnmpFace.handle's Lock/Unlock), and any
+	// code reading State fields directly from outside a face's own
+	// single-threaded request handling -- never through the safe
+	// MibView.Get/GetNext path -- must hold it too (see Lock/Unlock below).
+	//
+	// A *sync.Mutex, not an embedded sync.Mutex, AND -- just as load-bearing
+	// -- never written to by Restore's per-field copy (state.go, below):
+	// go vet's copylocks check would flag Lock/Unlock-bearing *State being
+	// assigned by value, and a real -race run caught the deeper hazard an
+	// embedded/copied mu would create even without that check tripping --
+	// Restore used to do a single `*s = *snap`, which writes to EVERY
+	// field's memory including mu, and that WRITE (even carrying the
+	// identical pointer value forward, see Snapshot) raced against a
+	// DIFFERENT goroutine's concurrent LockState() call reading s.mu for
+	// the first time (e.g. CliFace.InterfaceName from a live CLI session,
+	// concurrently with SnmpFace.handleSet's rollback path calling
+	// Restore) -- a real, -race-confirmed bug, not a theoretical one. See
+	// Restore's own doc comment for the fix.
+	mu *sync.Mutex
 }
 
 // NewState builds a blank-but-valid State for modelKey, with the same
@@ -671,8 +703,29 @@ func NewState(modelKey string) *State {
 		SwitchportGeneralUntagged: map[int]map[int]bool{},
 		SwitchportGeneralTagged:   map[int]map[int]bool{},
 		PDUEgressWrites:           map[int]bool{},
+		mu:                        &sync.Mutex{},
 	}
 }
+
+// LockState acquires this State's mutex -- see mu's own doc comment for the
+// full contract (Go-only; no Python equivalent). A face's write path holds
+// this across a whole atomic operation, not just the individual field
+// assignments inside it (see SnmpFace.handleSet). Code reading State fields
+// directly from outside a face's own single-threaded request handling --
+// e.g. a test inspecting SwitchportMode right after a synchronous SNMP
+// write completes -- must hold it too, for exactly the same reason: without
+// it, the read and the face's write are unsynchronized concurrent accesses
+// to the same map, even though the protocol round trip enforces real
+// ordering in practice.
+//
+// Named LockState/UnlockState, not Lock/Unlock: naming them Lock/Unlock
+// would make *State satisfy sync.Locker while State (the value type) does
+// not -- exactly the shape go vet's copylocks check flags on any value
+// copy of State, e.g. a State{...} struct literal (Snapshot builds one).
+func (s *State) LockState() { s.mu.Lock() }
+
+// UnlockState releases the lock acquired by LockState.
+func (s *State) UnlockState() { s.mu.Unlock() }
 
 // SysinfoSensors returns the sensor set the HTTP sysInfo page renders:
 // HTTPSensors when a model's web UI exposes a different sensor set than
@@ -750,22 +803,86 @@ func (s *State) Snapshot() *State {
 		SwitchportGeneralTagged:   cloneIntIntBoolMap(s.SwitchportGeneralTagged),
 		PDUEgressWrites:           cloneIntBoolMap(s.PDUEgressWrites),
 		Reboots:                   s.Reboots,
+		mu:                        s.mu, // same lock object, not a fresh one -- see Restore's own note.
 	}
 	return cp
 }
 
 // Restore restores this state in place from a prior Snapshot result.
 //
-// This copies every field from snap onto *s (a single struct assignment)
-// rather than replacing s itself, so existing holders of this exact *State
-// pointer keep seeing the restored data -- the critical porting detail from
-// the Python reference's restore(), which sets attributes on self rather
-// than reassigning the variable holding it. Safe because Snapshot deep-
-// copied every map/slice/pointer field: after this assignment s's fields
-// alias snap's already-independent data, never anything still shared with
-// whatever was mutated between Snapshot and Restore.
+// This copies every OTHER field from snap onto *s field-by-field (never a
+// whole-struct `*s = *snap`) rather than replacing s itself, so existing
+// holders of this exact *State pointer keep seeing the restored data -- the
+// critical porting detail from the Python reference's restore(), which sets
+// attributes on self rather than reassigning the variable holding it. Safe
+// because Snapshot deep-copied every map/slice/pointer field: after this
+// assignment s's fields alias snap's already-independent data, never
+// anything still shared with whatever was mutated between Snapshot and
+// Restore.
+//
+// mu is the one field deliberately NEVER assigned here -- not even to
+// snap.mu, which (see Snapshot) is bit-identical to s.mu already. A single
+// `*s = *snap` was tried first and is WRONG, proven by -race: that
+// statement writes to EVERY field's memory, mu included, even when the
+// value being written back is identical, and Restore always runs from
+// inside a face's own LockState/UnlockState critical section (e.g.
+// SnmpFace.handleSet's rollback path) while a DIFFERENT goroutine can be
+// concurrently calling LockState for the first time on this same *State
+// (e.g. CliFace.InterfaceName from a live SSH/Telnet session) -- which
+// READS s.mu to find the mutex to lock. A concurrent unsynchronized
+// write-that-happens-not-to-change-the-value is still a write; the race
+// detector (correctly) does not know or care that the bytes matched.
+// Skipping mu here entirely, rather than writing-then-fixing-up
+// afterward, is what actually closes that gap: fixing it up after a bulk
+// `*s = *snap` would still execute the racy write as part of that bulk
+// copy first.
 func (s *State) Restore(snap *State) {
-	*s = *snap
+	s.ModelKey = snap.ModelKey
+	s.Ports = snap.Ports
+	s.Vlans = snap.Vlans
+	s.Pvids = snap.Pvids
+	s.Poe = snap.Poe
+	s.Sensors = snap.Sensors
+	s.HTTPSensors = snap.HTTPSensors
+	s.EntityComponents = snap.EntityComponents
+	s.Macs = snap.Macs
+	s.BridgePorts = snap.BridgePorts
+	s.Lldp = snap.Lldp
+	s.Mgmt = snap.Mgmt
+	s.Users = snap.Users
+	s.Services = snap.Services
+	s.Syslog = snap.Syslog
+	s.ModelName = snap.ModelName
+	s.Serial = snap.Serial
+	s.Firmware = snap.Firmware
+	s.Hostname = snap.Hostname
+	s.NsdpPassword = snap.NsdpPassword
+	s.NsdpMac = snap.NsdpMac
+	s.NsdpAuthV2 = snap.NsdpAuthV2
+	s.SysDescr = snap.SysDescr
+	s.SysObjectID = snap.SysObjectID
+	s.Dot1dBaseMacASCII = snap.Dot1dBaseMacASCII
+	s.VLANPortListWidth = snap.VLANPortListWidth
+	s.NsdpQosEngine = snap.NsdpQosEngine
+	s.NsdpPortMirroringDest = snap.NsdpPortMirroringDest
+	s.NsdpPortMirroringSources = snap.NsdpPortMirroringSources
+	s.NsdpIgmpSnoopingEnabled = snap.NsdpIgmpSnoopingEnabled
+	s.NsdpIgmpSnoopingVlan = snap.NsdpIgmpSnoopingVlan
+	s.NsdpBroadcastFiltering = snap.NsdpBroadcastFiltering
+	s.NsdpLoopDetection = snap.NsdpLoopDetection
+	s.UploadedCert = snap.UploadedCert
+	s.ScpCertDeploy = snap.ScpCertDeploy
+	s.VlanMembershipPage = snap.VlanMembershipPage
+	s.VlanMembershipLockedPorts = snap.VlanMembershipLockedPorts
+	s.SwitchportMode = snap.SwitchportMode
+	s.SwitchportAccessVlan = snap.SwitchportAccessVlan
+	s.SwitchportNativeVlan = snap.SwitchportNativeVlan
+	s.SwitchportAllowedVlans = snap.SwitchportAllowedVlans
+	s.SwitchportGeneralUntagged = snap.SwitchportGeneralUntagged
+	s.SwitchportGeneralTagged = snap.SwitchportGeneralTagged
+	s.PDUEgressWrites = snap.PDUEgressWrites
+	s.Reboots = snap.Reboots
+	// mu: deliberately not assigned -- see the doc comment above.
 }
 
 func clonePortsMap(in map[int]*PortSim) map[int]*PortSim {
@@ -1676,7 +1793,7 @@ func (s *State) IsWritableOID(oid string) bool {
 // --- NsdpTlvs / ApplyNsdpWrite: the NSDP-face projection/write pair -------
 //
 // Ported field-for-field from src/netgear_switch/virtual/state.py's
-// nsdp_tlvs/apply_nsdp_write (lines 573-735 at pin 1aa1274), reproduced
+// nsdp_tlvs/apply_nsdp_write (lines 573-735 at pin b26eb1f), reproduced
 // verbatim in D-NSDP §7.1 (2026-07-30-slice-05-dossier-nsdp.md). Any
 // discrepancy between this section and that pin is a bug here.
 

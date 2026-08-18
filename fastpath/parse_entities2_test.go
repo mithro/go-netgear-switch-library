@@ -6,8 +6,7 @@ package fastpath
 // parseInterfaceCounters (§2.19).
 //
 // Every expected value below was NOT hand-derived: it was produced by
-// running the pinned python-netgear-switch-library @
-// 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362 parsers
+// running the pinned python-netgear-switch-library @ b26eb1f parsers
 // (src/netgear_switch/protocols/cli/parse.py) against the byte-identical
 // copies of its own test fixtures in testdata/cli/ (see that directory's
 // README.md for exact provenance), via a script that imports

@@ -2,9 +2,8 @@ package virtual
 
 // snmpface.go ports src/netgear_switch/virtual/faces/snmp.py's
 // VirtualSnmpFace (the normative source; that repo is read-only from here --
-// pin 1aa1274, branch fix/s3300-52x-live-verify). Any discrepancy between
-// this file and the Python source is a bug here. See D-VIRT §3/§7 for the
-// full porting dossier this mirrors.
+// pin b26eb1f). Any discrepancy between this file and the Python source is
+// a bug here. See D-VIRT §3/§7 for the full porting dossier this mirrors.
 //
 // SnmpFace is a real SNMPv2c command-responder agent serving a MibView,
 // bound to an ephemeral UDP port on 127.0.0.1. Unlike the Python reference
@@ -162,7 +161,22 @@ func (f *SnmpFace) serve(conn *net.UDPConn) {
 // Returns nil for any PDU type this mock doesn't serve (traps, informs,
 // v3 reports -- unreachable here since serve() already filtered to v2c) so
 // the caller drops it.
+//
+// Holds the view's State lock for the WHOLE dispatch, GET/GETNEXT/GETBULK
+// included, not just handleSet's write path (Go-only; see State.mu's doc
+// comment): this is the single outermost boundary every SNMP request goes
+// through on serve()'s background goroutine, and the SAME *State can be
+// live-mutated concurrently by every OTHER bound face's own goroutine
+// (NsdpFace, HTTPFace, CliFace via SSHFace/TelnetFace) -- a real switch only
+// ever does one internal config/read operation at a time regardless of how
+// many protocol listeners are bound, and this lock is what makes the mock
+// behave the same way. handleGet/handleGetNext/handleGetBulk/handleSet
+// themselves must NEVER lock again (this mutex is not reentrant); this is
+// their one and only caller.
 func (f *SnmpFace) handle(req *gosnmp.SnmpPacket) *gosnmp.SnmpPacket {
+	f.view.LockState()
+	defer f.view.UnlockState()
+
 	resp := &gosnmp.SnmpPacket{
 		Version:   gosnmp.Version2c,
 		Community: req.Community,
@@ -309,6 +323,10 @@ func (f *SnmpFace) handleGetBulk(req *gosnmp.SnmpPacket) []gosnmp.SnmpPDU {
 // error status echoing the ORIGINAL request varbinds (never the
 // partially-applied out slice); on full success, rebuild the view exactly
 // once and echo the applied varbinds back.
+//
+// Does NOT lock State itself -- its one caller, handle(), already holds
+// State's lock for the whole dispatch (see handle's own doc comment); this
+// mutex is not reentrant, so locking again here would deadlock every SET.
 func (f *SnmpFace) handleSet(vars []gosnmp.SnmpPDU) (out []gosnmp.SnmpPDU, errStatus gosnmp.SNMPError, errIndex uint8) {
 	snapshot := f.view.SnapshotState()
 	applied := make([]gosnmp.SnmpPDU, len(vars))

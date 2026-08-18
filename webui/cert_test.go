@@ -2,7 +2,7 @@ package webui_test
 
 // cert_test.go: TDD coverage for webui.Writer's SSL-certificate upload
 // (cert.go), ported scenario-for-scenario from the certificate section of
-// tests/test_http_write.py at pin 1841111 in python-netgear-switch-library
+// tests/test_http_write.py at pin b26eb1f in python-netgear-switch-library
 // (the sync HttpWriter half only).
 
 import (

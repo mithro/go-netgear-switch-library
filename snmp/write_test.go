@@ -8,7 +8,7 @@ import (
 )
 
 // Mirrors tests/protocols/snmp/test_write_encode.py's intents (Python
-// reference pinned at 1aa1274).
+// reference pinned at b26eb1f).
 
 func TestEncodePortBitmapIsInverseOfDecode(t *testing.T) {
 	ports := []int{1, 8, 9, 52}

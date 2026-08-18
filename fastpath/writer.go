@@ -2,9 +2,8 @@
 // (CreateVLAN/DeleteVLAN/SetVLANMembership) and SetPVID (Task 9, dossier
 // §4.1-§4.5), plus PoE (SetPoE/CyclePoE/ClearPoEFault), SetPortEnabled,
 // SetMgmtIP and Reboot (Task 10, dossier §4.6-§4.9). Ported field-for-field
-// from the pinned python-netgear-switch-library @
-// 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362, src/netgear_switch/cli_write.py
-// (666 lines), dossier (protocol dossier
+// from the pinned python-netgear-switch-library @ b26eb1f,
+// src/netgear_switch/cli_write.py (666 lines), dossier (protocol dossier
 // docs/superpowers/plans/2026-08-01-slice-07-dossier-cli-protocol.md). Any
 // discrepancy between this file and the pin is a bug in this file, not a
 // deliberate deviation, unless called out in a comment.

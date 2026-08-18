@@ -1,9 +1,9 @@
 package webui
 
 // Ported field-for-field from
-// src/netgear_switch/transport/http/client.py at pin 1841111 in
+// src/netgear_switch/transport/http/client.py at pin b26eb1f in
 // python-netgear-switch-library (frozen snapshot worktree
-// go-port-pin-1841111): HttpClient/AsyncHttpClient collapse into one Go
+// go-port-pin-b26eb1f): HttpClient/AsyncHttpClient collapse into one Go
 // type, HTTPClient, implementing the Session interface (types.go) --
 // context.Context-first parameters cover what Python needed two classes
 // (sync httpx.Client / async httpx.AsyncClient) for (dossier D-HTTP-P
@@ -442,6 +442,49 @@ func xmlAPISessionLost(spec *HTTPModelSpec, text string) bool {
 	return err == nil && code == xmlAPIUnauthenticatedStatus
 }
 
+// xmlAPIQuote percent-encodes s exactly like the pin's _xml_api_login_url
+// (client.py:150-154, pin b26eb1f:
+// f"...&user={quote(spec.username)}&password={quote(password)}"), i.e.
+// Python's urllib.parse.quote(s) with its DEFAULT safe='/': RFC 3986
+// unreserved bytes (A-Za-z0-9_.-~) plus '/' pass through unescaped; every
+// other byte of s's UTF-8 encoding is
+// percent-encoded with uppercase hex digits. Neither of net/url's escapers
+// matches that: url.QueryEscape encodes space as '+' (form/query-string
+// encoding, not this) AND encodes '/'; url.PathEscape encodes space
+// correctly as %20 but ALSO encodes '/' (it targets a single path segment,
+// whereas this login URL's session-path prefix already contains real '/'
+// separators the credentials must not be confused with, but a password
+// containing a literal '/' must still travel unescaped, matching Python).
+func xmlAPIQuote(s string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if isUnreservedOrSlash(c) {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&0x0f])
+	}
+	return b.String()
+}
+
+// isUnreservedOrSlash reports whether c is one of Python quote()'s
+// always-safe RFC 3986 unreserved characters (A-Za-z0-9_.-~) or '/' (its
+// default safe set) -- see xmlAPIQuote.
+func isUnreservedOrSlash(c byte) bool {
+	switch {
+	case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z', '0' <= c && c <= '9':
+		return true
+	case c == '_' || c == '.' || c == '-' || c == '~' || c == '/':
+		return true
+	default:
+		return false
+	}
+}
+
 // loginXMLAPI is the GS728TPP GoAhead three-step handshake, mirroring
 // Python HttpClient._xml_api_login (source lines 352-363, updated by parity
 // commit 64ac7c7) exactly: clear any stale session cookies first (this is
@@ -467,7 +510,7 @@ func (c *HTTPClient) loginXMLAPI(ctx context.Context) error {
 	}
 
 	loginURL := fmt.Sprintf("/%s/System.xml?action=login&user=%s&password=%s",
-		sessionPath, url.QueryEscape(c.spec.Username), url.QueryEscape(c.password))
+		sessionPath, xmlAPIQuote(c.spec.Username), xmlAPIQuote(c.password))
 
 	resp2, err := c.doRequest(ctx, http.MethodGet, loginURL, nil, "")
 	if err != nil {

@@ -5,7 +5,7 @@
 // comment (doc.go) for the package overview.
 //
 // Ported field-for-field from the pinned
-// python-netgear-switch-library @ 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362,
+// python-netgear-switch-library @ b26eb1f,
 // src/netgear_switch/protocols/cli/parse.py, "Primitives" section
 // (parse.py:57-204). FASTPATH prints two output shapes device-side (module
 // docstring, parse.py:12-25):
@@ -311,7 +311,7 @@ func physPort(iface string) (int, bool) {
 // Entity parsers, part 1: show version / show port all / show vlan brief
 // (or its per-model rename) / show vlan <id> / show vlan port all.
 // Ported field-for-field from the pinned python-netgear-switch-library @
-// 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362,
+// b26eb1f,
 // src/netgear_switch/protocols/cli/parse.py (parse.py:212-386), dossier
 // §2.9-§2.13.
 // ---------------------------------------------------------------------
@@ -726,7 +726,7 @@ func parsePVIDs(text string) []model.Pvid {
 // all / show poe port info all / show environment / show network (or
 // show ip management) / show interface ethernet <iface>. Ported
 // field-for-field from the pinned python-netgear-switch-library @
-// 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362,
+// b26eb1f,
 // src/netgear_switch/protocols/cli/parse.py (parse.py:398-676), dossier
 // §2.14-§2.19.
 // ---------------------------------------------------------------------

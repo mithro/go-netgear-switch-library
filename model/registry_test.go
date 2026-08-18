@@ -370,7 +370,7 @@ func TestGetModelGSM7228PSVerified(t *testing.T) {
 }
 
 // TestGSM7228PSHasNoSSH pins a real registry-data bug found while building
-// the capabilities oracle: the pinned Python registry.py (commit a9e0ebc)
+// the capabilities oracle: the pinned Python registry.py (commit b26eb1f)
 // registers gsm7228ps with {SNMP, HTTP, TELNET} -- explicitly NOT SSH -- with
 // a live-verified comment that the real S3300-52X hardware runs no SSH
 // listener at all (its own SNMP tcpConnTable shows only ports 80/443/60000;

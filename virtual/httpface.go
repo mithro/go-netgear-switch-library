@@ -2,7 +2,7 @@ package virtual
 
 // httpface.go ports src/netgear_switch/virtual/faces/http.py's
 // VirtualHttpFace (the normative source; that repo is read-only from here --
-// pin 1841111, branch go-port-pin-1841111). Any discrepancy between this
+// pin b26eb1f, branch go-port-pin-b26eb1f). Any discrepancy between this
 // file and the Python source is a bug here, unless called out in a comment.
 // See docs/superpowers/plans/2026-07-31-slice-06-dossier-http-readwrite-face.md
 // §3 for the full porting dossier this mirrors.
@@ -12,10 +12,16 @@ package virtual
 // NsdpFace (same Start()-returns-port / deterministic-idempotent-Stop()
 // shape). Unlike Python's ThreadingHTTPServer (one OS thread per accepted
 // connection, no built-in synchronization of its own), Go's http.Server is
-// already concurrent by design; render/apply access to the shared *State is
-// serialized on renderMu, mirroring Python's single self._lock (dossier
-// §3.8) at the SAME granularity: held only for the dispatch-and-render/apply
-// critical section, never for header parsing or the login/referer checks.
+// already concurrent by design; render/apply access to the shared *State
+// used to be serialized ONLY on renderMu, mirroring Python's single
+// self._lock (dossier §3.8) at the SAME granularity: held only for the
+// dispatch-and-render/apply critical section, never for header parsing or
+// the login/referer checks. renderMu is still there (same-face-only
+// serialization, unchanged), but it never protected against a DIFFERENT
+// bound face's goroutine (SnmpFace/NsdpFace/CliFace) touching the SAME
+// *State concurrently -- see serveHTTP's own doc comment for the State.mu
+// lock (Go-only; no Python equivalent, since Python's faces never ran on
+// real concurrent threads to begin with) that now closes that gap.
 //
 // Go's http.Server.Shutdown(ctx) WAITS for in-flight handlers to finish --
 // strictly stronger than Python's ThreadingHTTPServer.shutdown() (which only
@@ -275,7 +281,27 @@ func knownHTTPPaths(spec *webui.HTTPModelSpec) map[string]bool {
 // Top-level dispatch (dossier §3.9's "full routing precedence")
 // ---------------------------------------------------------------------
 
+// serveHTTP is the single entry point net/http invokes for EVERY request --
+// on its own goroutine-per-connection, per net/http's usual concurrency
+// model. Holds State's lock for the WHOLE request (Go-only; see State.mu's
+// own doc comment), not just renderMu's narrower render/apply critical
+// section: the SAME *State can be live-mutated concurrently by every OTHER
+// bound face's own goroutine (SnmpFace, NsdpFace, CliFace via SSHFace/
+// TelnetFace), and a real switch only ever does one internal config/read
+// operation at a time regardless of how many protocol listeners are bound.
+// renderMu is a SEPARATE, narrower mutex (same-face serialization only,
+// pre-dating this one) nested safely inside this lock wherever it's still
+// acquired below -- two different mutexes, always taken in the same order
+// (State's, then renderMu's, never the reverse), so no deadlock risk; it is
+// otherwise now redundant (State's lock alone already serializes every
+// concurrent request, HTTP or not) but left in place rather than ripped out
+// across its dozen call sites for a change this fix doesn't need to make.
+// No handler this dispatches into may EVER call LockState/UnlockState again
+// (this mutex is not reentrant) -- serveHTTP is their one and only caller.
 func (f *HTTPFace) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	f.state.LockState()
+	defer f.state.UnlockState()
+
 	switch r.Method {
 	case http.MethodGet:
 		f.handleGet(w, r)
@@ -1026,13 +1052,35 @@ func applyGoAheadPoE(state *State, interfaces []goaheadPoEInterface) {
 }
 
 // applyGoAheadWrite applies one "POST wcd" write body and returns the wcd
-// status response, mirroring Python web_gs728tpp.apply_write: the real UI
-// writes EVERYTHING through this one endpoint, with the object name (and
-// its action attribute) selecting the operation, so the mock must dispatch
-// the same way rather than recognizing one special upload. An unrecognized
-// object returns a NON-zero statusCode, never a silent success -- see
-// goaheadWriteXML's own doc comment for exactly which objects this Go port
-// wires versus the pinned Python fake.
+// status response, mirroring Python web_gs728tpp.apply_write (pin b26eb1f,
+// lines 303-433): the real UI writes EVERYTHING through this one endpoint,
+// with the object name (and its action attribute) selecting the operation,
+// so the mock must dispatch the same way rather than recognizing one
+// special upload. An unrecognized object returns a NON-zero statusCode,
+// never a silent success -- see goaheadWriteXML's own doc comment for
+// exactly which objects this Go port wires versus the pinned Python fake.
+//
+// Python's apply_write LOOPS over every top-level child of the parsed
+// document (`for section in root:`), applying EVERY recognized section
+// present -- not just the first -- and only reports the document as
+// unhandled (statusCode 2) if NONE of its sections matched a branch. This
+// is currently unreachable (every production write path this Go port
+// builds posts exactly one section per request), but the fake must still
+// answer a hypothetical multi-section POST the way the real firmware would,
+// so this mirrors that loop rather than returning on the first match: every
+// doc.X field present is applied (an error from an individual section, e.g.
+// a bad VLANID, still returns immediately -- Python's own per-section
+// `return _status_response(...)` calls do too, mid-loop, without rolling
+// back whatever an EARLIER section in the same document already applied),
+// and the aggregate statusCode-0 success is returned once at the end only
+// if at least one section was handled. One deliberate divergence: this
+// walks doc's named fields in a FIXED order (VLANList, VLANMembershipList,
+// VLANInterfaceList, PoEPSEInterfaceList, Standard802_3List,
+// DeviceBasicInfo), not Python's true XML document order -- encoding/xml
+// decodes each recognized element into its own named pointer field
+// regardless of position, and recovering the original element order would
+// need a manual token-by-token walk instead. Immaterial while every real
+// POST carries a single section (so there is only ever one order to walk).
 func applyGoAheadWrite(state *State, xmlBody string) string {
 	if strings.Contains(xmlBody, "<!DOCTYPE") || strings.Contains(xmlBody, "<!ENTITY") {
 		return goaheadStatusResponse(3, "DTD/entity declaration rejected")
@@ -1044,41 +1092,47 @@ func applyGoAheadWrite(state *State, xmlBody string) string {
 	if err := xml.Unmarshal([]byte(xmlBody), &doc); err != nil {
 		return goaheadStatusResponse(1, fmt.Sprintf("malformed XML: %v", err))
 	}
+
+	handled := false
 	if doc.VLANList != nil {
 		if bad, ok := applyGoAheadVLANList(state, doc.VLANList.Action, doc.VLANList.VLANs); !ok {
 			return goaheadStatusResponse(2, fmt.Sprintf("bad VLANID %q", bad))
 		}
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
 	if doc.VLANMembershipList != nil {
 		if missing, ok := applyGoAheadVLANMembership(state, doc.VLANMembershipList.Action, doc.VLANMembershipList.VLANs); !ok {
 			return goaheadStatusResponse(2, fmt.Sprintf("no such VLAN %d", missing))
 		}
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
 	if doc.VLANInterfaceList != nil {
 		applyGoAheadPVIDs(state, doc.VLANInterfaceList.Interfaces)
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
 	if doc.PoEPSEInterfaceList != nil {
 		applyGoAheadPoE(state, doc.PoEPSEInterfaceList.Interfaces)
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
 	if doc.Standard802_3List != nil {
 		applyGoAheadStandard802_3List(state, doc.Standard802_3List.Entries)
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
 	if doc.DeviceBasicInfo != nil {
 		if doc.DeviceBasicInfo.DeviceName != nil {
 			state.Hostname = *doc.DeviceBasicInfo.DeviceName
 		}
-		return goaheadStatusResponse(0, "")
+		handled = true
 	}
-	tags := make([]string, len(doc.Other))
-	for i, o := range doc.Other {
-		tags[i] = o.XMLName.Local
+
+	if !handled {
+		tags := make([]string, len(doc.Other))
+		for i, o := range doc.Other {
+			tags[i] = o.XMLName.Local
+		}
+		return goaheadStatusResponse(2, fmt.Sprintf("no handler for %v", tags))
 	}
-	return goaheadStatusResponse(2, fmt.Sprintf("no handler for %v", tags))
+	return goaheadStatusResponse(0, "")
 }
 
 // goaheadStatusResponse mirrors Python web_gs728tpp._status_response: a

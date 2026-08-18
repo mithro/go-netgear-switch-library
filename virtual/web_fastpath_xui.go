@@ -1,8 +1,8 @@
 package virtual
 
 // web_fastpath_xui.go ports src/netgear_switch/virtual/web_fastpath_xui.py
-// (the normative source; that repo is read-only from here -- pin 1841111,
-// branch go-port-pin-1841111). Any discrepancy between this file and that
+// (the normative source; that repo is read-only from here -- pin b26eb1f,
+// branch go-port-pin-b26eb1f). Any discrepancy between this file and that
 // pin is a bug here, unless called out in a comment. See
 // docs/superpowers/plans/2026-07-31-slice-06-dossier-http-readwrite-face.md
 // §4 for the porting dossier this mirrors.
@@ -386,15 +386,29 @@ func RenderXUIUsers(state *State, path string) string {
 	for row0, u := range state.Users {
 		inst := fastpathInstance(row0, count)
 		body.WriteString("<TR>\n")
-		body.WriteString(xeCell(inst, "1_1_1", strconv.Itoa(row0)))
-		body.WriteString(xeCell(inst, "1_1_2", u.Name))
-		body.WriteString(xeCell(inst, "1_1_13", "Disable"))
-		body.WriteString(xeCell(inst, "1_1_3", "********"))
-		body.WriteString(xeCell(inst, "1_1_4", "********"))
+		// fastpathXUICell (this is an XUI page, userManagement.html), not
+		// xeCell (that one's for GSM7252PS's XE pages): the two render
+		// DIFFERENT p="..." attributes (xeCell's varies per row instance;
+		// fastpathXUICell's is the fixed "1.0.10" every real XUI row
+		// carries, mirroring Python _xui_cell exactly) and xeCell has no
+		// text=false option, so every column here would have wrongly shown
+		// its value as visible cell text -- the real page hides the
+		// action/index/masked-password/flag columns, matching Python
+		// render_users's own text=False on every column but username and
+		// httpAccessMode (web_fastpath_xui.py:347-355, pin b26eb1f)
+		// [RenderXUIUsers-cell]. webui.ParseXUIUsers only reads each cell's
+		// hidden VALUE=, never the visible text or p=, so neither divergence
+		// changed a single parsed field -- this is HTML-shape fidelity, not
+		// a parser-behavior fix.
+		body.WriteString(fastpathXUICell(inst, "1_1_1", strconv.Itoa(row0), false))
+		body.WriteString(fastpathXUICell(inst, "1_1_2", u.Name, true))
+		body.WriteString(fastpathXUICell(inst, "1_1_13", "Disable", false))
+		body.WriteString(fastpathXUICell(inst, "1_1_3", "********", false))
+		body.WriteString(fastpathXUICell(inst, "1_1_4", "********", false))
 		// Verbatim from state: this page's wording is NOT the CLI's.
-		body.WriteString(xeCell(inst, "1_1_5", u.HTTPAccessMode))
-		body.WriteString(xeCell(inst, "1_1_6", "FALSE"))
-		body.WriteString(xeCell(inst, "1_1_7", ""))
+		body.WriteString(fastpathXUICell(inst, "1_1_5", u.HTTPAccessMode, true))
+		body.WriteString(fastpathXUICell(inst, "1_1_6", "FALSE", false))
+		body.WriteString(fastpathXUICell(inst, "1_1_7", "", false))
 		body.WriteString("</TR>\n")
 	}
 	return fastpathPage(path, body.String(),

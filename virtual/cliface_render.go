@@ -1,8 +1,7 @@
 // cliface_render.go ports src/netgear_switch/virtual/cli_fastpath.py
 // (418 lines) -- the normative source; that repo is read-only from here --
-// pin 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362. Any discrepancy between
-// this file and the Python source is a bug here, unless called out in a
-// comment.
+// pin b26eb1f. Any discrepancy between this file and the Python source is a
+// bug here, unless called out in a comment.
 //
 // "Render FASTPATH CLI `show` output from a VirtualSwitchState. The CLI
 // analogue of `virtual/web_gsm7252ps.py`: pure functions turning device

@@ -1,7 +1,7 @@
 package webui_test
 
 // reader_test.go: TDD coverage for webui.Reader (reader.go), ported
-// scenario-for-scenario from tests/test_http_read.py at pin 1841111 in
+// scenario-for-scenario from tests/test_http_read.py at pin b26eb1f in
 // python-netgear-switch-library. Every fixture referenced here is the SAME
 // capture the Python test file reads (copied into webui/testdata/http by
 // earlier tasks); every expected value below was cross-checked against that

@@ -181,11 +181,19 @@ func TestSwitchportEndToEndAccessModeVerbatim(t *testing.T) {
 	if err := h.writer.SetVlanMembership(ctx, vid, port, model.VlanUntagged, true); err != nil {
 		t.Fatalf("SetVlanMembership: %v", err)
 	}
-	if st.SwitchportMode[port] != snmpSwitchportModeAccess(t) {
-		t.Errorf("SwitchportMode[%d] = %d, want access(%d)", port, st.SwitchportMode[port], snmpSwitchportModeAccess(t))
+	// Locked: SetVlanMembership's SNMP round trip enforces real ordering
+	// against the fake's serve() goroutine, but establishes no
+	// happens-before edge the Go memory model recognises --
+	// LockState/UnlockState is the same discipline SnmpFace.handleSet
+	// itself holds while writing (see State.mu's doc comment).
+	st.LockState()
+	gotMode, gotAccessVlan := st.SwitchportMode[port], st.SwitchportAccessVlan[port]
+	st.UnlockState()
+	if gotMode != snmpSwitchportModeAccess(t) {
+		t.Errorf("SwitchportMode[%d] = %d, want access(%d)", port, gotMode, snmpSwitchportModeAccess(t))
 	}
-	if st.SwitchportAccessVlan[port] != vid {
-		t.Errorf("SwitchportAccessVlan[%d] = %d, want %d", port, st.SwitchportAccessVlan[port], vid)
+	if gotAccessVlan != vid {
+		t.Errorf("SwitchportAccessVlan[%d] = %d, want %d", port, gotAccessVlan, vid)
 	}
 	pvid, ok := h.pvid(t, port)
 	if !ok || pvid != vid {
@@ -217,11 +225,15 @@ func TestSwitchportEndToEndTrunkModeVerbatim(t *testing.T) {
 		t.Fatalf("SetVlanMembership: %v", err)
 	}
 
-	if st.SwitchportMode[port] != snmpSwitchportModeTrunk(t) {
-		t.Errorf("SwitchportMode[%d] = %d, want trunk(%d)", port, st.SwitchportMode[port], snmpSwitchportModeTrunk(t))
+	// Locked: see the identical note in TestSwitchportEndToEndAccessModeVerbatim.
+	st.LockState()
+	gotMode, gotNativeVlan := st.SwitchportMode[port], st.SwitchportNativeVlan[port]
+	st.UnlockState()
+	if gotMode != snmpSwitchportModeTrunk(t) {
+		t.Errorf("SwitchportMode[%d] = %d, want trunk(%d)", port, gotMode, snmpSwitchportModeTrunk(t))
 	}
-	if st.SwitchportNativeVlan[port] != vid {
-		t.Errorf("SwitchportNativeVlan[%d] = %d, want %d", port, st.SwitchportNativeVlan[port], vid)
+	if gotNativeVlan != vid {
+		t.Errorf("SwitchportNativeVlan[%d] = %d, want %d", port, gotNativeVlan, vid)
 	}
 	gotTagged, gotUntagged := h.membership(t, port)
 	if !setEqual(gotUntagged, vid) {

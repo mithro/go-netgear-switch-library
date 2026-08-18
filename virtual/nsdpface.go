@@ -2,10 +2,10 @@ package virtual
 
 // nsdpface.go ports src/netgear_switch/virtual/faces/nsdp.py's
 // VirtualNsdpFace (the normative source; that repo is read-only from here --
-// pin 1aa1274, branch fix/s3300-52x-live-verify). Any discrepancy between
-// this file and the Python source is a bug here. See D-NSDP §7.2/§10.3 for
-// the full porting dossier this mirrors, and virtual/snmpface.go for the
-// exact goroutine-loop shape this file is a direct sibling of.
+// pin b26eb1f). Any discrepancy between this file and the Python source is
+// a bug here. See D-NSDP §7.2/§10.3 for the full porting dossier this
+// mirrors, and virtual/snmpface.go for the exact goroutine-loop shape this
+// file is a direct sibling of.
 //
 // NsdpFace is a real UDP NSDP command-responder agent serving a State,
 // bound to an ephemeral UDP port on 127.0.0.1 -- no root, no privileged
@@ -206,7 +206,18 @@ func (f *NsdpFace) serve(conn *net.UDPConn) {
 // (READ_RESPONSE/WRITE_RESPONSE echoed back by a misbehaving client) so the
 // caller drops it, exactly like real hardware's silent-drop-of-unexpected-op
 // behavior.
+//
+// Holds State's lock for the whole dispatch (Go-only; see State.mu's own
+// doc comment): this is the single outermost boundary every NSDP request
+// goes through on serve()'s background goroutine, and the SAME *State can
+// be live-mutated concurrently by every OTHER bound face's own goroutine
+// (SnmpFace, HTTPFace, CliFace via SSHFace/TelnetFace). readResponse/
+// writeResponse must NEVER lock again (this mutex is not reentrant); this
+// is their one and only caller.
 func (f *NsdpFace) handle(req nsdp.Packet) (*nsdp.Packet, error) {
+	f.state.LockState()
+	defer f.state.UnlockState()
+
 	switch req.Op {
 	case nsdp.OpReadRequest:
 		resp := f.readResponse(req)

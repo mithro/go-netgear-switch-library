@@ -3,9 +3,9 @@
 // (doc.go) for the package overview.
 //
 // Ported field-for-field from
-// src/netgear_switch/protocols/http/{endpoints,crypt}.py at pin 1841111 in
+// src/netgear_switch/protocols/http/{endpoints,crypt}.py at pin b26eb1f in
 // python-netgear-switch-library (frozen snapshot worktree
-// go-port-pin-1841111). Any discrepancy between this package and that pin
+// go-port-pin-b26eb1f). Any discrepancy between this package and that pin
 // is a bug in this package, not a deliberate deviation, unless called out
 // in a comment.
 

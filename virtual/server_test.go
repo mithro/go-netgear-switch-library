@@ -10,12 +10,15 @@ import (
 	"net"
 	"runtime"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/mithro/go-netgear-switch-library/fastpath"
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/nsdp"
 	"github.com/mithro/go-netgear-switch-library/snmp"
+	"github.com/mithro/go-netgear-switch-library/webui"
 )
 
 // startVirtualSwitch builds and starts a VirtualSwitch for modelKey,
@@ -602,5 +605,179 @@ func TestGoFakeProviderContextCancellationStopsTheSwitch(t *testing.T) {
 			t.Fatal("endpoint still answering 3s after ctx cancellation, want it stopped")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestVirtualSwitchConcurrentFacesRaceFree is the positive proof State.mu
+// actually closes the gap [FIXA-RACE] found: gsm7252ps binds FOUR backends
+// at once (SNMP, HTTP, SSH, Telnet -- registry.go), all sharing this ONE
+// *State, each on its own real goroutine (SnmpFace.serve, HTTPFace's
+// goroutine-per-request via net/http, SSHFace/TelnetFace's
+// goroutine-per-session). This drives a REAL, sustained write storm over
+// SNMP concurrently with a REAL, sustained read storm over HTTP -- genuine
+// concurrent traffic on two DIFFERENT backends against the SAME State, not
+// two sequential calls a test happens to interleave -- and must be clean
+// under `go test -race`. It is not a proof of any particular final value
+// (the writer and reader race each other by design; whichever admin state
+// the reader observes at any given moment is a legitimate value), only that
+// observing it is never a DATA race.
+func TestVirtualSwitchConcurrentFacesRaceFree(t *testing.T) {
+	sw := startVirtualSwitch(t, "gsm7252ps")
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+
+	const iterations = 40
+	var wg sync.WaitGroup
+	errs := make(chan error, 2*iterations)
+
+	// Writer goroutine: real SNMP SET traffic, toggling port 1's admin
+	// state back and forth -- SnmpFace.serve's goroutine.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		snmpClient := snmp.NewGoSNMPClient(sw.Host+":"+strconv.Itoa(sw.SnmpPort), "public")
+		writer, err := snmp.NewWriter(snmpClient, m)
+		if err != nil {
+			errs <- err
+			return
+		}
+		ctx := context.Background()
+		for i := 0; i < iterations; i++ {
+			if err := writer.SetPortEnabled(ctx, 1, i%2 == 0, false); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+
+	// Reader goroutine: real HTTP GET traffic, concurrently -- HTTPFace's
+	// own goroutine(s), a COMPLETELY DIFFERENT face/protocol from the
+	// writer above, both touching the SAME *State (sw.State).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		httpClient := webui.NewHTTPClient(sw.Host+":"+strconv.Itoa(sw.HTTPPort), "password", spec)
+		reader, err := webui.NewReader(httpClient, m)
+		if err != nil {
+			errs <- err
+			return
+		}
+		ctx := context.Background()
+		for i := 0; i < iterations; i++ {
+			if _, err := reader.GetPorts(ctx); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent SNMP-write/HTTP-read traffic: %v", err)
+	}
+}
+
+// TestVirtualSwitchConcurrentCLIInterfaceModeAndRejectedSNMPSetRaceFree is
+// the regression test for the gap re-review found in the first completeness
+// pass: CliFace.InterfaceName read f.state.Ports with no lock at all. It is
+// called from cli_socket.go's cliPrompt, on the SSH/Telnet per-connection
+// goroutine, EVERY time a fresh prompt is rendered -- both before the
+// command loop starts and after every single command -- which is AFTER
+// CliFace.Run's own `defer UnlockState()` has already fired, so it ran
+// outside any critical section. It races SnmpFace.handleSet's rejection
+// path (f.view.RestoreState(snapshot) -> State.Restore, `*s = *snap`),
+// which reassigns state.Ports to a genuinely different map object under
+// State.mu -- reachable with entirely ordinary traffic: a live SSH/Telnet
+// session parked in `interface <X>` config mode (so every subsequent
+// prompt render re-resolves the interface name) concurrently with any
+// rejected SNMP SET (a not-writable OID, or a later varbind failing in a
+// multi-varbind PDU).
+//
+// Drives a REAL SSH session (fastpath.ShellDriver over fastpath's own SSH
+// transport, the same client cli_listeners_test.go uses) parked in
+// interface mode, issuing show-version commands in a tight loop -- each one
+// renders a fresh prompt afterward via cliPrompt -> CliFace.InterfaceName,
+// re-reading f.state.Ports -- CONCURRENTLY with a real SNMP SET storm
+// against ifOperStatus (explicitly not-writable, D-VIRT §1.8), which
+// SnmpFace.handleSet rejects and rolls back via State.Restore on every
+// single attempt. Must be clean under `go test -race`.
+func TestVirtualSwitchConcurrentCLIInterfaceModeAndRejectedSNMPSetRaceFree(t *testing.T) {
+	sw := startVirtualSwitch(t, "gsm7252ps")
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	cliSpec, err := fastpath.CLISpec(m)
+	if err != nil {
+		t.Fatalf("fastpath.CLISpec: %v", err)
+	}
+
+	driver := dialSSHDriver(t, sw.SSHPort, "admin", "password")
+	defer func() { _ = driver.Close() }()
+	ctx := context.Background()
+
+	if out, err := driver.Run(ctx, "configure"); err != nil || out != "" {
+		t.Fatalf(`Run("configure") = (%q, %v), want ("", nil)`, out, err)
+	}
+	iface := cliSpec.Iface(1)
+	if out, err := driver.Run(ctx, "interface "+iface); err != nil || out != "" {
+		t.Fatalf(`Run("interface %s") = (%q, %v), want ("", nil)`, iface, out, err)
+	}
+
+	const iterations = 30
+	var wg sync.WaitGroup
+	errs := make(chan error, 2*iterations)
+
+	// Goroutine A: parked in interface mode (set up above), issuing
+	// show-version commands in a tight loop over the SAME connection --
+	// SSHFace's per-session goroutine. Each Run() completion is followed,
+	// inside cliListenerLoop, by a fresh cliPrompt() render that calls
+	// CliFace.InterfaceName -- the exact call this test targets.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			if _, err := driver.Run(ctx, cliSpec.VersionCmd); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+
+	// Goroutine B: a real SNMP SET storm against ifOperStatus.1 (D-VIRT
+	// §1.8: explicitly not-writable) -- ALWAYS rejected, so
+	// SnmpFace.handleSet's RestoreState rollback (State.Restore, `*s =
+	// *snap`) fires on EVERY attempt. A NotWritable rejection is the
+	// desired, expected outcome (it's what drives the Restore this test
+	// targets), so it is not treated as a failure -- only a genuine
+	// non-SNMP transport error is.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		snmpClient := snmp.NewGoSNMPClient(sw.Host+":"+strconv.Itoa(sw.SnmpPort), "public")
+		for i := 0; i < iterations; i++ {
+			vb, err := snmp.NewSetVarbind(snmp.IfOperStatus+".1", 2, "i")
+			if err != nil {
+				errs <- err
+				return
+			}
+			if err := snmpClient.Set(context.Background(), vb); err != nil && !errors.Is(err, model.ErrSNMP) {
+				errs <- err
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent CLI-interface-mode/rejected-SNMP-SET traffic: %v", err)
 	}
 }

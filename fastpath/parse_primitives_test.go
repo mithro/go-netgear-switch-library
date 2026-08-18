@@ -7,7 +7,7 @@ import (
 
 // lldpFixture is a trimmed excerpt of the REAL captured
 // tests/fixtures/cli/gsm7228ps_lldp.txt (pinned
-// python-netgear-switch-library @ 7ebfe5d) -- header, ruler, and a
+// python-netgear-switch-library @ b26eb1f) -- header, ruler, and a
 // representative slice of its 52 data rows, with column alignment
 // preserved exactly. It is the grounding for the module's central hazard:
 // every "1/gN" row (no LLDP neighbour yet) is FAR shorter than the ruler's

@@ -5,9 +5,9 @@
 // doc comment (doc.go) for the package overview.
 //
 // Ported field-for-field from
-// src/netgear_switch/protocols/nsdp/{protocol.py,auth.py} at pin 1aa1274 in
+// src/netgear_switch/protocols/nsdp/{protocol.py,auth.py} at pin b26eb1f in
 // python-netgear-switch-library (frozen snapshot worktree
-// go-port-pin-1aa1274, branch fix/s3300-52x-live-verify). Any discrepancy
+// go-port-pin-b26eb1f). Any discrepancy
 // between this package and that pin is a bug in this package, not a
 // deliberate deviation, unless called out in a comment.
 

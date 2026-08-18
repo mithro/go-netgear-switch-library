@@ -2,9 +2,9 @@ package nsdp
 
 // Ported field-for-field from
 // src/netgear_switch/transport/sync/nsdp_udp.py (+ transport/aio/nsdp_udp.py
-// deltas) and src/netgear_switch/protocols/nsdp/client.py at pin 1aa1274 in
+// deltas) and src/netgear_switch/protocols/nsdp/client.py at pin b26eb1f in
 // python-netgear-switch-library (frozen snapshot worktree
-// go-port-pin-1aa1274, branch fix/s3300-52x-live-verify). Any discrepancy
+// go-port-pin-b26eb1f). Any discrepancy
 // between this file and that pin is a bug in this file, not a deliberate
 // deviation, unless called out in a comment.
 //
