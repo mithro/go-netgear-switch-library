@@ -389,6 +389,22 @@ func TestFacadeNSDPIntegration_GS110EMXNSDPDeviceFullAggregation(t *testing.T) {
 	if len(dev.PortStatus) != 10 {
 		t.Errorf("len(NSDPDevice().PortStatus) = %d, want 10", len(dev.PortStatus))
 	}
+	// [NSDP-FC]: PORT_STATUS byte 2 (flow control) must round-trip end to
+	// end -- real WRITER/READER over real UDP against the fake -- not just
+	// decode correctly in isolation. SeedGS110EMX seeds every port
+	// FlowControl: true (mirroring the pin's PortSim.flow_control default
+	// True, which seed_gs110emx never overrides -- see SeedGS110EMX's own
+	// FlowControl doc comment), so every port here must read back non-nil
+	// true. This field belongs on the RAW NsdpDevice only (see
+	// model.NsdpPortStatus.FlowControl's own doc comment): the public
+	// GetPorts()/PortStatus shape deliberately does not carry it, mirroring
+	// the pin's _ports() translation, which is why this assertion lives
+	// here against NSDPDevice() and not against a GetPorts() test.
+	for _, p := range dev.PortStatus {
+		if p.FlowControl == nil || !*p.FlowControl {
+			t.Errorf("NSDPDevice().PortStatus[port=%d].FlowControl = %v, want non-nil true", p.PortID, p.FlowControl)
+		}
+	}
 	if len(dev.VlanMembers) != 2 {
 		t.Errorf("len(NSDPDevice().VlanMembers) = %d, want 2 (vlans 1 and 90)", len(dev.VlanMembers))
 	}

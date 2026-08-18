@@ -102,6 +102,23 @@ const (
 type NsdpPortStatus struct {
 	PortID int       `json:"port_id"`
 	Speed  LinkSpeed `json:"speed"`
+	// FlowControl is PORT_STATUS byte 2 (pin protocols/nsdp/types.py:78
+	// `flow_control: bool | None = None`), MEASURED as the port's
+	// flow-control state across all three real GS110EMX units (2026-07-30,
+	// pin types.py:72-77): 10.1.5.25 and .26, whose web UI shows "Flow
+	// Control: Enable" on every port, answer 0x01 on every port; 10.1.5.27,
+	// whose page shows "Disable" on every port, answers 0x00 -- 30 ports, no
+	// exceptions. nil when the TLV was shorter than 3 bytes (per the pin's
+	// own comment; nsdp.ParsePortStatus currently requires exactly 3 bytes
+	// or errors, so in practice this is always non-nil once parsing
+	// succeeds -- the pin's parser has the identical invariant).
+	//
+	// This field lives on the RAW NsdpPortStatus only. Python's `_ports()`
+	// (state translation into the public PortStatus shape) deliberately
+	// DROPS flow_control -- it is not one of the fields NsdpPortStatus
+	// contributes to the public model -- so Go's mapPorts must not surface
+	// it on model.PortStatus either.
+	FlowControl *bool `json:"flow_control"`
 }
 
 // NsdpPortStatistics is a single port's traffic-counter reading (NSDP TLV

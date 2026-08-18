@@ -79,14 +79,29 @@ type PortSim struct {
 	// is entirely absent (never configured) -- never a fabricated "".
 	Description *string
 	// FlowControl is IEEE 802.3x flow control, as reported in the FASTPATH
-	// CLI's "Flow Mode" column and the GoAhead web UI's flowControlOperType/
-	// flowControlAdminType. Zero value (false) matches every model this
-	// field currently drives: MEASURED False on all 28 GS728TPP ports
+	// CLI's "Flow Mode" column, the GoAhead web UI's flowControlOperType/
+	// flowControlAdminType, AND (as of the NSDP flow-control slice) NSDP
+	// PORT_STATUS byte 2 -- the SAME field Python's PortSim.flow_control
+	// drives for all three (pin virtual/state.py:164-170: "IEEE 802.3x flow
+	// control, as reported in NSDP PORT_STATUS byte 2 and in the Plus web
+	// UI's 'Flow Control' column").
+	//
+	// Zero value (false) matches every FASTPATH/GoAhead model this field
+	// drove before that slice: MEASURED False on all 28 GS728TPP ports
 	// (2026-08-03, both the SNMP dot3PauseOperMode walk and the GoAhead wcd
 	// page agreed) and False in every captured `show port all` Flow Mode
-	// column (gsm7252ps/gsm7228ps/m4300-16x/m4300-24x) -- so no seed needs
-	// to set this explicitly today; a future seed with a measured True port
-	// sets it directly.
+	// column (gsm7252ps/gsm7228ps/m4300-16x/m4300-24x).
+	//
+	// UNLIKE those models, Python's dataclass default for this field is
+	// `True` (pin state.py:170), not False -- the factory default the two
+	// GS110EMX units 10.1.5.25/.26 are still on. Go has no per-field
+	// struct-literal default, so any Plus-family (NSDP) seed that wants that
+	// same True default must set FlowControl: true explicitly per port
+	// (e.g. SeedGS110EMX) rather than relying on the Go zero value, which
+	// would silently disagree with the pin's implicit default for that
+	// family. FASTPATH/GoAhead-only seeds are unaffected: their measured
+	// value already IS false, so leaving this field unset still agrees with
+	// the pin there.
 	FlowControl bool
 	// ServesEtherlike reports whether this model's SNMP agent publishes the
 	// EtherLike-MIB dot3StatsDuplexStatus/dot3Pause{Admin,Oper}Mode columns
@@ -1771,7 +1786,17 @@ func (s *State) NsdpTlvs(tags map[nsdp.Tag]bool) []nsdp.TLVEntry {
 			if sim.Link {
 				speedByte = mbpsToSpeedByte(sim.Speed)
 			}
-			out = append(out, nsdp.TLVEntry{Tag: nsdp.TagPortStatus, Value: []byte{byte(port), speedByte, 0x01}}) //nolint:gosec // port is a 1-based port number, always well under 256
+			// Byte 2 is flow control, driven from the SAME PortSim.FlowControl
+			// field the FASTPATH CLI/GoAhead/SNMP paths read -- NOT a constant
+			// 0x01. Mirrors pin virtual/state.py:1489-1499 exactly: "Byte 2 is
+			// flow control, not a constant 0x01 -- measured on real GS110EMX
+			// units, see PortSim.flow_control." See PortSim.FlowControl's own
+			// doc comment for the GS110EMX measurement this reproduces.
+			flowByte := byte(0x00)
+			if sim.FlowControl {
+				flowByte = 0x01
+			}
+			out = append(out, nsdp.TLVEntry{Tag: nsdp.TagPortStatus, Value: []byte{byte(port), speedByte, flowByte}}) //nolint:gosec // port is a 1-based port number, always well under 256
 		}
 	}
 	if tags[nsdp.TagPortName] {

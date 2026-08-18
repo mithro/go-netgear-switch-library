@@ -211,6 +211,15 @@ func TestReader_GetPortsMapsSpeedAndLink(t *testing.T) {
 	if p1.Name != nil {
 		t.Errorf("port 1 Name = %v, want nil (NSDP PORT_STATUS carries no name)", p1.Name)
 	}
+	// [NSDP-FC]: PORT_STATUS byte 2 decodes to a non-nil FlowControl on the
+	// RAW model.NsdpPortStatus (see model.NsdpPortStatus.FlowControl's own
+	// doc comment) -- port 1's raw TLV above is {0x01, 0x05, 0x01} -- but
+	// mapPorts must NOT surface it onto the public model.PortStatus,
+	// mirroring the pin's `_ports()` translation, which deliberately drops
+	// flow_control from the public shape.
+	if p1.FlowControl != nil {
+		t.Errorf("port 1 public PortStatus.FlowControl = %v, want nil (NSDP's raw flow-control byte must not leak into the public shape)", *p1.FlowControl)
+	}
 
 	p3 := byPort[3]
 	if p3.LinkUp {

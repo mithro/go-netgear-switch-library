@@ -60,12 +60,15 @@ func TestParseMACWrongLength(t *testing.T) {
 // --- test_parse_port_status_3_bytes ---
 
 func TestParsePortStatus(t *testing.T) {
-	st, err := nsdp.ParsePortStatus([]byte{0x01, 0x05, 0x01}) // port 1, gigabit
+	st, err := nsdp.ParsePortStatus([]byte{0x01, 0x05, 0x01}) // port 1, gigabit, flow control on
 	if err != nil {
 		t.Fatalf("ParsePortStatus: %v", err)
 	}
 	if st.PortID != 1 || st.Speed != model.LinkSpeedGigabit {
 		t.Errorf("ParsePortStatus = %+v, want PortID=1 Speed=Gigabit", st)
+	}
+	if st.FlowControl == nil || !*st.FlowControl {
+		t.Errorf("ParsePortStatus.FlowControl = %v, want non-nil true (byte 2 = 0x01)", st.FlowControl)
 	}
 
 	down, err := nsdp.ParsePortStatus([]byte{0x03, 0x00, 0x01}) // port 3, down
@@ -74,6 +77,17 @@ func TestParsePortStatus(t *testing.T) {
 	}
 	if down.Speed != model.LinkSpeedDown {
 		t.Errorf("ParsePortStatus.Speed = %v, want Down", down.Speed)
+	}
+
+	// Byte 2 = flow control, MEASURED off real GS110EMX units -- see
+	// model.NsdpPortStatus.FlowControl's own doc comment -- not a constant.
+	// 0x00 decodes to FlowControl=false, distinct from the 0x01 case above.
+	off, err := nsdp.ParsePortStatus([]byte{0x05, 0x05, 0x00}) // port 5, gigabit, flow control off
+	if err != nil {
+		t.Fatalf("ParsePortStatus: %v", err)
+	}
+	if off.FlowControl == nil || *off.FlowControl {
+		t.Errorf("ParsePortStatus.FlowControl = %v, want non-nil false (byte 2 = 0x00)", off.FlowControl)
 	}
 }
 
