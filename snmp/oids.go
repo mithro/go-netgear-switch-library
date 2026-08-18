@@ -1,8 +1,10 @@
-// Package snmp holds the standard-MIB and Netgear vendor OID tables used to
+// oids.go holds the standard-MIB and Netgear vendor OID tables used to
 // read a switch over SNMP, ported field-for-field from
 // src/netgear_switch/protocols/snmp/oids.py (the normative source; that
 // repo is read-only from here). Any discrepancy between this file and the
-// Python source is a bug in this file.
+// Python source is a bug in this file. See package snmp's doc comment
+// (doc.go) for the package overview.
+
 package snmp
 
 import (
