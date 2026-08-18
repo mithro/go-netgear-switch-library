@@ -2,7 +2,7 @@ JAIL := ./scripts/jail.sh
 GOLANGCI_VERSION := v2.12.2
 GOLANGCI := ./bin/golangci-lint
 
-.PHONY: fmt-check vet lint test cover tools
+.PHONY: fmt-check vet lint test cover tools crosslang
 
 fmt-check:
 	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
@@ -25,3 +25,11 @@ test:
 cover:
 	$(JAIL) go test -race -coverprofile=coverage.out ./...
 	$(JAIL) go run ./scripts/coveragegate -profile coverage.out -min 90
+
+# crosslang runs the cross-language conformance-harness suites
+# (test/crosslang/...), build-tag-gated (see //go:build crosslang on every
+# file in that package) so it is excluded from `test`/`cover`/CI's default
+# gate: it starts real loopback network listeners per subtest, a different
+# resource/latency profile than the always-on unit-test suite.
+crosslang:
+	$(JAIL) go test -tags crosslang ./test/crosslang/...
