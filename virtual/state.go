@@ -2034,6 +2034,22 @@ func (s *State) ApplyNsdpWrite(tag nsdp.Tag, value []byte) {
 		// is accepted as a genuine "" hostname rather than a no-op: nsdp.
 		// Writer.SetHostname itself refuses to send one, but a raw TLV from
 		// any other caller should still round-trip honestly.
+		//
+		// DELIBERATE DIVERGENCE FROM THE PIN, documented rather than
+		// silent: pin state.py's apply_nsdp_write (state.py:1604-1649) has
+		// NO branch for Tag.HOSTNAME at all -- an NSDP hostname write is a
+		// silent no-op in the pinned Python fake. Go APPLIES it instead.
+		// This is a Go-ahead, not a bug: the C4 (hostname get/set) slice
+		// LIVE-VERIFIED that a real GS110EMX ACCEPTS an NSDP 0x0003
+		// hostname write (reversible -- write the old name back), disproving
+		// sync_api's stale docstring claim that "Plus switches can't be
+		// renamed" (see go-netgear-progress ledger, C4 slice notes:
+		// "NSDP 0x0003 + HTTP GS110EMX both work live"). Since the pin fake
+		// is the one that is factually incomplete here (it just never grew
+		// a HOSTNAME branch), aligning Go DOWN to no-op this write would
+		// make the mock LESS faithful to real hardware, not more -- so this
+		// stays applied. Mirrors the same reasoning already applied to the
+		// CLI `show users` gap (Go's fake serves it; the pin's never did).
 		s.Hostname = string(value)
 	case nsdp.TagDHCPMode:
 		if len(value) == 0 {
