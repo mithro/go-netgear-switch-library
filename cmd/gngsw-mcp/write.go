@@ -193,11 +193,36 @@ func registerSetPortSpeed(s *mcp.Server, env EnvFunc) {
 
 type addSyslogCollectorIn struct {
 	HostAddress string `json:"host_address" jsonschema:"remote syslog collector address (where logs are SENT; distinct from the switch selector 'host')"`
-	Port        int    `json:"port,omitempty" jsonschema:"collector UDP port (default: 514)"`
-	Severity    *int   `json:"severity,omitempty" jsonschema:"forward messages at or above this severity (0 emergency .. 7 debug; default: 6 info)"`
-	Force       bool   `json:"force,omitempty" jsonschema:"override protected-port and other force-gates"`
+	// Port is *int (not int), mirroring Severity below: server.py's
+	// `port: int = 514` is a plain Python default parameter, which FastMCP
+	// binds straight through -- the 514 default applies ONLY when a caller
+	// OMITS `port` from the call entirely, never when they pass an explicit
+	// `0` (Python has no way to distinguish "not given" from "given as the
+	// zero value" other than a sentinel/Optional, and this parameter uses
+	// neither, so an explicit 0 reaches sw.add_syslog_collector(port=0)
+	// unchanged). A plain `int` here would collapse both cases (omitted,
+	// and explicitly 0) onto the same Go zero value, silently over-riding a
+	// caller's explicit `"port": 0` to 514 -- exactly the bug this pointer
+	// avoids.
+	Port     *int `json:"port,omitempty" jsonschema:"collector UDP port (default: 514)"`
+	Severity *int `json:"severity,omitempty" jsonschema:"forward messages at or above this severity (0 emergency .. 7 debug; default: 6 info)"`
+	Force    bool `json:"force,omitempty" jsonschema:"override protected-port and other force-gates"`
 	selectorFields
 	backendField
+}
+
+// addSyslogCollectorPort resolves add_syslog_collector's `port` argument,
+// mirroring Python's `port: int = 514` FastMCP binding exactly: nil (the
+// field was OMITTED from the call) defaults to 514; any non-nil value
+// (INCLUDING a pointer to 0) passes through unchanged -- an explicit
+// `"port": 0` must never collapse onto the same default 514 an omitted
+// `port` gets. Pulled out as its own function so this exact defaulting
+// arithmetic is unit-testable without a live switch (see write_test.go).
+func addSyslogCollectorPort(port *int) int {
+	if port != nil {
+		return *port
+	}
+	return 514
 }
 
 func registerAddSyslogCollector(s *mcp.Server, env EnvFunc) {
@@ -207,10 +232,7 @@ func registerAddSyslogCollector(s *mcp.Server, env EnvFunc) {
 			"stays the switch selector. severity is the standard syslog number, 0 emergency to 7 debug, and the " +
 			"switch forwards messages at or above it.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in addSyslogCollectorIn) (*mcp.CallToolResult, any, error) {
-		port := in.Port
-		if port == 0 {
-			port = 514
-		}
+		port := addSyslogCollectorPort(in.Port)
 		severity := 6
 		if in.Severity != nil {
 			severity = *in.Severity
