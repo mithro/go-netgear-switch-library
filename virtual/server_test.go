@@ -10,12 +10,14 @@ import (
 	"net"
 	"runtime"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/mithro/go-netgear-switch-library/model"
 	"github.com/mithro/go-netgear-switch-library/nsdp"
 	"github.com/mithro/go-netgear-switch-library/snmp"
+	"github.com/mithro/go-netgear-switch-library/webui"
 )
 
 // startVirtualSwitch builds and starts a VirtualSwitch for modelKey,
@@ -602,5 +604,81 @@ func TestGoFakeProviderContextCancellationStopsTheSwitch(t *testing.T) {
 			t.Fatal("endpoint still answering 3s after ctx cancellation, want it stopped")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestVirtualSwitchConcurrentFacesRaceFree is the positive proof State.mu
+// actually closes the gap [FIXA-RACE] found: gsm7252ps binds FOUR backends
+// at once (SNMP, HTTP, SSH, Telnet -- registry.go), all sharing this ONE
+// *State, each on its own real goroutine (SnmpFace.serve, HTTPFace's
+// goroutine-per-request via net/http, SSHFace/TelnetFace's
+// goroutine-per-session). This drives a REAL, sustained write storm over
+// SNMP concurrently with a REAL, sustained read storm over HTTP -- genuine
+// concurrent traffic on two DIFFERENT backends against the SAME State, not
+// two sequential calls a test happens to interleave -- and must be clean
+// under `go test -race`. It is not a proof of any particular final value
+// (the writer and reader race each other by design; whichever admin state
+// the reader observes at any given moment is a legitimate value), only that
+// observing it is never a DATA race.
+func TestVirtualSwitchConcurrentFacesRaceFree(t *testing.T) {
+	sw := startVirtualSwitch(t, "gsm7252ps")
+	m, err := model.GetModel("gsm7252ps")
+	if err != nil {
+		t.Fatalf("model.GetModel: %v", err)
+	}
+	spec, err := webui.HTTPSpec(m)
+	if err != nil {
+		t.Fatalf("webui.HTTPSpec: %v", err)
+	}
+
+	const iterations = 40
+	var wg sync.WaitGroup
+	errs := make(chan error, 2*iterations)
+
+	// Writer goroutine: real SNMP SET traffic, toggling port 1's admin
+	// state back and forth -- SnmpFace.serve's goroutine.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		snmpClient := snmp.NewGoSNMPClient(sw.Host+":"+strconv.Itoa(sw.SnmpPort), "public")
+		writer, err := snmp.NewWriter(snmpClient, m)
+		if err != nil {
+			errs <- err
+			return
+		}
+		ctx := context.Background()
+		for i := 0; i < iterations; i++ {
+			if err := writer.SetPortEnabled(ctx, 1, i%2 == 0, false); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+
+	// Reader goroutine: real HTTP GET traffic, concurrently -- HTTPFace's
+	// own goroutine(s), a COMPLETELY DIFFERENT face/protocol from the
+	// writer above, both touching the SAME *State (sw.State).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		httpClient := webui.NewHTTPClient(sw.Host+":"+strconv.Itoa(sw.HTTPPort), "password", spec)
+		reader, err := webui.NewReader(httpClient, m)
+		if err != nil {
+			errs <- err
+			return
+		}
+		ctx := context.Background()
+		for i := 0; i < iterations; i++ {
+			if _, err := reader.GetPorts(ctx); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent SNMP-write/HTTP-read traffic: %v", err)
 	}
 }

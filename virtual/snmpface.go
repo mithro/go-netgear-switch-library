@@ -161,7 +161,22 @@ func (f *SnmpFace) serve(conn *net.UDPConn) {
 // Returns nil for any PDU type this mock doesn't serve (traps, informs,
 // v3 reports -- unreachable here since serve() already filtered to v2c) so
 // the caller drops it.
+//
+// Holds the view's State lock for the WHOLE dispatch, GET/GETNEXT/GETBULK
+// included, not just handleSet's write path (Go-only; see State.mu's doc
+// comment): this is the single outermost boundary every SNMP request goes
+// through on serve()'s background goroutine, and the SAME *State can be
+// live-mutated concurrently by every OTHER bound face's own goroutine
+// (NsdpFace, HTTPFace, CliFace via SSHFace/TelnetFace) -- a real switch only
+// ever does one internal config/read operation at a time regardless of how
+// many protocol listeners are bound, and this lock is what makes the mock
+// behave the same way. handleGet/handleGetNext/handleGetBulk/handleSet
+// themselves must NEVER lock again (this mutex is not reentrant); this is
+// their one and only caller.
 func (f *SnmpFace) handle(req *gosnmp.SnmpPacket) *gosnmp.SnmpPacket {
+	f.view.LockState()
+	defer f.view.UnlockState()
+
 	resp := &gosnmp.SnmpPacket{
 		Version:   gosnmp.Version2c,
 		Community: req.Community,
@@ -309,16 +324,10 @@ func (f *SnmpFace) handleGetBulk(req *gosnmp.SnmpPacket) []gosnmp.SnmpPDU {
 // partially-applied out slice); on full success, rebuild the view exactly
 // once and echo the applied varbinds back.
 //
-// Holds the view's State lock for the whole operation (Go-only; see
-// State.mu's doc comment): this runs on serve()'s background goroutine, and
-// without it a concurrent direct reader of State (e.g. a test inspecting
-// SwitchportMode right after the SNMP client call that drove this SET
-// returns) would race with the writes below, even though the SNMP request/
-// response round trip itself enforces real wall-clock ordering.
+// Does NOT lock State itself -- its one caller, handle(), already holds
+// State's lock for the whole dispatch (see handle's own doc comment); this
+// mutex is not reentrant, so locking again here would deadlock every SET.
 func (f *SnmpFace) handleSet(vars []gosnmp.SnmpPDU) (out []gosnmp.SnmpPDU, errStatus gosnmp.SNMPError, errIndex uint8) {
-	f.view.LockState()
-	defer f.view.UnlockState()
-
 	snapshot := f.view.SnapshotState()
 	applied := make([]gosnmp.SnmpPDU, len(vars))
 	for i, vb := range vars {

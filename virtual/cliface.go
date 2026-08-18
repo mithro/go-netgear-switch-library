@@ -754,10 +754,23 @@ func (f *CliFace) run(command string) string {
 // --- fastpath.Session --------------------------------------------------
 
 // Run implements fastpath.Session.
+//
+// Holds State's lock for the whole call (Go-only; see State.mu's own doc
+// comment): a *CliFace is constructed fresh per SSH/Telnet session
+// (SSHFace.handleSession/TelnetFace.serveConn), but every session over the
+// same VirtualSwitch -- CLI or otherwise -- shares the SAME *State, mutated
+// concurrently from each session's own goroutine. f.run and everything it
+// calls (configCommand, interfaceCommand, vlanDBCommand, the render*
+// helpers, applyPoeAdmin/applyPoeReset) must NEVER lock again (this mutex
+// is not reentrant); Run/RunSCPCopy/RunWriteMemory are their only callers
+// (fastpath.Session's three write/command entry points), each locking
+// independently since none of the three ever calls another.
 func (f *CliFace) Run(ctx context.Context, command string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	f.state.LockState()
+	defer f.state.UnlockState()
 	return f.run(command), nil
 }
 
@@ -766,10 +779,16 @@ func (f *CliFace) Run(ctx context.Context, command string) (string, error) {
 // `copy <src> <dest>`, records into ScpCertDeploySim, and always reports
 // success -- there is no byte stream here to drive the real TOFU/
 // password/(y/n) handshake fastpath.ShellDriver.RunSCPCopy drives.
+//
+// Holds State's lock for the whole call -- see Run's own doc comment for
+// why (same reasoning, independent lock: RunSCPCopy never calls Run or vice
+// versa).
 func (f *CliFace) RunSCPCopy(ctx context.Context, command, _ string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	f.state.LockState()
+	defer f.state.UnlockState()
 	trimmed := strings.TrimSpace(command)
 	m := cliCopyRE.FindStringSubmatch(trimmed)
 	if m == nil {
@@ -791,10 +810,16 @@ func (f *CliFace) RunSCPCopy(ctx context.Context, command, _ string) (string, er
 // a test prove the right command was issued. prestuff is accepted for
 // Session-interface parity but has no observable effect here -- there is
 // no byte stream to pre-stuff a "y" answer into.
+//
+// Holds State's lock for the whole call -- see Run's own doc comment for
+// why (same reasoning, independent lock: RunWriteMemory never calls Run or
+// vice versa).
 func (f *CliFace) RunWriteMemory(ctx context.Context, command string, _ bool) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	f.state.LockState()
+	defer f.state.UnlockState()
 	c := strings.TrimSpace(command)
 	if c == "reload" {
 		f.state.Reboots++

@@ -840,26 +840,35 @@ func TestHTTPFaceGS110EMXWriterSetHostnamePreservesNetworkConfig(t *testing.T) {
 		t.Fatalf("SetHostname() error = %v", err)
 	}
 
-	if st.Hostname != "renamed-gs110emx" {
-		t.Errorf("state.Hostname = %q, want %q", st.Hostname, "renamed-gs110emx")
+	// Locked: the face is live (HTTPFace.serveHTTP holds State's lock for
+	// the whole request it just handled), so a direct read here races with
+	// that face's own goroutine under the Go memory model even though the
+	// HTTP round trip already completed -- see State.mu's own doc comment.
+	st.LockState()
+	gotHostname := st.Hostname
+	gotMgmt := st.Mgmt
+	sysName, ok := st.OIDMap()[snmp.SysName]
+	st.UnlockState()
+
+	if gotHostname != "renamed-gs110emx" {
+		t.Errorf("state.Hostname = %q, want %q", gotHostname, "renamed-gs110emx")
 	}
-	if st.Mgmt.Mode != beforeMode {
-		t.Errorf("state.Mgmt.Mode changed: got %q, want unchanged %q", st.Mgmt.Mode, beforeMode)
+	if gotMgmt.Mode != beforeMode {
+		t.Errorf("state.Mgmt.Mode changed: got %q, want unchanged %q", gotMgmt.Mode, beforeMode)
 	}
-	if st.Mgmt.Address != beforeAddr {
-		t.Errorf("state.Mgmt.Address changed: got %q, want unchanged %q", st.Mgmt.Address, beforeAddr)
+	if gotMgmt.Address != beforeAddr {
+		t.Errorf("state.Mgmt.Address changed: got %q, want unchanged %q", gotMgmt.Address, beforeAddr)
 	}
-	if st.Mgmt.Netmask != beforeMask {
-		t.Errorf("state.Mgmt.Netmask changed: got %q, want unchanged %q", st.Mgmt.Netmask, beforeMask)
+	if gotMgmt.Netmask != beforeMask {
+		t.Errorf("state.Mgmt.Netmask changed: got %q, want unchanged %q", gotMgmt.Netmask, beforeMask)
 	}
-	if st.Mgmt.Gateway != beforeGw {
-		t.Errorf("state.Mgmt.Gateway changed: got %q, want unchanged %q", st.Mgmt.Gateway, beforeGw)
+	if gotMgmt.Gateway != beforeGw {
+		t.Errorf("state.Mgmt.Gateway changed: got %q, want unchanged %q", gotMgmt.Gateway, beforeGw)
 	}
 
 	// Confirm the rename is ALSO visible through the SNMP oid_map()
 	// projection of the SAME State -- an HTTP write must not create a
 	// face-private copy of the hostname.
-	sysName, ok := st.OIDMap()[snmp.SysName]
 	if !ok || sysName.Value != "renamed-gs110emx" {
 		t.Errorf("oid_map[sysName] = %+v, ok=%v, want value %q (SNMP must see the HTTP write)", sysName, ok, "renamed-gs110emx")
 	}
@@ -953,8 +962,11 @@ func TestHTTPFaceGS110EMXWriterSetPVIDHasNoCSRFHash(t *testing.T) {
 	if !errors.Is(err, model.ErrHTTP) {
 		t.Errorf("SetPVID() against gs110emx error = %v, want errors.Is(..., model.ErrHTTP)", err)
 	}
-	if st.Pvids[3] != wantUnchanged {
-		t.Errorf("state.Pvids[3] after a refused SetPVID = %d, want unchanged %d", st.Pvids[3], wantUnchanged)
+	st.LockState()
+	gotPvid := st.Pvids[3]
+	st.UnlockState()
+	if gotPvid != wantUnchanged {
+		t.Errorf("state.Pvids[3] after a refused SetPVID = %d, want unchanged %d", gotPvid, wantUnchanged)
 	}
 }
 
@@ -996,8 +1008,11 @@ func TestHTTPFaceGS728TPPWriterSetPVIDRefusesNonexistentVlan(t *testing.T) {
 	if !strings.Contains(err.Error(), "4007") {
 		t.Errorf("SetPVID() error = %q, want it to mention the nonexistent VLAN 4007", err.Error())
 	}
-	if st.Pvids[2] != wantUnchanged {
-		t.Errorf("state.Pvids[2] after a refused SetPVID = %d, want unchanged %d", st.Pvids[2], wantUnchanged)
+	st.LockState()
+	gotPvid := st.Pvids[2]
+	st.UnlockState()
+	if gotPvid != wantUnchanged {
+		t.Errorf("state.Pvids[2] after a refused SetPVID = %d, want unchanged %d", gotPvid, wantUnchanged)
 	}
 }
 
@@ -1129,7 +1144,9 @@ func TestHTTPFaceGS728TPPWriterSetHostnameRoundTrips(t *testing.T) {
 	if got != "renamed-gs728tpp" {
 		t.Errorf("GetHostname() after SetHostname = %q, want %q", got, "renamed-gs728tpp")
 	}
+	st.LockState()
 	sysName, ok := st.OIDMap()[snmp.SysName]
+	st.UnlockState()
 	if !ok || sysName.Value != "renamed-gs728tpp" {
 		t.Errorf("oid_map[sysName] = %+v, ok=%v, want value %q (SNMP must see the HTTP write)", sysName, ok, "renamed-gs728tpp")
 	}
@@ -1219,8 +1236,11 @@ func TestHTTPFaceGS728TPPWriterSetPortSpeedRefusesUnofferedRate(t *testing.T) {
 	if !errors.Is(err, model.ErrUnsupportedCapability) {
 		t.Fatalf("SetPortSpeed(2, 10G) error = %v, want model.ErrUnsupportedCapability", err)
 	}
-	if *st.Ports[2] != before {
-		t.Errorf("state.Ports[2] changed by a refused SetPortSpeed: got %+v, want unchanged %+v", *st.Ports[2], before)
+	st.LockState()
+	after := *st.Ports[2]
+	st.UnlockState()
+	if after != before {
+		t.Errorf("state.Ports[2] changed by a refused SetPortSpeed: got %+v, want unchanged %+v", after, before)
 	}
 }
 
@@ -1687,8 +1707,11 @@ func TestHTTPFaceGSM7252PSWriterSetPVIDRefusesNonexistentVlan(t *testing.T) {
 	if !strings.Contains(err.Error(), "4007") {
 		t.Errorf("SetPVID() error = %q, want it to mention the nonexistent VLAN 4007", err.Error())
 	}
-	if st.Pvids[1] != wantUnchanged {
-		t.Errorf("state.Pvids[1] after a refused SetPVID = %d, want unchanged %d", st.Pvids[1], wantUnchanged)
+	st.LockState()
+	gotPvid := st.Pvids[1]
+	st.UnlockState()
+	if gotPvid != wantUnchanged {
+		t.Errorf("state.Pvids[1] after a refused SetPVID = %d, want unchanged %d", gotPvid, wantUnchanged)
 	}
 }
 
@@ -1909,8 +1932,11 @@ func TestHTTPFaceGS105PEWriterSetPVIDNeverAppliesOnThisMock(t *testing.T) {
 	if err == nil {
 		t.Fatalf("SetPVID() against gs105pe error = nil, want a WriteVerificationError (this mock's known write-is-a-no-op gap, see doc comment)")
 	}
-	if st.Pvids[3] != wantUnchanged {
-		t.Errorf("state.Pvids[3] after a refused SetPVID = %d, want unchanged %d", st.Pvids[3], wantUnchanged)
+	st.LockState()
+	gotPvid := st.Pvids[3]
+	st.UnlockState()
+	if gotPvid != wantUnchanged {
+		t.Errorf("state.Pvids[3] after a refused SetPVID = %d, want unchanged %d", gotPvid, wantUnchanged)
 	}
 }
 
@@ -2560,8 +2586,11 @@ func TestHTTPFaceXEWriterSetPortEnabledRoundTrip(t *testing.T) {
 	if err := writer.SetPortEnabled(ctx, 1, target, false); err != nil {
 		t.Fatalf("SetPortEnabled(port=1, %v) error = %v", target, err)
 	}
-	if st.Ports[1].Admin != target {
-		t.Errorf("state.Ports[1].Admin = %v after SetPortEnabled(%v), want %v", st.Ports[1].Admin, target, target)
+	st.LockState()
+	got := st.Ports[1].Admin
+	st.UnlockState()
+	if got != target {
+		t.Errorf("state.Ports[1].Admin = %v after SetPortEnabled(%v), want %v", got, target, target)
 	}
 }
 
@@ -2589,8 +2618,11 @@ func TestHTTPFaceXEWriterSetPoERoundTrip(t *testing.T) {
 	if err := writer.SetPoE(ctx, 1, target, false); err != nil {
 		t.Fatalf("SetPoE(port=1, %v) error = %v", target, err)
 	}
-	if st.Poe[1].Admin != target {
-		t.Errorf("state.Poe[1].Admin = %v after SetPoE(%v), want %v", st.Poe[1].Admin, target, target)
+	st.LockState()
+	got := st.Poe[1].Admin
+	st.UnlockState()
+	if got != target {
+		t.Errorf("state.Poe[1].Admin = %v after SetPoE(%v), want %v", got, target, target)
 	}
 }
 
@@ -2621,8 +2653,11 @@ func TestHTTPFaceXEWriterSetMgmtIPRoundTrip(t *testing.T) {
 	if err := writer.SetMgmtIP(ctx, "10.1.5.99", "255.255.255.0", "10.1.5.1", true); err != nil {
 		t.Fatalf("SetMgmtIP() error = %v", err)
 	}
-	if st.Mgmt.Address != "10.1.5.99" || st.Mgmt.Netmask != "255.255.255.0" || st.Mgmt.Gateway != "10.1.5.1" {
-		t.Errorf("state.Mgmt = %+v after SetMgmtIP, want 10.1.5.99/255.255.255.0 gw 10.1.5.1", st.Mgmt)
+	st.LockState()
+	gotMgmt := st.Mgmt
+	st.UnlockState()
+	if gotMgmt.Address != "10.1.5.99" || gotMgmt.Netmask != "255.255.255.0" || gotMgmt.Gateway != "10.1.5.1" {
+		t.Errorf("state.Mgmt = %+v after SetMgmtIP, want 10.1.5.99/255.255.255.0 gw 10.1.5.1", gotMgmt)
 	}
 
 	reader, err := webui.NewReader(client, m)
@@ -3019,8 +3054,11 @@ func TestHTTPFaceM4300WriterSetPortEnabledRoundTrip(t *testing.T) {
 	if err := writer.SetPortEnabled(ctx, 1, target, false); err != nil {
 		t.Fatalf("SetPortEnabled(port=1, %v) error = %v", target, err)
 	}
-	if st.Ports[1].Admin != target {
-		t.Errorf("state.Ports[1].Admin = %v after SetPortEnabled(%v), want %v", st.Ports[1].Admin, target, target)
+	st.LockState()
+	got := st.Ports[1].Admin
+	st.UnlockState()
+	if got != target {
+		t.Errorf("state.Ports[1].Admin = %v after SetPortEnabled(%v), want %v", got, target, target)
 	}
 }
 
@@ -3050,8 +3088,11 @@ func TestHTTPFaceM4300WriterSetPoERoundTrip(t *testing.T) {
 	if err := writer.SetPoE(ctx, port, target, false); err != nil {
 		t.Fatalf("SetPoE(port=%d, %v) error = %v", port, target, err)
 	}
-	if st.Poe[port].Admin != target {
-		t.Errorf("state.Poe[%d].Admin = %v after SetPoE(%v), want %v", port, st.Poe[port].Admin, target, target)
+	st.LockState()
+	got := st.Poe[port].Admin
+	st.UnlockState()
+	if got != target {
+		t.Errorf("state.Poe[%d].Admin = %v after SetPoE(%v), want %v", port, got, target, target)
 	}
 }
 
@@ -3125,18 +3166,21 @@ func TestHTTPFaceFastpathVlanMembershipRoundTrip(t *testing.T) {
 				if got := page.Configured[port]; got != mode {
 					t.Errorf("after SetVlanMembership(%v): Configured[%d] = %v, want %v", mode, port, got, mode)
 				}
-				vsim := st.Vlans[vid]
+				st.LockState()
+				isMember := st.Vlans[vid].Member[port]
+				isUntagged := st.Vlans[vid].Untagged[port]
+				st.UnlockState()
 				switch mode {
 				case model.VlanExcluded:
-					if vsim.Member[port] {
+					if isMember {
 						t.Errorf("port %d still a Member after Excluded apply", port)
 					}
 				default:
-					if !vsim.Member[port] {
+					if !isMember {
 						t.Errorf("port %d not a Member after %v apply", port, mode)
 					}
-					if (vsim.Untagged[port]) != (mode == model.VlanUntagged) {
-						t.Errorf("port %d Untagged = %v after %v apply", port, vsim.Untagged[port], mode)
+					if isUntagged != (mode == model.VlanUntagged) {
+						t.Errorf("port %d Untagged = %v after %v apply", port, isUntagged, mode)
 					}
 				}
 			}
@@ -3359,8 +3403,11 @@ func TestHTTPFaceCertUploadGoAhead(t *testing.T) {
 	if !strings.Contains(resp, "<statusCode>0</statusCode>") {
 		t.Errorf("PostXML() response = %q, want <statusCode>0</statusCode>", resp)
 	}
-	if st.UploadedCert == nil || *st.UploadedCert != "FAKECERTDATA" {
-		t.Errorf("state.UploadedCert = %v, want \"FAKECERTDATA\"", st.UploadedCert)
+	st.LockState()
+	uploaded := st.UploadedCert
+	st.UnlockState()
+	if uploaded == nil || *uploaded != "FAKECERTDATA" {
+		t.Errorf("state.UploadedCert = %v, want \"FAKECERTDATA\"", uploaded)
 	}
 }
 
@@ -3393,8 +3440,11 @@ func TestHTTPFaceCertUploadGoAheadXXERejected(t *testing.T) {
 	if strings.Contains(resp, "<statusCode>0</statusCode>") {
 		t.Errorf("PostXML() with a DOCTYPE/ENTITY body response = %q, want a REJECTED (non-zero) statusCode", resp)
 	}
-	if st.UploadedCert != nil {
-		t.Errorf("state.UploadedCert after a rejected XXE upload = %v, want nil (unchanged)", st.UploadedCert)
+	st.LockState()
+	uploaded := st.UploadedCert
+	st.UnlockState()
+	if uploaded != nil {
+		t.Errorf("state.UploadedCert after a rejected XXE upload = %v, want nil (unchanged)", uploaded)
 	}
 }
 

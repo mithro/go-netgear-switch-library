@@ -12,10 +12,16 @@ package virtual
 // NsdpFace (same Start()-returns-port / deterministic-idempotent-Stop()
 // shape). Unlike Python's ThreadingHTTPServer (one OS thread per accepted
 // connection, no built-in synchronization of its own), Go's http.Server is
-// already concurrent by design; render/apply access to the shared *State is
-// serialized on renderMu, mirroring Python's single self._lock (dossier
-// §3.8) at the SAME granularity: held only for the dispatch-and-render/apply
-// critical section, never for header parsing or the login/referer checks.
+// already concurrent by design; render/apply access to the shared *State
+// used to be serialized ONLY on renderMu, mirroring Python's single
+// self._lock (dossier §3.8) at the SAME granularity: held only for the
+// dispatch-and-render/apply critical section, never for header parsing or
+// the login/referer checks. renderMu is still there (same-face-only
+// serialization, unchanged), but it never protected against a DIFFERENT
+// bound face's goroutine (SnmpFace/NsdpFace/CliFace) touching the SAME
+// *State concurrently -- see serveHTTP's own doc comment for the State.mu
+// lock (Go-only; no Python equivalent, since Python's faces never ran on
+// real concurrent threads to begin with) that now closes that gap.
 //
 // Go's http.Server.Shutdown(ctx) WAITS for in-flight handlers to finish --
 // strictly stronger than Python's ThreadingHTTPServer.shutdown() (which only
@@ -275,7 +281,27 @@ func knownHTTPPaths(spec *webui.HTTPModelSpec) map[string]bool {
 // Top-level dispatch (dossier §3.9's "full routing precedence")
 // ---------------------------------------------------------------------
 
+// serveHTTP is the single entry point net/http invokes for EVERY request --
+// on its own goroutine-per-connection, per net/http's usual concurrency
+// model. Holds State's lock for the WHOLE request (Go-only; see State.mu's
+// own doc comment), not just renderMu's narrower render/apply critical
+// section: the SAME *State can be live-mutated concurrently by every OTHER
+// bound face's own goroutine (SnmpFace, NsdpFace, CliFace via SSHFace/
+// TelnetFace), and a real switch only ever does one internal config/read
+// operation at a time regardless of how many protocol listeners are bound.
+// renderMu is a SEPARATE, narrower mutex (same-face serialization only,
+// pre-dating this one) nested safely inside this lock wherever it's still
+// acquired below -- two different mutexes, always taken in the same order
+// (State's, then renderMu's, never the reverse), so no deadlock risk; it is
+// otherwise now redundant (State's lock alone already serializes every
+// concurrent request, HTTP or not) but left in place rather than ripped out
+// across its dozen call sites for a change this fix doesn't need to make.
+// No handler this dispatches into may EVER call LockState/UnlockState again
+// (this mutex is not reentrant) -- serveHTTP is their one and only caller.
 func (f *HTTPFace) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	f.state.LockState()
+	defer f.state.UnlockState()
+
 	switch r.Method {
 	case http.MethodGet:
 		f.handleGet(w, r)

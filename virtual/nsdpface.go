@@ -206,7 +206,18 @@ func (f *NsdpFace) serve(conn *net.UDPConn) {
 // (READ_RESPONSE/WRITE_RESPONSE echoed back by a misbehaving client) so the
 // caller drops it, exactly like real hardware's silent-drop-of-unexpected-op
 // behavior.
+//
+// Holds State's lock for the whole dispatch (Go-only; see State.mu's own
+// doc comment): this is the single outermost boundary every NSDP request
+// goes through on serve()'s background goroutine, and the SAME *State can
+// be live-mutated concurrently by every OTHER bound face's own goroutine
+// (SnmpFace, HTTPFace, CliFace via SSHFace/TelnetFace). readResponse/
+// writeResponse must NEVER lock again (this mutex is not reentrant); this
+// is their one and only caller.
 func (f *NsdpFace) handle(req nsdp.Packet) (*nsdp.Packet, error) {
+	f.state.LockState()
+	defer f.state.UnlockState()
+
 	switch req.Op {
 	case nsdp.OpReadRequest:
 		resp := f.readResponse(req)

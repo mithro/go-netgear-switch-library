@@ -304,7 +304,17 @@ func (f *TelnetFace) serveConn(conn net.Conn) {
 	face := NewCliFace(f.state, f.spec)
 	// CliFace.Close is a documented no-op (cliface.go); nothing to report.
 	defer func() { _ = face.Close() }()
-	cliListenerLoop(context.Background(), tc, r, face, f.state.ModelKey)
+	// ModelKey is set once at construction and never changed afterward in
+	// practice, but SnmpFace's SET rollback path (RestoreState) does write
+	// it back (to the same value) under State's lock -- so this read needs
+	// the SAME lock too, even though the value can never actually differ
+	// (Go-only; see State.mu's own doc comment). A one-off read, not held
+	// across cliListenerLoop: that loop's own State access is entirely
+	// inside face.Run, which takes the lock itself per call.
+	f.state.LockState()
+	modelKey := f.state.ModelKey
+	f.state.UnlockState()
+	cliListenerLoop(context.Background(), tc, r, face, modelKey)
 }
 
 // login mirrors fastpath.telnetLogin's WIRE SHAPE from the other end: send
