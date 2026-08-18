@@ -1,20 +1,8 @@
-// Package capabilities answers one question -- can model M do operation O
-// over backend B, and why not? -- without touching a switch. It is a pure,
-// stateless oracle: every verdict is derived from the SAME registry/spec
-// objects the real dispatch path (dispatch.go, write_dispatch.go) reads --
-// model.SwitchModel fields, webui.HTTPModelSpec endpoint paths,
-// fastpath.CliModelSpec verification flags, fastpath.ScpProfile -- never a
-// parallel hand-written table, so this package can never quietly disagree
-// with what dispatch actually does.
-//
-// Ported field-for-field from src/netgear_switch/capabilities.py (pinned
-// worktree go-port-pin-b26eb1f). Any discrepancy between this package and
-// that pin is a bug in this package, not a deliberate deviation, unless
-// called out in a comment.
-//
 // types.go: the capability data model -- Support/OperationKind/Operation/
 // Capability plus the fixed 32-entry Operations table, ported field-for-
-// field from capabilities.py lines 62-372.
+// field from capabilities.py lines 62-372. See package capabilities' doc
+// comment (doc.go) for the package overview.
+
 package capabilities
 
 import (

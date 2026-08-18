@@ -1,7 +1,6 @@
-// Package webui carries the Netgear web-UI ("HTTP") protocol layer: the
-// per-model endpoint specs (endpoints.go) and the pure login crypto
-// (crypt.go). Named webui, not http, to avoid stuttering against the
-// stdlib net/http package this library's transport layer builds on.
+// crypt.go carries the pure login-crypto obfuscation schemes NETGEAR's Plus-
+// family web UIs use (Merge/MergeHashMD5). See package webui's doc comment
+// (doc.go) for the package overview.
 //
 // Ported field-for-field from
 // src/netgear_switch/protocols/http/{endpoints,crypt}.py at pin 1841111 in
@@ -9,6 +8,7 @@
 // go-port-pin-1841111). Any discrepancy between this package and that pin
 // is a bug in this package, not a deliberate deviation, unless called out
 // in a comment.
+
 package webui
 
 import (

@@ -1,8 +1,8 @@
-// Package fastpath (this file): the FASTPATH CLI table/ruler parser
-// PRIMITIVES -- the shared engine every entity parser (show version, show
-// port all, show vlan ..., show mac-addr-table, show lldp remote-device
-// all, show poe port info all, show environment, ...) is built from. Entity
-// parsers themselves are a later task; this file has none.
+// parse.go: the FASTPATH CLI table/ruler parser PRIMITIVES -- the shared
+// engine every entity parser (show version, show port all, show vlan ...,
+// show mac-addr-table, show lldp remote-device all, show poe port info
+// all, show environment, ...) is built from. See package fastpath's doc
+// comment (doc.go) for the package overview.
 //
 // Ported field-for-field from the pinned
 // python-netgear-switch-library @ 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362,
@@ -27,6 +27,7 @@
 // slicing PANICS on the same out-of-range input. sliceCell reproduces
 // Python's clamp explicitly (see its own doc comment) so every parser built
 // on top of it can never panic on a short row.
+
 package fastpath
 
 import (

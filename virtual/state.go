@@ -1,15 +1,16 @@
-// Package virtual holds the in-memory virtual-switch device state used by
-// the mock SNMP/NSDP/HTTP faces (later slices), ported field-for-field from
+// state.go holds the in-memory virtual-switch device state (State) used by
+// this package's mock SNMP/NSDP/HTTP/CLI faces, ported field-for-field from
 // src/netgear_switch/virtual/state.py (the normative source; that repo is
-// read-only from here). Any discrepancy between this package and the Python
-// source is a bug here.
+// read-only from here). Any discrepancy between this file and the Python
+// source is a bug here. See package virtual's doc comment (doc.go) for the
+// package overview.
 //
 // State holds everything a simulated switch "knows" about itself -- port
 // link/admin/speed, counters, VLANs, PoE, sensors, the MAC/FDB table, LLDP
 // neighbours and the management IP -- as small mutable *Sim structs.
-// OIDMap projects that state onto the flat numeric OID -> (type, value)
-// view a protocol face serves. This package is pure data + projection: no
-// network.
+// OIDMap (state_oidmap.go) projects that state onto the flat numeric
+// OID -> (type, value) view SnmpFace serves.
+
 package virtual
 
 import (

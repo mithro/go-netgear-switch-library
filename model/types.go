@@ -1,6 +1,3 @@
-// Package model holds the shared device-data types, typed errors and the
-// switch-model registry for the Netgear switch library. It is the leaf
-// package every protocol package imports; it imports nothing internal.
 package model
 
 import (

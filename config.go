@@ -1,6 +1,3 @@
-// Package netgearswitch is the top-level entry point for this library; see
-// alias.go for the re-exported model types/errors/registry that let callers
-// depend on this single package instead of also importing model directly.
 package netgearswitch
 
 import (

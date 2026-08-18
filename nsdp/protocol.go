@@ -1,6 +1,8 @@
-// Package nsdp implements the NETGEAR Switch Discovery Protocol (NSDP) wire
+// protocol.go implements the NETGEAR Switch Discovery Protocol (NSDP) wire
 // codec used by NETGEAR's unmanaged-plus "Plus" switches (e.g. GS110EMX,
-// GS305EP). It is a pure, zero-dependency codec: no sockets, no I/O.
+// GS305EP): a pure, zero-dependency codec with no sockets, no I/O of its
+// own (see client.go's UDPClient for the transport). See package nsdp's
+// doc comment (doc.go) for the package overview.
 //
 // Ported field-for-field from
 // src/netgear_switch/protocols/nsdp/{protocol.py,auth.py} at pin 1aa1274 in
@@ -8,6 +10,7 @@
 // go-port-pin-1aa1274, branch fix/s3300-52x-live-verify). Any discrepancy
 // between this package and that pin is a bug in this package, not a
 // deliberate deviation, unless called out in a comment.
+
 package nsdp
 
 import (

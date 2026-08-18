@@ -1,8 +1,8 @@
-// Package fastpath ports src/netgear_switch/protocols/cli/commands.py --
-// the per-model FASTPATH device-CLI command specs -- pure data (which
-// command string each op sends, per model) plus the small set of templating
+// spec.go ports src/netgear_switch/protocols/cli/commands.py -- the
+// per-model FASTPATH device-CLI command specs -- pure data (which command
+// string each op sends, per model) plus the small set of templating
 // methods that build the final command string for a per-port/per-VLAN op.
-// It is the CLI-protocol analogue of the webui package's HTTPModelSpec.
+// See package fastpath's doc comment (doc.go) for the package overview.
 //
 // Ported field-for-field from the pinned
 // python-netgear-switch-library @ 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362,
@@ -29,6 +29,7 @@
 //     small, explicitly-typed value with exactly its 4 fields, applied via
 //     applyM4300Overrides rather than untyped map splatting, preserving the
 //     same compile-time guarantee the dossier calls for (§1.4).
+
 package fastpath
 
 import (
