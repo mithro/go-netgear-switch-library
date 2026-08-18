@@ -414,6 +414,14 @@ func (s *CliModelSpec) LoggingSyslog(enabled bool) string {
 // Anything that does not parse as a literal IP -- including a bare hostname
 // -- is "dns", matching the host table's own column header ("IP
 // Address/Hostname").
+//
+// A leading-zero IPv4 octet ("010.1.1.1") is ambiguous and Python's
+// ipaddress.ip_address REJECTS it outright (ValueError -> "dns"; see
+// address_kind's own try/except, commands.py:66-78, pin b26eb1f). This
+// already matches here WITHOUT any extra check: net.ParseIP has rejected
+// leading zeros in IPv4 literals since Go 1.17 (this module requires Go
+// 1.26), so it already returns nil for "010.1.1.1" and this falls through
+// to "dns" -- verified by TestAddressKind's leading-zero cases.
 func addressKind(address string) string {
 	if strings.Contains(address, ":") {
 		if net.ParseIP(address) != nil {

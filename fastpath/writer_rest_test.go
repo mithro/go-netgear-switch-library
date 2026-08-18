@@ -771,6 +771,16 @@ func TestAddressKind(t *testing.T) {
 		{"2001:db8::1", "ipv6"},
 		{"switch.example.com", "dns"},
 		{"not:a:valid:ipv6:address:at:all:either", "dns"},
+		// Leading-zero IPv4 octets are ambiguous (historically read as
+		// octal by some parsers) and Python's ipaddress.ip_address REJECTS
+		// them outright (raises ValueError) -- see address_kind
+		// (protocols/cli/commands.py:66-78, pin b26eb1f), which catches
+		// that ValueError and answers "dns". net.ParseIP is lax here and
+		// silently accepts "010.1.1.1" as decimal 10.1.1.1, so addressKind
+		// must reject it explicitly to match.
+		{"010.1.1.1", "dns"},
+		{"10.1.1.01", "dns"}, // leading zero in ANY octet, not just the first
+		{"0.1.1.1", "ipv4"},  // a BARE "0" octet (not a leading zero) stays valid
 	}
 	for _, c := range cases {
 		if got := addressKind(c.address); got != c.want {
