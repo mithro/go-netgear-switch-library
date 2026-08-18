@@ -37,7 +37,10 @@ func TestOpAndTagValuesMatchWireConstants(t *testing.T) {
 		{"TagVLANMembers", uint16(nsdp.TagVLANMembers), 0x2800},
 		{"TagPortPVID", uint16(nsdp.TagPortPVID), 0x3000},
 		{"TagSerialNumber", uint16(nsdp.TagSerialNumber), 0x7800},
-		// Every remaining tag from D-NSDP §1.4's 34-entry table.
+		{"TagVLANPortConf", uint16(nsdp.TagVLANPortConf), 0x2400},
+		{"TagMaxVlan", uint16(nsdp.TagMaxVlan), 0x6400},
+		// Every remaining tag from the pin's 42-entry Tag table
+		// (protocol.py:98-189).
 		{"TagStartOfMark", uint16(nsdp.TagStartOfMark), 0x0000},
 		{"TagEndOfMark", uint16(nsdp.TagEndOfMark), 0xFFFF},
 		{"TagHostname", uint16(nsdp.TagHostname), 0x0003},

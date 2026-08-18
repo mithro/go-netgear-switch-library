@@ -96,7 +96,7 @@ func isValidOp(o Op) bool {
 // Tag.
 type Tag uint16
 
-// Tag values, mirroring Python protocols.nsdp.protocol.Tag (all 34 entries,
+// Tag values, mirroring Python protocols.nsdp.protocol.Tag (all 42 entries,
 // grouped identically for diffability against the Python source; only the
 // numeric values matter for wire compatibility).
 const (
@@ -129,9 +129,17 @@ const (
 	TagPortStatistics Tag = 0x1000
 
 	// VLAN
-	TagVLANEngine  Tag = 0x2000
-	TagVLANMembers Tag = 0x2800
-	TagPortPVID    Tag = 0x3000
+	TagVLANEngine Tag = 0x2000
+	// TagVLANPortConf is port-based (non-802.1Q) VLAN membership
+	// (pin protocol.py:151 VLAN_PORT_CONF). Catalog-only: never
+	// read/written by this package today.
+	TagVLANPortConf Tag = 0x2400
+	TagVLANMembers  Tag = 0x2800
+	// TagMaxVlan is the max simultaneous VLANs the switch supports; 0x40
+	// (=64) measured on a GS110EMX (pin protocol.py:163 MAX_VLAN).
+	// Catalog-only: never read/written by this package today.
+	TagMaxVlan  Tag = 0x6400
+	TagPortPVID Tag = 0x3000
 
 	// QoS
 	TagQOSEngine       Tag = 0x3400
