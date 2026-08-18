@@ -4,7 +4,7 @@ package webui_test
 // paths (SetPortEnabled/SetPoE/ClearPoEFault/SetMgmtIP/SetVlanMembership on
 // the managed models) and the GS110EMX's own differently-shaped port-admin
 // mechanism, ported scenario-for-scenario from tests/test_http_xui_writes.py
-// and tests/test_http_vlan_membership.py at pin 1841111 in
+// and tests/test_http_vlan_membership.py at pin b26eb1f in
 // python-netgear-switch-library. Those Python tests drive against a live
 // virtual HTTP face (VirtualHttpFace); this Go port has no such face yet
 // (a later slice-06 task), so xuiFakeSession below reproduces the same

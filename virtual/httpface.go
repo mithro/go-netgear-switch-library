@@ -2,7 +2,7 @@ package virtual
 
 // httpface.go ports src/netgear_switch/virtual/faces/http.py's
 // VirtualHttpFace (the normative source; that repo is read-only from here --
-// pin 1841111, branch go-port-pin-1841111). Any discrepancy between this
+// pin b26eb1f, branch go-port-pin-b26eb1f). Any discrepancy between this
 // file and the Python source is a bug here, unless called out in a comment.
 // See docs/superpowers/plans/2026-07-31-slice-06-dossier-http-readwrite-face.md
 // §3 for the full porting dossier this mirrors.

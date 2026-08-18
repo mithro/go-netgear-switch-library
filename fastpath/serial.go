@@ -1,6 +1,6 @@
 // serial.go ports src/netgear_switch/transport/cli/console.py (103 lines)
-// at pin 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362 -- the serial/console
-// byte transport for FASTPATH's CLI over a physical RS-232 line, built on
+// at pin b26eb1f -- the serial/console byte transport for FASTPATH's CLI
+// over a physical RS-232 line, built on
 // go.bug.st/serial (spec line 236). Scope mirrors ssh.go/telnet.go: this
 // file only produces the byte-level Transport (io.ReadWriteCloser) Task 5's
 // ShellDriver/NewShellDriver consumes.

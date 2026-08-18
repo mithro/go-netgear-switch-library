@@ -38,8 +38,8 @@
 // native slicing would panic.
 //
 // Ported field-for-field from the pinned python-netgear-switch-library @
-// 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362 (src/netgear_switch/protocols/cli/
-// commands.py and parse.py; the normative source, which is read-only from
-// here). Any discrepancy between this package and that pin is a bug in this
-// package, not a deliberate deviation, unless called out in a comment.
+// b26eb1f (src/netgear_switch/protocols/cli/commands.py and parse.py; the
+// normative source, which is read-only from here). Any discrepancy between
+// this package and that pin is a bug in this package, not a deliberate
+// deviation, unless called out in a comment.
 package fastpath

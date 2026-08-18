@@ -1731,7 +1731,7 @@ func (s *State) IsWritableOID(oid string) bool {
 // --- NsdpTlvs / ApplyNsdpWrite: the NSDP-face projection/write pair -------
 //
 // Ported field-for-field from src/netgear_switch/virtual/state.py's
-// nsdp_tlvs/apply_nsdp_write (lines 573-735 at pin 1aa1274), reproduced
+// nsdp_tlvs/apply_nsdp_write (lines 573-735 at pin b26eb1f), reproduced
 // verbatim in D-NSDP §7.1 (2026-07-30-slice-05-dossier-nsdp.md). Any
 // discrepancy between this section and that pin is a bug here.
 

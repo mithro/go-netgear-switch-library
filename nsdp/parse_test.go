@@ -1,8 +1,8 @@
 package nsdp_test
 
 // Ported field-for-field from tests/protocols/nsdp/test_parsers.py at pin
-// 1aa1274 in python-netgear-switch-library (frozen snapshot worktree
-// go-port-pin-1aa1274). Any discrepancy between this file and that pin is a
+// b26eb1f in python-netgear-switch-library (frozen snapshot worktree
+// go-port-pin-b26eb1f). Any discrepancy between this file and that pin is a
 // bug in this file. LinkSpeed/VLANEngine enum-value coverage lives in
 // model/nsdp_test.go (Task 1), not duplicated here.
 

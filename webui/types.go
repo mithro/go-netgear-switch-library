@@ -1,9 +1,9 @@
 package webui
 
 // Ported field-for-field from
-// src/netgear_switch/protocols/http/{session,types}.py at pin 1841111 in
+// src/netgear_switch/protocols/http/{session,types}.py at pin b26eb1f in
 // python-netgear-switch-library (frozen snapshot worktree
-// go-port-pin-1841111). Any discrepancy between this file and that pin is a
+// go-port-pin-b26eb1f). Any discrepancy between this file and that pin is a
 // bug in this file, not a deliberate deviation, unless called out in a
 // comment.
 //

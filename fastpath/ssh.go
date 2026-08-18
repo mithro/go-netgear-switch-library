@@ -1,6 +1,6 @@
 // ssh.go ports src/netgear_switch/transport/cli/ssh.py (147 lines) at pin
-// 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362 -- the SSH byte transport old
-// FASTPATH firmware (the GSM7252PS/M4300 generation) needs, built on
+// b26eb1f -- the SSH byte transport old FASTPATH firmware (the
+// GSM7252PS/M4300 generation) needs, built on
 // golang.org/x/crypto/ssh. Scope is deliberately narrower than the Python
 // class: SshCliTransport (ssh.py:47-147) bundles connect + ShellDriver
 // construction + Setup + the CliSession methods into one object; this file

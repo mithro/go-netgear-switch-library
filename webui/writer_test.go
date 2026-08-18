@@ -2,7 +2,7 @@ package webui_test
 
 // writer_test.go: TDD coverage for webui.Writer's Plus-CGI (gs305ep,
 // HTMLDialectStandard) write paths, ported scenario-for-scenario from
-// tests/test_http_write.py at pin 1841111 in python-netgear-switch-library
+// tests/test_http_write.py at pin b26eb1f in python-netgear-switch-library
 // (the sync HttpWriter half only -- this Go port has no separate async
 // type, see writer.go's Writer doc comment).
 //

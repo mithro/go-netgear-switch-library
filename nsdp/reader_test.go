@@ -1,8 +1,8 @@
 package nsdp_test
 
-// Ported field-for-field from tests/test_nsdp_read.py at pin 1aa1274 in
+// Ported field-for-field from tests/test_nsdp_read.py at pin b26eb1f in
 // python-netgear-switch-library (frozen snapshot worktree
-// go-port-pin-1aa1274). Any discrepancy between this file and that pin is a
+// go-port-pin-b26eb1f). Any discrepancy between this file and that pin is a
 // bug in this file. Go has no separate sync/async split, so only the sync
 // (NsdpReader) side is ported -- there is no AsyncNsdpReader twin to test.
 

@@ -8,7 +8,7 @@ import (
 
 // Ported field-for-field from src/netgear_switch/protocols/http/endpoints.py
 // (pure data: LoginScheme, HTMLDialect, HTTPModelSpec, HTTP_SPECS, http_spec)
-// at pin 1841111. Field mapping notes (Python -> Go):
+// at pin b26eb1f. Field mapping notes (Python -> Go):
 //
 //   - Every `str | None` field on the Python HTTPModelSpec dataclass becomes
 //     a plain Go string, with "" standing in for Python's None -- exactly

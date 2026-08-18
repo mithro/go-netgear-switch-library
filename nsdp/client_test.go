@@ -2,8 +2,8 @@ package nsdp
 
 // Ported field-for-field (in spirit; the fake seam differs by language --
 // see transceiveFunc's doc comment) from tests/transport/test_nsdp_udp_sync.py
-// at pin 1aa1274 in python-netgear-switch-library (frozen snapshot worktree
-// go-port-pin-1aa1274). Internal (package nsdp, not nsdp_test) so tests can
+// at pin b26eb1f in python-netgear-switch-library (frozen snapshot worktree
+// go-port-pin-b26eb1f). Internal (package nsdp, not nsdp_test) so tests can
 // inject the unexported transceiveFunc seam via withTransceiver, mirroring
 // write_internal_test.go's precedent for whitebox-only members.
 

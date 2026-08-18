@@ -1,9 +1,9 @@
 package virtual
 
 // server.go ports src/netgear_switch/virtual/server.py's VirtualSwitch (the
-// normative source; that repo is read-only from here -- pin 1aa1274, branch
-// fix/s3300-52x-live-verify). Any discrepancy between this file and the
-// Python source is a bug here. See D-VIRT §5 and D-NSDP §7.4 for the full
+// normative source; that repo is read-only from here -- pin b26eb1f). Any
+// discrepancy between this file and the Python source is a bug here. See
+// D-VIRT §5 and D-NSDP §7.4 for the full
 // porting dossier this mirrors.
 //
 // VirtualSwitch is a mock switch server: a seeded State plus whichever

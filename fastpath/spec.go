@@ -5,7 +5,7 @@
 // See package fastpath's doc comment (doc.go) for the package overview.
 //
 // Ported field-for-field from the pinned
-// python-netgear-switch-library @ 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362,
+// python-netgear-switch-library @ b26eb1f,
 // src/netgear_switch/protocols/cli/commands.py (441 lines). Field mapping
 // notes (Python -> Go), mirroring the conventions already established by
 // webui.HTTPModelSpec (see that package's doc comment):

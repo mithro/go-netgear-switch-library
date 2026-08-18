@@ -1,8 +1,7 @@
 // cliface.go ports src/netgear_switch/virtual/faces/cli.py's
 // VirtualCliFace (421 lines) -- the normative source; that repo is
-// read-only from here -- pin 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362. Any
-// discrepancy between this file and the Python source is a bug here,
-// unless called out in a comment. See
+// read-only from here -- pin b26eb1f. Any discrepancy between this file and
+// the Python source is a bug here, unless called out in a comment. See
 // docs/superpowers/plans/2026-08-01-slice-07-dossier-cli-transport-fake.md
 // §3 for the full porting dossier this mirrors.
 //

@@ -1,7 +1,7 @@
 package webui_test
 
 // reader_goahead_test.go: Reader coverage for the GOAHEAD_XML dialect
-// (gs728tpp). NOT present in tests/test_http_read.py at pin 1841111 --
+// (gs728tpp). NOT present in tests/test_http_read.py at pin b26eb1f --
 // that file's own gs728tpp coverage gap is real (grep confirms no
 // "gs728tpp" mention anywhere in it); the closest Python coverage is
 // test_parse.py's direct parser-level pins (mirrored in Go by

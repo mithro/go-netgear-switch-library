@@ -1,9 +1,9 @@
 package webui
 
 // Ported field-for-field from
-// src/netgear_switch/transport/http/client.py at pin 1841111 in
+// src/netgear_switch/transport/http/client.py at pin b26eb1f in
 // python-netgear-switch-library (frozen snapshot worktree
-// go-port-pin-1841111): HttpClient/AsyncHttpClient collapse into one Go
+// go-port-pin-b26eb1f): HttpClient/AsyncHttpClient collapse into one Go
 // type, HTTPClient, implementing the Session interface (types.go) --
 // context.Context-first parameters cover what Python needed two classes
 // (sync httpx.Client / async httpx.AsyncClient) for (dossier D-HTTP-P

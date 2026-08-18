@@ -1,9 +1,9 @@
 package webui
 
 // cert.go: SSL-certificate upload, ported field-for-field from
-// src/netgear_switch/http_write.py at pin 1841111 in
+// src/netgear_switch/http_write.py at pin b26eb1f in
 // python-netgear-switch-library (frozen snapshot worktree
-// go-port-pin-1841111). Deliberately split out of writer.go (which the
+// go-port-pin-b26eb1f). Deliberately split out of writer.go (which the
 // Python source does not do -- upload_certificate and its helpers live
 // alongside every other write op in the single http_write.py) purely for Go
 // file-size/topic hygiene, per this task's brief; the split introduces no

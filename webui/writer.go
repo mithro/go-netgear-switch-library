@@ -1,9 +1,9 @@
 package webui
 
 // writer.go: model-driven web-UI write facade, ported field-for-field from
-// src/netgear_switch/http_write.py at pin 1841111 in
+// src/netgear_switch/http_write.py at pin b26eb1f in
 // python-netgear-switch-library (frozen snapshot worktree
-// go-port-pin-1841111). Any discrepancy between this file and that pin is a
+// go-port-pin-b26eb1f). Any discrepancy between this file and that pin is a
 // bug in this file, not a deliberate deviation, unless called out in a
 // comment. Cert upload (upload_certificate + its helpers) lives in cert.go,
 // a deliberate split from the Python source's single http_write.py.

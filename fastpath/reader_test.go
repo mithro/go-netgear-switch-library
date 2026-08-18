@@ -4,7 +4,7 @@ package fastpath
 // against a SCRIPTED fakeCliSession (an in-memory Session fake, not a real
 // Transport/ShellDriver) that returns the byte-identical captured fixtures
 // in testdata/cli/ as canned command outputs, mirroring the pinned
-// python-netgear-switch-library @ 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362
+// python-netgear-switch-library @ b26eb1f
 // cli_read.py tests' shape (a fake CliSession, not a live device).
 //
 // Per the task's methodology, expected parsed values are NEVER hand-

@@ -1,8 +1,7 @@
 // cert_scp.go: DeployCertificateSCP -- the FASTPATH SSL-certificate-over-
 // SCP deploy, ported from the pinned python-netgear-switch-library @
-// 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362, src/netgear_switch/cli_write.py
-// deploy_certificate_scp (module-level function, lines 106-141), dossier
-// §4.10 (protocol dossier
+// b26eb1f, src/netgear_switch/cli_write.py deploy_certificate_scp
+// (module-level function, lines 106-141), dossier §4.10 (protocol dossier
 // docs/superpowers/plans/2026-08-01-slice-07-dossier-cli-protocol.md). Any
 // discrepancy between this file and the pin is a bug in this file, not a
 // deliberate deviation, unless called out below.

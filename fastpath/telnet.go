@@ -1,6 +1,6 @@
 // telnet.go ports src/netgear_switch/transport/cli/telnet.py (104 lines) at
-// pin 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362 -- the telnet byte transport
-// for FASTPATH's plaintext CLI, built directly on net.Conn (no third-party
+// pin b26eb1f -- the telnet byte transport for FASTPATH's plaintext CLI,
+// built directly on net.Conn (no third-party
 // telnet client). Scope mirrors ssh.go: this file only produces the
 // byte-level Transport (io.ReadWriteCloser) Task 5's ShellDriver/
 // NewShellDriver consumes; wiring a Transport into a ready Session

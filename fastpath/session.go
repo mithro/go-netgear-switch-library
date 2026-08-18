@@ -1,11 +1,10 @@
 // session.go ports src/netgear_switch/transport/cli/session.py (241 lines)
-// at pin 7ebfe5d475411a7d88fd5cc68ff86ee3a4505362 -- the shared,
-// transport-free FASTPATH shell-session state machine every real CLI
-// transport (SSH/telnet/serial, Tasks 6-7) reuses unchanged, and the
-// package's write path (Task 9-10) drives through the `run`/`inMode`
-// accept-reject convention (protocol dossier §4.1). Any discrepancy
-// between this file and the pin is a bug in this file, not a deliberate
-// deviation, unless called out in a comment.
+// at pin b26eb1f -- the shared, transport-free FASTPATH shell-session state
+// machine every real CLI transport (SSH/telnet/serial, Tasks 6-7) reuses
+// unchanged, and the package's write path (Task 9-10) drives through the
+// `run`/`inMode` accept-reject convention (protocol dossier §4.1). Any
+// discrepancy between this file and the pin is a bug in this file, not a
+// deliberate deviation, unless called out in a comment.
 //
 // Field mapping notes (Python -> Go), mirroring the conventions already
 // established by webui.Session / nsdp.Client:
