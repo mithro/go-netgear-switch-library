@@ -5,3 +5,14 @@ coverage.html
 dist/
 .superpowers/
 .claude/worktrees/
+
+# Built CLI binaries -- `go build ./cmd/<name>` from the repo root, or
+# `go build .` from inside the cmd dir itself, drops the binary right next
+# to its source instead of into /bin/ above. Ignored by name wherever a dev
+# build might land it, not just at the repo root.
+/gngsw
+/gngsw-virtual
+/gngsw-mcp
+cmd/gngsw/gngsw
+cmd/gngsw-virtual/gngsw-virtual
+cmd/gngsw-mcp/gngsw-mcp
