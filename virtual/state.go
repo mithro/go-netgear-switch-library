@@ -565,6 +565,42 @@ type State struct {
 	VlanMembershipPage        *VlanMembershipPageSim
 	VlanMembershipLockedPorts map[int]bool
 
+	// FASTPATH vendor switchport state, for a model whose registry entry
+	// says SnmpVlanWrite == model.SNMPVlanWriteFastpathSwitchport (the
+	// M4300s), mirroring Python VirtualSwitchState's switchport_mode/
+	// switchport_access_vlan/switchport_native_vlan/switchport_allowed_vlans/
+	// switchport_general_untagged/switchport_general_tagged fields
+	// (state.py:624-643, pin b26eb1f). Per-port mode
+	// (access=1/trunk=2/general=3), access VLAN, native (trunk untagged)
+	// VLAN, and the writable allowed-VLAN bitmap. Empty maps mean
+	// "unseeded": switchportDefaults fills a port in on first use so the
+	// mock answers these columns for every port, exactly like the real
+	// agent (which has a row per interface). Defaults are the LIVE-measured
+	// factory shape of an untouched M4300 port: access VLAN 1, native
+	// VLAN 1, all 4093 VLANs allowed.
+	SwitchportMode         map[int]int
+	SwitchportAccessVlan   map[int]int
+	SwitchportNativeVlan   map[int]int
+	SwitchportAllowedVlans map[int][]byte
+	// SwitchportGeneralUntagged/SwitchportGeneralTagged are the GENERAL-mode
+	// per-VLAN participation lists (columns 7 and 8). These are INDEPENDENT
+	// stored config, NOT a mirror of effective membership: measured live on
+	// m4300-24x port 1/0/15, which is access-mode on VLAN 10 (so really
+	// untagged in 10) while column 7 still read VLAN 1 -- the general-mode
+	// config it would fall back to. They are only in force while
+	// mode == general(3), and a SET of either answers notWritable on real
+	// hardware.
+	SwitchportGeneralUntagged map[int]map[int]bool
+	SwitchportGeneralTagged   map[int]map[int]bool
+	// PDUEgressWrites is TRANSIENT (per-SET-PDU, not device state): VLAN ids
+	// whose egress PortList was written by the PDU currently being applied.
+	// Only used by a model with SnmpVlanSplitMembershipWrites, to reproduce
+	// the S3300's ordering quirk: its egress write auto-untags the port, and
+	// that side effect beats an untagged varbind carried in the SAME PDU.
+	// Reset by Snapshot, which SnmpFace calls exactly once per PDU. Mirrors
+	// Python's pdu_egress_writes: set[int] (state.py:644-650).
+	PDUEgressWrites map[int]bool
+
 	// Reboots is the number of reboots requested through a protocol face
 	// (slice-07: the FASTPATH CLI's "reload", virtual/cliface.go's
 	// RunWriteMemory), ported from Python's VirtualSwitchState.reboots: int
@@ -603,6 +639,13 @@ func NewState(modelKey string) *State {
 		NsdpMac:                   [6]byte{0x28, 0xc6, 0x8e, 0x00, 0x00, 0x01},
 		NsdpPortMirroringSources:  map[int]bool{},
 		VlanMembershipLockedPorts: map[int]bool{},
+		SwitchportMode:            map[int]int{},
+		SwitchportAccessVlan:      map[int]int{},
+		SwitchportNativeVlan:      map[int]int{},
+		SwitchportAllowedVlans:    map[int][]byte{},
+		SwitchportGeneralUntagged: map[int]map[int]bool{},
+		SwitchportGeneralTagged:   map[int]map[int]bool{},
+		PDUEgressWrites:           map[int]bool{},
 	}
 }
 
@@ -626,7 +669,16 @@ func (s *State) SysinfoSensors() []SensorSim {
 // this snapshot if any of them fails, so a partial mutation is never
 // observable. Every map/slice/pointer field is deep-copied by hand here (no
 // gob/reflection) -- see Restore.
+//
+// Also marks a PDU boundary: s.PDUEgressWrites (which tracks same-PDU
+// egress writes for the S3300's auto-untag ordering quirk) is cleared here
+// -- on s itself, BEFORE the deep copy below, so the returned snapshot
+// starts with an empty set too -- mirroring Python
+// VirtualSwitchState.snapshot() (state.py:1106-1122: `self.pdu_egress_writes
+// = set()` then `return copy.deepcopy(self)`), since SnmpFace snapshots
+// exactly once per PDU.
 func (s *State) Snapshot() *State {
+	s.PDUEgressWrites = map[int]bool{}
 	cp := &State{
 		ModelKey:                  s.ModelKey,
 		Ports:                     clonePortsMap(s.Ports),
@@ -665,6 +717,13 @@ func (s *State) Snapshot() *State {
 		ScpCertDeploy:             cloneScpCertDeploy(s.ScpCertDeploy),
 		VlanMembershipPage:        cloneVlanMembershipPage(s.VlanMembershipPage),
 		VlanMembershipLockedPorts: cloneIntBoolMap(s.VlanMembershipLockedPorts),
+		SwitchportMode:            cloneIntIntMap(s.SwitchportMode),
+		SwitchportAccessVlan:      cloneIntIntMap(s.SwitchportAccessVlan),
+		SwitchportNativeVlan:      cloneIntIntMap(s.SwitchportNativeVlan),
+		SwitchportAllowedVlans:    cloneIntBytesMap(s.SwitchportAllowedVlans),
+		SwitchportGeneralUntagged: cloneIntIntBoolMap(s.SwitchportGeneralUntagged),
+		SwitchportGeneralTagged:   cloneIntIntBoolMap(s.SwitchportGeneralTagged),
+		PDUEgressWrites:           cloneIntBoolMap(s.PDUEgressWrites),
 		Reboots:                   s.Reboots,
 	}
 	return cp
@@ -843,6 +902,37 @@ func cloneIntBoolMap(in map[int]bool) map[int]bool {
 	out := make(map[int]bool, len(in))
 	for k, v := range in {
 		out[k] = v
+	}
+	return out
+}
+
+// cloneIntBytesMap deep-copies in, including each value's own byte slice --
+// a shallow map copy would leave the clone's []byte values aliasing the
+// original's backing arrays, which Restore's whole-struct assignment
+// requires NOT to happen (used for State.SwitchportAllowedVlans).
+func cloneIntBytesMap(in map[int][]byte) map[int][]byte {
+	if in == nil {
+		return nil
+	}
+	out := make(map[int][]byte, len(in))
+	for k, v := range in {
+		out[k] = append([]byte(nil), v...)
+	}
+	return out
+}
+
+// cloneIntIntBoolMap deep-copies in, including each value's own inner set --
+// a shallow map copy would leave the clone's inner map[int]bool values
+// aliasing the original's, which Restore's whole-struct assignment requires
+// NOT to happen (used for State.SwitchportGeneralUntagged/
+// SwitchportGeneralTagged).
+func cloneIntIntBoolMap(in map[int]map[int]bool) map[int]map[int]bool {
+	if in == nil {
+		return nil
+	}
+	out := make(map[int]map[int]bool, len(in))
+	for k, v := range in {
+		out[k] = cloneIntBoolMap(v)
 	}
 	return out
 }
@@ -1129,31 +1219,161 @@ func (s *State) ApplyWrite(oid string, value any) {
 		return
 	}
 
-	// 5. dot1qVlanStaticEgressPorts.<vid>
+	// 5. dot1qVlanStaticEgressPorts.<vid> -- decode the incoming PortList and
+	// REPLACE the member set, exactly as a real Q-BRIDGE agent does, UNLESS
+	// this model's dialect refuses/redirects the write (see below).
 	if vid, ok := columnTail(snmp.Dot1qVlanStaticEgress, oid); ok {
 		if vl, exists := s.Vlans[vid]; exists {
-			vl.Member = portSetFromSlice(snmp.DecodePortBitmap(asBytes(oid, value)))
+			// rejectIfReadonlyQbridge panics (errCommitFailed) exactly as a
+			// real FASTPATH 12.x agent does while any port is access-mode
+			// -- a no-op on every other model. Mirrors Python
+			// VirtualSwitchState.apply_write's egress branch (state.py:
+			// 1266-1287).
+			s.rejectIfReadonlyQbridge("dot1qVlanStaticEgressPorts", vid)
+			incoming := portSetFromSlice(snmp.DecodePortBitmap(asBytes(oid, value)))
+			m := s.mustModel()
+			if isSwitchportModel(m) {
+				// Accepted (no access-mode port), so this firmware treats
+				// the column as an alternative front end for the
+				// switchport config.
+				s.reconcileQbridgeMembership(vid, incoming)
+				return
+			}
+			if m.SnmpVlanSplitMembershipWrites {
+				// S3300 Smart-firmware side effect (VERIFIED live): a port
+				// added to the egress list becomes an UNTAGGED member.
+				// Recorded for this PDU so a same-PDU untagged varbind
+				// loses to it, exactly as the real switch behaves -- which
+				// is why the writer must split the two columns into
+				// separate PDUs, egress first.
+				for p := range incoming {
+					if !vl.Member[p] {
+						vl.Untagged[p] = true
+					}
+				}
+				s.PDUEgressWrites[vid] = true
+			}
+			vl.Member = incoming
 		}
 		return
 	}
 
-	// 6. dot1qVlanStaticUntaggedPorts.<vid>
+	// 6. dot1qVlanStaticUntaggedPorts.<vid>  (same truncation semantics)
 	if vid, ok := columnTail(snmp.Dot1qVlanStaticUntagged, oid); ok {
 		if vl, exists := s.Vlans[vid]; exists {
+			m := s.mustModel()
+			if isSwitchportModel(m) {
+				// ACCEPTED AND SILENTLY IGNORED -- the nastiest of the
+				// three behaviours, and PROVEN live on m4300-24x
+				// @10.1.5.13: a SET of dot1qVlanStaticUntaggedPorts.4007
+				// := {port 8} returned noError while the column still read
+				// back [] afterwards (and the same SET was accepted in
+				// access, trunk and general mode alike, in the very same
+				// session where the EGRESS column commitFailed). A mock
+				// that raised here would let the library "succeed" on a
+				// device that never applied anything, so it must no-op
+				// instead and let write verification be the thing that
+				// catches it.
+				return
+			}
+			if s.PDUEgressWrites[vid] {
+				// Same PDU already wrote this VLAN's egress list, whose
+				// auto-untag side effect wins on this firmware: the write
+				// is ACKed but has no effect (verified live -- one PDU
+				// left the port untagged, two PDUs tagged it correctly).
+				return
+			}
 			vl.Untagged = portSetFromSlice(snmp.DecodePortBitmap(asBytes(oid, value)))
 		}
 		return
 	}
 
+	// --- FASTPATH vendor switchport table (the writable VLAN-membership
+	// control plane on a model whose Q-BRIDGE PortLists are read-only) ---
+	// Mirrors Python VirtualSwitchState.apply_write's switchport block
+	// (state.py:1314-1364).
+	if isSwitchportModel(s.mustModel()) {
+		if port, ok := columnTail(snmp.FastpathSwitchportMode, oid); ok {
+			s.SwitchportMode[port] = mustInt(oid, value)
+			s.applySwitchport(port)
+			return
+		}
+		if port, ok := columnTail(snmp.FastpathSwitchportAccessVlan, oid); ok {
+			s.SwitchportAccessVlan[port] = mustInt(oid, value)
+			s.applySwitchport(port)
+			return
+		}
+		if port, ok := columnTail(snmp.FastpathSwitchportNativeVlan, oid); ok {
+			// WRITABLE, live-verified on m4300-24x 1/0/8 (SET ...37.1.4.8
+			// := 4007 read back 4007), but only to an EXISTING VLAN in
+			// 1..4093: := 0, := 4094 and := a deleted VLAN id all answered
+			// commitFailed. That last one is why the writer can never
+			// express "untagged nowhere".
+			native := mustInt(oid, value)
+			if _, exists := s.Vlans[native]; !exists {
+				why := "does not exist"
+				if native < 1 || native > 4093 {
+					why = "is out of range"
+				}
+				panic(fmt.Errorf(
+					"switchport native VLAN for port %d must be an existing VLAN in 1..4093; %d %s (a real FASTPATH agent answers commitFailed): %w",
+					port, native, why, errCommitFailed,
+				))
+			}
+			s.SwitchportNativeVlan[port] = native
+			s.applySwitchport(port)
+			return
+		}
+		if port, ok := columnTail(snmp.FastpathSwitchportAllowedVlans, oid); ok {
+			s.SwitchportAllowedVlans[port] = asBytes(oid, value)
+			s.applySwitchport(port)
+			return
+		}
+		// The per-port tagged/untagged VLAN bitmaps are the READ-ONLY
+		// mirrors of the switchport config on real hardware: a SET answers
+		// notWritable.
+		if port, ok := columnTail(snmp.FastpathSwitchportTaggedVlans, oid); ok {
+			panic(fmt.Errorf(
+				"switchport per-port tagged VLAN bitmap for port %d is read-only (a real FASTPATH agent answers notWritable); set the switchport mode / access VLAN instead: %w",
+				port, errNotWritable,
+			))
+		}
+		if port, ok := columnTail(snmp.FastpathSwitchportUntaggedVlans, oid); ok {
+			panic(fmt.Errorf(
+				"switchport per-port untagged VLAN bitmap for port %d is read-only (a real FASTPATH agent answers notWritable); set the switchport mode / access VLAN instead: %w",
+				port, errNotWritable,
+			))
+		}
+	}
+
 	// 7. dot1qVlanStaticRowStatus.<vid> (createAndGo=4 / destroy=6).
 	if vid, ok := columnTail(snmp.Dot1qVlanStaticRowStatus, oid); ok {
 		iv := mustInt(oid, value)
-		switch iv {
-		case snmp.RowStatusDestroy:
+		if iv == snmp.RowStatusDestroy {
 			delete(s.Vlans, vid)
-		case snmp.RowStatusCreateAndGo:
-			if _, exists := s.Vlans[vid]; !exists {
-				s.Vlans[vid] = &VlanSim{Name: ""}
+		} else if _, exists := s.Vlans[vid]; !exists {
+			// refuseVlanCreationIfUnsupported panics (errInconsistentValue)
+			// on a model whose SNMP agent cannot create a VLAN row (e.g.
+			// gs728tpp) -- measured, see its own doc comment. Runs BEFORE
+			// checking whether iv is specifically createAndGo, mirroring
+			// Python's ordering (state.py:1366-1375) exactly: any
+			// non-destroy RowStatus write at an absent row is a creation
+			// attempt on this table.
+			s.refuseVlanCreationIfUnsupported(oid)
+			if iv == snmp.RowStatusCreateAndGo {
+				// Member/Untagged MUST start as non-nil (empty) maps, not
+				// Go's map zero value (nil): applySwitchport
+				// (state_switchport.go) mutates a VLAN's Member/Untagged
+				// incrementally (`vsim.Member[port] = true`), which panics
+				// on a nil map -- unlike the Q-BRIDGE egress/untagged SET
+				// branches above, which always REPLACE the whole map via
+				// portSetFromSlice (never nil). A freshly SNMP-created VLAN
+				// with no switchport-driven port added to it yet is exactly
+				// the case that used to construct a nil map here. Mirrors
+				// Python's VlanSim dataclass, whose member/untagged fields
+				// default via `field(default_factory=set)` -- always a real
+				// (empty) set, never Python's None.
+				s.Vlans[vid] = &VlanSim{Name: "", Member: map[int]bool{}, Untagged: map[int]bool{}}
 			}
 		}
 		return
@@ -1166,7 +1386,12 @@ func (s *State) ApplyWrite(oid string, value any) {
 		if vl, exists := s.Vlans[vid]; exists {
 			vl.Name = name
 		} else {
-			s.Vlans[vid] = &VlanSim{Name: name}
+			// Setting the name of a row that does not exist IS a creation
+			// attempt -- one of the five the GS728TPP refuses.
+			s.refuseVlanCreationIfUnsupported(oid)
+			// Member/Untagged non-nil -- see the RowStatus branch's own
+			// comment above for why.
+			s.Vlans[vid] = &VlanSim{Name: name, Member: map[int]bool{}, Untagged: map[int]bool{}}
 		}
 		return
 	}
@@ -1247,11 +1472,46 @@ func (s *State) ApplyWrite(oid string, value any) {
 	// catches it).
 }
 
+// errCommitFailed/errNotWritable/errInconsistentValue are the sentinel
+// wrap-targets for ApplyWrite's three SMI-error panic classes, mirroring
+// Python state.py's CommitFailedError/NotWritableError/
+// InconsistentValueError exception classes (state.py:25-51, pin b26eb1f)
+// exactly:
+//
+//   - CommitFailedError: "The agent accepted the varbind's type but refused
+//     to apply it" -- a real SNMP commitFailed. Raised by
+//     rejectIfReadonlyQbridge (this file) and the switchport native-VLAN
+//     column's range check (ApplyWrite, below).
+//   - NotWritableError: "The object exists but is read-only" -- a real
+//     agent's notWritable. Raised for the switchport tagged/untagged
+//     participation-list columns (ApplyWrite, below).
+//   - InconsistentValueError: "The agent refuses this value in the device's
+//     current state" -- a real SNMP inconsistentValue. Raised by
+//     refuseVlanCreationIfUnsupported (this file) and
+//     errSyslogRowCreateRefused (below).
+//
+// A caller never constructs one of these directly: every ApplyWrite panic
+// site wraps ONE of these three sentinels with `%w` into a message carrying
+// the specific dynamic detail (port/VLAN/OID), and snmpface.go's
+// applyUncommitted classifies the recovered panic via errors.Is against
+// these three sentinels (falling back to the generic wrongValue only for an
+// UNCLASSIFIED panic) -- so a single Go error VALUE per class, not a
+// distinct Go error TYPE per class, is what lets one dynamic message carry
+// one of three fixed classifications, mirroring Python's
+// `except CommitFailedError as exc: raise self._commit_failed_error(...)`
+// three-way dispatch (faces/snmp.py:307-317) with Go's error-wrapping idiom
+// instead of exception subclassing.
+var (
+	errCommitFailed      = errors.New("virtual: commitFailed")
+	errNotWritable       = errors.New("virtual: notWritable")
+	errInconsistentValue = errors.New("virtual: inconsistentValue")
+)
+
 // errSyslogRowCreateRefused is the panic value ApplyWrite raises for a SET
 // attempt on the syslog-host RowStatus column at an index with no existing
 // collector row -- see the RowStatus-column block above for the measured
 // finding this mirrors (Python's InconsistentValueError).
-var errSyslogRowCreateRefused = errors.New("virtual: syslog host row does not exist; this mock refuses to create one (measured inconsistentValue)")
+var errSyslogRowCreateRefused = fmt.Errorf("virtual: syslog host row does not exist; this mock refuses to create one (measured inconsistentValue): %w", errInconsistentValue)
 
 // IsWritableOID reports whether oid is one this mock recognizes as
 // SNMP-writable. See the section doc comment above for why this is a
@@ -1289,6 +1549,43 @@ func (s *State) IsWritableOID(oid string) bool {
 	}
 	if _, ok := columnTail(snmp.Dot1qVlanStaticName, oid); ok {
 		return true
+	}
+	// FASTPATH vendor switchport columns, for a model whose VLAN membership
+	// is owned by switchport mode. All SIX columns (mode/access/native/
+	// allowed AND the two per-port participation bitmaps) are recognized as
+	// writable OIDs here -- reaching ApplyWrite rather than being rejected
+	// at this earlier gate -- mirroring Python
+	// VirtualSwitchState.is_writable_oid's actual CODE (state.py:1697-1705):
+	// its own docstring comment claims the tagged/untagged bitmaps are
+	// "deliberately NOT listed", but the very next lines DO list both
+	// FASTPATH_SWITCHPORT_TAGGED_VLANS and FASTPATH_SWITCHPORT_UNTAGGED_VLANS
+	// in the `or` chain -- a stale comment contradicted by its own code,
+	// confirmed correct by that file's own
+	// test_per_port_vlan_bitmaps_are_read_only (client.set on those columns
+	// raises SnmpError either way, so the test cannot distinguish "rejected
+	// before apply_write" from "rejected inside apply_write" -- but the
+	// CODE, not the comment, is what this port follows). ApplyWrite (above)
+	// is what actually turns a SET on the tagged/untagged pair into a
+	// notWritable error, via the errNotWritable panic.
+	if isSwitchportModel(s.mustModel()) {
+		if _, ok := columnTail(snmp.FastpathSwitchportMode, oid); ok {
+			return true
+		}
+		if _, ok := columnTail(snmp.FastpathSwitchportAccessVlan, oid); ok {
+			return true
+		}
+		if _, ok := columnTail(snmp.FastpathSwitchportNativeVlan, oid); ok {
+			return true
+		}
+		if _, ok := columnTail(snmp.FastpathSwitchportAllowedVlans, oid); ok {
+			return true
+		}
+		if _, ok := columnTail(snmp.FastpathSwitchportTaggedVlans, oid); ok {
+			return true
+		}
+		if _, ok := columnTail(snmp.FastpathSwitchportUntaggedVlans, oid); ok {
+			return true
+		}
 	}
 	// sysName: GROUNDED writable on every SNMP model, no vendor-subtree gate.
 	if oid == snmp.SysName {

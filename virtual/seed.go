@@ -598,6 +598,125 @@ func SeedGSM7228PS() *State {
 	return s
 }
 
+// switchportSeedRow is one measured FASTPATH vendor switchport row: (mode,
+// accessVlan, nativeVlan, allowedVlans, generalUntagged, generalTagged),
+// mirroring Python seed.py's _SwitchportRow tuple type (seed.py:2162).
+// Allowed == nil means "all 4093" (Python's _ALL_ALLOWED == None).
+type switchportSeedRow struct {
+	mode, access, native int
+	allowed              []int
+	generalUntagged      []int
+	generalTagged        []int
+}
+
+// allVlansExcept returns [1..4093] minus the given exclusions, ascending --
+// a small helper for the -24X seed table below, where two ports' allowed
+// lists are "everything except two specific non-existent VLANs" rather than
+// a hand-enumerated set.
+func allVlansExcept(exclude ...int) []int {
+	excl := portSetFromSlice(exclude)
+	out := make([]int, 0, 4093)
+	for v := 1; v <= 4093; v++ {
+		if !excl[v] {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// switchportSeedM4300_24X is the FASTPATH vendor switchport configuration
+// for the M4300-24X, READ OFF THE REAL SWITCH on 2026-07-30 (read-only walk
+// of 1.3.6.1.4.1.4526.10.1.2.8.37.1 with community "public"; 1520 rows),
+// mirroring Python seed.py's _M4300_24X_SWITCHPORT dict literal
+// (seed.py:2163-2190) field-for-field, row for row, port for port.
+//
+// This is seeded, not computed, precisely so the mock is an INDEPENDENT
+// source of truth: State derives Q-BRIDGE membership FROM these columns
+// (see applySwitchport in state_switchport.go), so if that derivation rule
+// is wrong the derived membership stops matching the captured membership
+// SeedM4300_24X ships alongside (see seed_test.go's
+// TestSwitchportSeedReproducesCapturedMembership, porting Python's
+// test_seeded_switchport_columns_reproduce_the_captured_membership).
+func switchportSeedM4300_24X() map[int]switchportSeedRow {
+	rows := map[int]switchportSeedRow{
+		// Ports 1/2 are the real uplink trunks; VLANs 3990 and 4007 happen
+		// to be absent from their allowed lists on the live device (both
+		// are non-existent VLANs, so neither affects membership -- kept
+		// because it is what was read).
+		1: {2, 1, 1, allVlansExcept(3990, 4007), []int{1}, nil},
+		2: {2, 1, 1, allVlansExcept(3990, 4007), []int{1}, nil},
+		3: {1, 5, 5, nil, []int{1}, nil},
+		4: {1, 5, 5, nil, []int{1}, nil},
+		// Port 5 is the most informative row on either switch: a trunk
+		// whose ACCESS VLAN (90) differs from its NATIVE VLAN (5) --
+		// proving membership follows col4 not col3 in trunk mode -- with a
+		// genuinely sparse allowed list.
+		5: {2, 90, 5, []int{1, 5, 6, 7, 10, 20, 41, 90, 99, 121, 141}, []int{1, 90}, nil},
+		6: {1, 90, 5, nil, []int{1}, nil},
+		7: {1, 1, 1, nil, []int{1}, nil},
+		8: {1, 1, 1, nil, []int{1}, nil},
+	}
+	// 9-14: access on VLAN 5 with native 1 -- another proof col4 is ignored
+	// in access mode -- and col7 reads 5 here while col7 reads 1 on 15-24,
+	// which is why col7 cannot be a mirror of effective membership.
+	for p := 9; p <= 14; p++ {
+		rows[p] = switchportSeedRow{1, 5, 1, nil, []int{5}, nil}
+	}
+	for p := 15; p <= 24; p++ {
+		rows[p] = switchportSeedRow{1, 10, 10, nil, []int{1}, nil}
+	}
+	return rows
+}
+
+// switchportSeedM4300_16X is the FASTPATH vendor switchport configuration
+// for the M4300-16X, READ OFF THE REAL SWITCH on 2026-07-30 (1440 rows),
+// mirroring Python seed.py's _M4300_16X_SWITCHPORT dict literal
+// (seed.py:2191-2208) field-for-field, port for port.
+//
+// NOTE ports 11 and 12 read (2, 4, 4, all, {1}, {}) and
+// (2, 5, 5, all-minus-5, {1,4}, {5,6,7,10,20,21,41,89,90,99,121,141}) on the
+// live device TODAY -- someone re-homed them since the committed capture
+// was taken (its membership has both untagged in VLAN 1). Seeded to the
+// shape the CAPTURE implies, identical to their sibling trunks 9/10/13-16,
+// so the mock stays internally coherent -- device config drift, NOT a
+// mock/hardware behavioural difference (Python's own comment; the live
+// values for both ports are exercised only by that pin's
+// test_live_switchport_columns_derive_the_live_membership, which replays
+// them directly against seed_m4300_16x() rather than via this table).
+func switchportSeedM4300_16X() map[int]switchportSeedRow {
+	rows := map[int]switchportSeedRow{}
+	// 1-8 are GENERAL mode: membership comes from col7/col8, so despite an
+	// access VLAN of 10/90 these ports are untagged in VLAN 1 -- exactly
+	// what the committed capture shows.
+	for p := 1; p <= 4; p++ {
+		rows[p] = switchportSeedRow{3, 10, 10, nil, []int{1}, nil}
+	}
+	for p := 5; p <= 8; p++ {
+		rows[p] = switchportSeedRow{3, 90, 90, nil, []int{1}, nil}
+	}
+	for p := 9; p <= 16; p++ {
+		rows[p] = switchportSeedRow{2, 1, 1, nil, []int{1}, nil}
+	}
+	return rows
+}
+
+// applySwitchportSeed loads a measured switchport table into s, mirroring
+// Python seed._apply_switchport_seed (seed.py:2211-2225).
+func applySwitchportSeed(s *State, table map[int]switchportSeedRow) {
+	for port, row := range table {
+		s.SwitchportMode[port] = row.mode
+		s.SwitchportAccessVlan[port] = row.access
+		s.SwitchportNativeVlan[port] = row.native
+		if row.allowed == nil {
+			s.SwitchportAllowedVlans[port] = allVlansBitmap()
+		} else {
+			s.SwitchportAllowedVlans[port] = vlanBitmapBytes(portSetFromSlice(row.allowed))
+		}
+		s.SwitchportGeneralUntagged[port] = portSetFromSlice(row.generalUntagged)
+		s.SwitchportGeneralTagged[port] = portSetFromSlice(row.generalTagged)
+	}
+}
+
 // SeedM4300_24X builds a realistic M4300-24X (24-port, non-PoE Fully Managed) State
 // transcribed field-for-field from testdata/captures/m4300-24x.json
 // (SNMP host 10.1.5.13) via the pinned Python seed_m4300_24x: port
@@ -806,6 +925,13 @@ func SeedM4300_24X() *State {
 		Collectors: []SyslogCollectorSim{{Host: "10.1.5.1", Port: 514, Severity: 6, Status: 1, Index: 1}},
 	}
 
+	// The real vendor switchport configuration behind the captured
+	// membership above (READ OFF THE REAL SWITCH on 2026-07-30). Ported
+	// field-for-field from Python's seed_m4300_24x's own trailing
+	// `_apply_switchport_seed(state, _M4300_24X_SWITCHPORT)` call
+	// (seed.py:2526) -- see switchportSeedM4300_24X's own doc comment.
+	applySwitchportSeed(s, switchportSeedM4300_24X())
+
 	return s
 }
 
@@ -962,6 +1088,13 @@ func SeedM4300_16X() *State {
 	// Python's seed_m4300_16x never sets syslog= at all -- this SKU's
 	// remote-logging state was never separately measured, so this mock
 	// honestly carries the dataclass default rather than inventing one.
+
+	// The real vendor switchport configuration behind the captured
+	// membership above (READ OFF THE REAL SWITCH on 2026-07-30). Ported
+	// field-for-field from Python's seed_m4300_16x's own trailing
+	// `_apply_switchport_seed(state, _M4300_16X_SWITCHPORT)` call
+	// (seed.py:2712) -- see switchportSeedM4300_16X's own doc comment.
+	applySwitchportSeed(s, switchportSeedM4300_16X())
 
 	return s
 }

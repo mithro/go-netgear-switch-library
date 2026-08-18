@@ -351,7 +351,9 @@ func (f *CliFace) vlanDBCommand(c string) (string, bool) {
 		// matching a real switch: "vlan 5" on an existing VLAN 5 is not
 		// an error.
 		if _, exists := f.state.Vlans[vid]; !exists {
-			f.state.Vlans[vid] = &VlanSim{Name: ""}
+			// Member/Untagged non-nil -- see the other VLAN-creation sites'
+			// matching comment (state.go) for why.
+			f.state.Vlans[vid] = &VlanSim{Name: "", Member: map[int]bool{}, Untagged: map[int]bool{}}
 		}
 		return cliAccepted, true
 	}

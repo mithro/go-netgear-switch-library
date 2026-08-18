@@ -344,19 +344,35 @@ func echoRequest(vars []gosnmp.SnmpPDU) []gosnmp.SnmpPDU {
 // "apply-uncommitted failure" the dossier maps to a clean wrongValue error
 // status, never a crashed/dropped response.
 //
-// One panic value is distinguished from every other: State.ApplyWrite
-// raises errSyslogRowCreateRefused for a syslog-host RowStatus SET at an
-// index with no existing collector row, mirroring a real m4300-24x
-// agent's own SMI error-status for that measured refusal
-// (inconsistentValue, not the generic wrongValue every other rejected SET
-// in this mock answers with -- see state.go's RowStatus-column block).
+// Three panic classes are distinguished from the generic case, mirroring
+// Python faces/snmp.py's write_variables three-way
+// except CommitFailedError/NotWritableError/InconsistentValueError dispatch
+// (snmp.py:307-317) exactly: State.ApplyWrite (and its state_switchport.go
+// helpers) wrap one of state.go's three sentinel errors
+// (errCommitFailed/errNotWritable/errInconsistentValue) into every such
+// panic's dynamic message, and errors.Is below recovers the classification
+// from that wrap regardless of the specific message text -- mirroring a
+// real agent's own SMI error-status for each measured refusal (commitFailed
+// for the read-only Q-BRIDGE PortList / switchport native-VLAN range check;
+// notWritable for the switchport tagged/untagged participation columns;
+// inconsistentValue for a VLAN-row creation this model's SNMP agent
+// refuses, e.g. the syslog-host RowStatus SET at an absent index or the
+// GS728TPP VLAN-creation refusal). Any OTHER panic (a malformed SET value
+// reaching mustInt/asBytes, or a bug) is the generic wrongValue every other
+// rejected SET in this mock answers with.
 func applyUncommitted(v *MibView, oid string, value any) (status gosnmp.SNMPError, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			ok = false
-			if err, isErr := r.(error); isErr && errors.Is(err, errSyslogRowCreateRefused) {
+			err, isErr := r.(error)
+			switch {
+			case isErr && errors.Is(err, errCommitFailed):
+				status = gosnmp.CommitFailed
+			case isErr && errors.Is(err, errNotWritable):
+				status = gosnmp.NotWritable
+			case isErr && errors.Is(err, errInconsistentValue):
 				status = gosnmp.InconsistentValue
-			} else {
+			default:
 				status = gosnmp.WrongValue
 			}
 		}
