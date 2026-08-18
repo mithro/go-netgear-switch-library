@@ -30,7 +30,18 @@ func PortNameTLV(port int, name string) TLVEntry {
 // HostnameTLV builds the host-name write TLV (tag 0x0003), the SAME shape
 // the read side decodes: the bare name, ASCII, no length prefix and no port
 // byte (unlike PortNameTLV above, whose tag is indexed by port). Ported
-// from pin write.py hostname_tlv.
-func HostnameTLV(name string) TLVEntry {
-	return TLVEntry{Tag: TagHostname, Value: []byte(name)}
+// from pin write.py hostname_tlv (write.py:160-168, pin b26eb1f), which
+// does `name.encode("ascii")` -- raising UnicodeEncodeError on any
+// non-ASCII rune BEFORE the switch is ever touched. hostname_tlv is called
+// inline as an argument of nsdp_write.py:164's `self.client.write(...)`,
+// i.e. after the "before" GetHostname read (nsdp_write.py:163) but before
+// any write I/O. Mirrored here: an error wrapping model.ErrNSDP instead of
+// silently encoding UTF-8 bytes onto the wire.
+func HostnameTLV(name string) (TLVEntry, error) {
+	for i := 0; i < len(name); i++ {
+		if name[i] >= 0x80 {
+			return TLVEntry{}, errNSDP("NSDP hostname must be ASCII, got byte 0x%02X at index %d", name[i], i)
+		}
+	}
+	return TLVEntry{Tag: TagHostname, Value: []byte(name)}, nil
 }

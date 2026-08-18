@@ -258,7 +258,11 @@ func (w *Writer) SetHostname(ctx context.Context, name string, _ bool) error {
 	if err != nil {
 		return err
 	}
-	if _, err := w.client.Write(ctx, []TLVEntry{HostnameTLV(name)}, w.password); err != nil {
+	tlv, err := HostnameTLV(name)
+	if err != nil {
+		return err
+	}
+	if _, err := w.client.Write(ctx, []TLVEntry{tlv}, w.password); err != nil {
 		return err
 	}
 	after, err := w.reader.GetHostname(ctx)

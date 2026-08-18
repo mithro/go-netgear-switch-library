@@ -2,7 +2,10 @@ package nsdp
 
 import (
 	"bytes"
+	"errors"
 	"testing"
+
+	"github.com/mithro/go-netgear-switch-library/model"
 )
 
 func TestVLANDestroyTLV(t *testing.T) {
@@ -23,6 +26,33 @@ func TestPortNameTLV(t *testing.T) {
 	want := append([]byte{0x05}, []byte("uplink")...)
 	if !bytes.Equal(tlv.Value, want) {
 		t.Fatalf("value = % x, want % x (port byte + utf-8 name)", tlv.Value, want)
+	}
+}
+
+func TestHostnameTLV(t *testing.T) {
+	tlv, err := HostnameTLV("plus-sw")
+	if err != nil {
+		t.Fatalf("HostnameTLV(\"plus-sw\") error = %v, want nil", err)
+	}
+	if tlv.Tag != TagHostname {
+		t.Fatalf("tag = %#x, want TagHostname (%#x)", tlv.Tag, TagHostname)
+	}
+	if !bytes.Equal(tlv.Value, []byte("plus-sw")) {
+		t.Fatalf("value = % x, want the bare ASCII name", tlv.Value)
+	}
+}
+
+// TestHostnameTLVRejectsNonASCII mirrors pin write.py's hostname_tlv
+// (write.py:160-168, pin b26eb1f), which does `name.encode("ascii")` and
+// raises UnicodeEncodeError on any non-ASCII rune BEFORE the switch is
+// ever touched. HostnameTLV must refuse the same way, before any I/O.
+func TestHostnameTLVRejectsNonASCII(t *testing.T) {
+	_, err := HostnameTLV("café-switch")
+	if err == nil {
+		t.Fatal("HostnameTLV(\"café-switch\") = nil error, want a non-ASCII rejection")
+	}
+	if !errors.Is(err, model.ErrNSDP) {
+		t.Errorf("HostnameTLV(\"café-switch\") error = %v, want wrapping model.ErrNSDP", err)
 	}
 }
 

@@ -399,6 +399,26 @@ func TestWriter_SetHostnameRejectsEmptyName(t *testing.T) {
 	}
 }
 
+// TestWriter_SetHostnameRejectsNonASCIIName mirrors Python's hostname_tlv
+// (write.py:160-168, pin b26eb1f), which does `name.encode("ascii")` and
+// raises UnicodeEncodeError -- called inline as an argument of
+// nsdp_write.py:164's client.write(...), so it fires BEFORE any write I/O.
+// SetHostname must issue ZERO writes for a non-ASCII name.
+func TestWriter_SetHostnameRejectsNonASCIIName(t *testing.T) {
+	client := newFakeNsdpWriteClient(true)
+	w := newTestWriter(t, client)
+	err := w.SetHostname(context.Background(), "café-switch", false)
+	if err == nil {
+		t.Fatal("SetHostname(\"café-switch\") = nil, want an error")
+	}
+	if !errors.Is(err, model.ErrNSDP) {
+		t.Errorf("SetHostname(\"café-switch\") error = %v, want wrapping model.ErrNSDP", err)
+	}
+	if len(client.writes) != 0 {
+		t.Errorf("SetHostname(\"café-switch\") issued %d writes, want 0 (rejected pre-I/O)", len(client.writes))
+	}
+}
+
 func TestWriter_SetHostnameRejectsWhitespaceOnlyName(t *testing.T) {
 	client := newFakeNsdpWriteClient(true)
 	w := newTestWriter(t, client)
