@@ -18,7 +18,8 @@ func TestLinkSpeedValues(t *testing.T) {
 		{model.LinkSpeedHalf100M, 0x03},
 		{model.LinkSpeedFull100M, 0x04},
 		{model.LinkSpeedGigabit, 0x05},
-		{model.LinkSpeedTenGigabit, 0xFF},
+		{model.LinkSpeedTenGigabit, 0x06},
+		{model.LinkSpeedTenGigabitPriorArt, 0xFF},
 	}
 	for _, c := range cases {
 		if int(c.got) != c.want {
@@ -38,11 +39,11 @@ func TestLinkSpeedFromByte(t *testing.T) {
 		{0x03, model.LinkSpeedHalf100M},
 		{0x04, model.LinkSpeedFull100M},
 		{0x05, model.LinkSpeedGigabit},
-		{0xFF, model.LinkSpeedTenGigabit},
+		{0x06, model.LinkSpeedTenGigabit},
+		{0xFF, model.LinkSpeedTenGigabitPriorArt},
 		// Unknown/undocumented bytes (e.g. unassigned 2.5G/5G codes) must
 		// report Down, never error.
 		{0x77, model.LinkSpeedDown},
-		{0x06, model.LinkSpeedDown},
 	}
 	for _, c := range cases {
 		if got := model.LinkSpeedFromByte(c.in); got != c.want {
@@ -63,6 +64,7 @@ func TestLinkSpeedMbps(t *testing.T) {
 		{model.LinkSpeedFull100M, 100},
 		{model.LinkSpeedGigabit, 1000},
 		{model.LinkSpeedTenGigabit, 10000},
+		{model.LinkSpeedTenGigabitPriorArt, 10000},
 	}
 	for _, c := range cases {
 		if got := c.in.SpeedMbps(); got != c.want {

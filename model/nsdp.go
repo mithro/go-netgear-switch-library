@@ -18,22 +18,52 @@ const (
 	LinkSpeedHalf100M LinkSpeed = 0x03
 	LinkSpeedFull100M LinkSpeed = 0x04
 	LinkSpeedGigabit  LinkSpeed = 0x05
-	// LinkSpeedTenGigabit is ASSUMED/UNVERIFIED — the reference spec states
-	// 2.5G/5G/10G speed byte values are undocumented and require a hardware
-	// capture; 0xFF is carried over from prior art without independent
-	// confirmation.
-	LinkSpeedTenGigabit LinkSpeed = 0xFF
+	// LinkSpeedTenGigabit is MEASURED off real hardware -- a GS110EMX
+	// (10.1.5.25/.26, firmware 1.0.2.8, 2026-07-30) answers PORT_STATUS
+	// "09 06 01" / "0a 06 01" for the two uplinks its own web UI shows as
+	// "10G Full". This Go repo had DRIFTED BEHIND the pinned Python
+	// reference on this exact point -- go-port-pin-b26eb1f's
+	// src/netgear_switch/protocols/nsdp/types.py:40 already carries
+	// `TEN_GIGABIT = 0x06` (with the same GS110EMX capture cited in its own
+	// comment, lines 32-39) and its _MBPS decode table
+	// (protocols/nsdp/types.py:13-22) already maps `0x06: 10000`; this
+	// package's linkSpeedMbps below had no entry for 0x06 at all until this
+	// fix, so LinkSpeedFromByte(0x06) fell through to LinkSpeedDown --
+	// meaning this library would have misread a REAL GS110EMX's 10G uplink
+	// as link-down, independent of any fake. This is the value this repo's
+	// own virtual-switch fake now EMITS for a 10G port (virtual/state.go's
+	// mbpsToSpeedByte, mirroring go-port-pin-b26eb1f's src/netgear_switch/
+	// virtual/state.py:112's `_mbps_to_speed_byte`); it used to emit
+	// LinkSpeedTenGigabitPriorArt below instead, an undetected Go-behind-
+	// pin parity gap CC3 (test/crosslang) caught by diffing this fake's raw
+	// NsdpDevice reading against Python's own fake's, which the pin had
+	// already corrected (that same virtual/state.py:104-110 docstring:
+	// "This mock previously emitted 0xFF here, the same unverified
+	// prior-art guess the DECODER carried ... 0xFF is still decoded ...
+	// but is never emitted").
+	LinkSpeedTenGigabit LinkSpeed = 0x06
+	// LinkSpeedTenGigabitPriorArt is UNVERIFIED prior art carried over from
+	// the reference spec as "the 10G code" without independent confirmation,
+	// mirroring go-port-pin-b26eb1f's protocols/nsdp/types.py:46
+	// `LinkSpeed.TEN_GIGABIT_PRIOR_ART`: still DECODED as 10 Gbps (a real
+	// device this library has not yet talked to might still emit it, and
+	// the pin's own _MBPS table keeps `0xFF: 10000` for exactly that
+	// reason), but never EMITTED by this repo's own fake -- see
+	// LinkSpeedTenGigabit's own doc comment for the measurement that
+	// replaced it there.
+	LinkSpeedTenGigabitPriorArt LinkSpeed = 0xFF
 )
 
 // linkSpeedMbps mirrors Python's module-level _MBPS lookup table.
 var linkSpeedMbps = map[LinkSpeed]int{
-	LinkSpeedDown:       0,
-	LinkSpeedHalf10M:    10,
-	LinkSpeedFull10M:    10,
-	LinkSpeedHalf100M:   100,
-	LinkSpeedFull100M:   100,
-	LinkSpeedGigabit:    1000,
-	LinkSpeedTenGigabit: 10000,
+	LinkSpeedDown:               0,
+	LinkSpeedHalf10M:            10,
+	LinkSpeedFull10M:            10,
+	LinkSpeedHalf100M:           100,
+	LinkSpeedFull100M:           100,
+	LinkSpeedGigabit:            1000,
+	LinkSpeedTenGigabit:         10000,
+	LinkSpeedTenGigabitPriorArt: 10000,
 }
 
 // LinkSpeedFromByte decodes a raw NSDP wire byte into a LinkSpeed, mirroring
