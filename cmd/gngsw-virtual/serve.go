@@ -286,11 +286,16 @@ func startAll(switches []*servedSwitch, cfg serveConfig, stdout, stderr io.Write
 	return started
 }
 
-// stopAll stops every started switch in REVERSE order, continuing past any
-// individual Stop error (reported on stderr) so one face's teardown
-// trouble never leaves a later switch's sockets leaked -- mirroring
-// serve_forever's own `for sw in reversed(started): sw.stop()` inside its
-// finally block.
+// stopAll stops every started switch in REVERSE order, matching
+// serve_forever's own `for sw in reversed(started): sw.stop()`. UNLIKE
+// serve_forever's finally block, though, this loop deliberately continues
+// past an individual Stop error (reported on stderr) instead of letting
+// one switch's teardown trouble abort the loop -- Python's own version has
+// no try/except around sw.stop(), so a single raising Stop there aborts
+// the whole finally block and leaves every switch after it un-stopped.
+// This is a deliberate improvement over that behaviour, not a port of it:
+// one switch's teardown trouble here never leaves a LATER switch's sockets
+// leaked.
 func stopAll(started []*servedSwitch, stderr io.Writer) {
 	for i := len(started) - 1; i >= 0; i-- {
 		if err := started[i].sw.Stop(); err != nil {

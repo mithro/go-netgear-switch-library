@@ -7,6 +7,8 @@ package virtual
 import (
 	"context"
 	"errors"
+	"net"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -277,6 +279,22 @@ func TestVirtualSwitchWithPortPinsNsdpPort(t *testing.T) {
 	if sw.NsdpPort != free {
 		t.Errorf("NsdpPort after Start() with WithPort(%d) = %d, want %d", free, sw.NsdpPort, free)
 	}
+
+	client, err := nsdp.NewUDPClient(sw.Host, nsdp.WithServerPort(sw.NsdpPort), nsdp.WithClientPort(0), nsdp.WithTimeout(5*time.Second))
+	if err != nil {
+		t.Fatalf("nsdp.NewUDPClient: %v", err)
+	}
+	pkt, err := client.Read(context.Background(), []nsdp.Tag{nsdp.TagModel})
+	if err != nil {
+		t.Fatalf("Read against the pinned NSDP port failed: %v", err)
+	}
+	dev, err := nsdp.ParseDevice(*pkt)
+	if err != nil {
+		t.Fatalf("ParseDevice: %v", err)
+	}
+	if dev.Model != "GS305EP" {
+		t.Errorf("ParseDevice.Model = %q, want GS305EP", dev.Model)
+	}
 }
 
 // TestVirtualSwitchWithHTTPPortPinsHTTPPort is WithPort's HTTP-face
@@ -308,6 +326,81 @@ func TestVirtualSwitchWithHTTPPortPinsHTTPPort(t *testing.T) {
 	})
 	if sw.HTTPPort != free {
 		t.Errorf("HTTPPort after Start() with WithHTTPPort(%d) = %d, want %d", free, sw.HTTPPort, free)
+	}
+}
+
+// TestVirtualSwitchStartRollsBackPartiallyBoundFacesOnFailure proves a
+// later face's bind failure unwinds every EARLIER face this Start() call
+// already bound, rather than leaking its socket and serve goroutine --
+// reachable from cmd/gngsw-virtual whenever --port and --http-port
+// (WithPort/WithHTTPPort here) pin two faces and one of the two addresses
+// is already taken: Start binds SNMP first (pinned to a port this test
+// knows is free), THEN fails binding HTTP (pinned to a port this test has
+// deliberately pre-occupied) -- before this fix, Start returned the error
+// with the SNMP face still bound, listening, and serving forever.
+func TestVirtualSwitchStartRollsBackPartiallyBoundFacesOnFailure(t *testing.T) {
+	// A UDP port this test knows is free right now (closed immediately, so
+	// Start can bind it -- and, after the rollback this test is proving,
+	// re-bind it again).
+	probe, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("discovering a free UDP port: %v", err)
+	}
+	snmpPort := probe.LocalAddr().(*net.UDPAddr).Port //nolint:forcetypeassert // net.ListenUDP("udp", ...) always returns a *net.UDPAddr from LocalAddr().
+	if err := probe.Close(); err != nil {
+		t.Fatalf("closing the probe UDP socket: %v", err)
+	}
+
+	// A TCP port this test occupies for the whole test, so HTTP's own bind
+	// genuinely fails (a real "address already in use", not a fabricated
+	// error).
+	occupied, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("occupying a TCP port: %v", err)
+	}
+	defer func() { _ = occupied.Close() }()
+	occupiedPort := occupied.Addr().(*net.TCPAddr).Port //nolint:forcetypeassert // net.ListenTCP("tcp", ...) always returns a *net.TCPAddr from Addr().
+
+	before := runtime.NumGoroutine()
+
+	// gsm7252ps binds SNMP before HTTP (Start's own fixed SNMP->NSDP->HTTP->
+	// SSH->Telnet order), so this reliably exercises "SNMP already bound,
+	// HTTP's bind is what fails".
+	sw, err := NewVirtualSwitch("gsm7252ps", WithPort(snmpPort), WithHTTPPort(occupiedPort))
+	if err != nil {
+		t.Fatalf("NewVirtualSwitch error = %v", err)
+	}
+	if err := sw.Start(); err == nil {
+		t.Fatal("Start() with a colliding --http-port succeeded, want an error")
+	}
+	if sw.SnmpPort != 0 || sw.HTTPPort != 0 {
+		t.Errorf("ports after a failed Start() = snmp:%d http:%d, want 0/0 (rolled back)", sw.SnmpPort, sw.HTTPPort)
+	}
+
+	// The SNMP port Start bound and then had to unwind must be genuinely
+	// released -- proven by successfully re-binding it ourselves, not just
+	// trusting the zeroed field.
+	relisten, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: snmpPort})
+	if err != nil {
+		t.Errorf("SNMP port %d not released after a failed Start(): %v", snmpPort, err)
+	} else {
+		_ = relisten.Close()
+	}
+
+	// A second Stop() after Start's own self-cleaning rollback must remain
+	// a harmless no-op.
+	if err := sw.Stop(); err != nil {
+		t.Errorf("Stop() after a failed Start() error = %v, want nil (already clean)", err)
+	}
+
+	for i := 0; i < 50; i++ {
+		if runtime.NumGoroutine() <= before {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if after := runtime.NumGoroutine(); after > before {
+		t.Errorf("goroutine count after a failed partial Start() = %d, want <= %d (baseline; no leaked serve goroutine)", after, before)
 	}
 }
 

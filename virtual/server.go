@@ -199,9 +199,34 @@ func NewVirtualSwitch(modelKey string, opts ...Option) (*VirtualSwitch, error) {
 // binds all four of its own ports at once. A model with no face at all
 // (none of BackendSNMP/BackendNSDP/BackendHTTP/BackendSSH/BackendTelnet)
 // returns an error wrapping model.ErrUnsupportedCapability.
+//
+// SELF-CLEANING ON A PARTIAL FAILURE: a later face's bind can fail after an
+// earlier one already succeeded (most reachably via cmd/gngsw-virtual's
+// --port/--http-port pinning a face onto an address that's already taken).
+// Every error path below therefore routes through fail, which calls this
+// same switch's own Stop() -- idempotent, and already tears down exactly
+// whichever faces are non-nil -- BEFORE returning the error, so a caller
+// never has to distinguish "Start failed, nothing to clean up" from "Start
+// failed after partially succeeding, something is still bound"; either way
+// every socket and goroutine Start opened before the failure is already
+// closed by the time it returns.
 func (v *VirtualSwitch) Start() error {
 	v.mu.Lock()
-	defer v.mu.Unlock()
+
+	// fail unlocks v.mu (Stop() below re-locks it itself -- sync.Mutex is
+	// not re-entrant, so Start cannot call Stop while still holding the
+	// lock it took at the top of this function) and stops whatever this
+	// call has bound so far, then returns the wrapped error. Every error
+	// return in this function goes through fail instead of a bare
+	// `return fmt.Errorf(...)`, specifically so a spec-lookup failure
+	// (webui.HTTPSpec/fastpath.CLISpec, which happens before that face's
+	// own Start is even attempted) unwinds any EARLIER face that already
+	// bound successfully, not just a later face's own bind failure.
+	fail := func(err error) error {
+		v.mu.Unlock()
+		_ = v.Stop()
+		return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+	}
 
 	if v.modelInfo.HasBackend(model.BackendSNMP) {
 		view := NewMibView(v.State)
@@ -209,7 +234,7 @@ func (v *VirtualSwitch) Start() error {
 		face.SetPort(v.requestedPort)
 		port, err := face.Start()
 		if err != nil {
-			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+			return fail(err)
 		}
 		v.SnmpPort = port
 		v.snmpFace = face
@@ -220,7 +245,7 @@ func (v *VirtualSwitch) Start() error {
 		face.SetPort(v.requestedPort)
 		port, err := face.Start()
 		if err != nil {
-			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+			return fail(err)
 		}
 		v.NsdpPort = port
 		v.nsdpFace = face
@@ -229,13 +254,13 @@ func (v *VirtualSwitch) Start() error {
 	if v.modelInfo.HasBackend(model.BackendHTTP) {
 		spec, err := webui.HTTPSpec(v.modelInfo)
 		if err != nil {
-			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+			return fail(err)
 		}
 		face := NewHTTPFace(v.State, spec, v.httpPassword, v.Host)
 		face.SetPort(v.requestedHTTPPort)
 		port, err := face.Start()
 		if err != nil {
-			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+			return fail(err)
 		}
 		v.HTTPPort = port
 		v.httpFace = face
@@ -244,12 +269,12 @@ func (v *VirtualSwitch) Start() error {
 	if v.modelInfo.HasBackend(model.BackendSSH) {
 		spec, err := fastpath.CLISpec(v.modelInfo)
 		if err != nil {
-			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+			return fail(err)
 		}
 		face := NewSSHFace(v.State, spec, v.cliUsername, v.cliPassword, v.Host)
 		port, err := face.Start()
 		if err != nil {
-			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+			return fail(err)
 		}
 		v.SSHPort = port
 		v.sshFace = face
@@ -258,21 +283,23 @@ func (v *VirtualSwitch) Start() error {
 	if v.modelInfo.HasBackend(model.BackendTelnet) {
 		spec, err := fastpath.CLISpec(v.modelInfo)
 		if err != nil {
-			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+			return fail(err)
 		}
 		face := NewTelnetFace(v.State, spec, v.cliUsername, v.cliPassword, v.Host)
 		port, err := face.Start()
 		if err != nil {
-			return fmt.Errorf("virtual: VirtualSwitch.Start: %w", err)
+			return fail(err)
 		}
 		v.TelnetPort = port
 		v.telnetFace = face
 	}
 
 	if v.snmpFace == nil && v.nsdpFace == nil && v.httpFace == nil && v.sshFace == nil && v.telnetFace == nil {
+		v.mu.Unlock()
 		return fmt.Errorf("model %q has no protocol face this package can bind (no SNMP/NSDP/HTTP/SSH/Telnet backend): %w",
 			v.modelKey, model.ErrUnsupportedCapability)
 	}
+	v.mu.Unlock()
 	return nil
 }
 

@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mithro/go-netgear-switch-library/nsdp"
 	"github.com/mithro/go-netgear-switch-library/snmp"
 	"github.com/mithro/go-netgear-switch-library/virtual"
 )
@@ -286,7 +287,27 @@ func TestRunStopsOnStdinEOF(t *testing.T) {
 		t.Fatalf("announced model = %q, want gs305ep", got[0].Model)
 	}
 	if got[0].NSDPPort == 0 {
-		t.Error("gs305ep NSDPPort = 0, want nonzero")
+		t.Fatal("gs305ep NSDPPort = 0, want nonzero")
+	}
+
+	// Prove the announced NSDP port is actually live, not just nonzero --
+	// the same standard the SNMP/HTTP/SSH/Telnet ports are held to in
+	// TestRunAnnouncesStartedSwitchesWithReachablePorts.
+	nsdpClient, err := nsdp.NewUDPClient(got[0].Host,
+		nsdp.WithServerPort(got[0].NSDPPort), nsdp.WithClientPort(0), nsdp.WithTimeout(5*time.Second))
+	if err != nil {
+		t.Fatalf("nsdp.NewUDPClient: %v", err)
+	}
+	pkt, err := nsdpClient.Read(context.Background(), []nsdp.Tag{nsdp.TagModel})
+	if err != nil {
+		t.Fatalf("NSDP Read against announced port failed: %v", err)
+	}
+	dev, err := nsdp.ParseDevice(*pkt)
+	if err != nil {
+		t.Fatalf("nsdp.ParseDevice: %v", err)
+	}
+	if dev.Model != "GS305EP" {
+		t.Errorf("NSDP-reported model = %q, want GS305EP", dev.Model)
 	}
 
 	if err := stdinW.Close(); err != nil {
