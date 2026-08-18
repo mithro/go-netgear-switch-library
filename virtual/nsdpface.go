@@ -45,6 +45,7 @@ const (
 type NsdpFace struct {
 	state *State
 	host  string
+	port  int // 0 (the default) asks the OS for an ephemeral port; see SetPort.
 
 	mu   sync.Mutex
 	conn *net.UDPConn
@@ -106,9 +107,21 @@ func NewNsdpFace(state *State, host string) *NsdpFace {
 	return &NsdpFace{state: state, host: host}
 }
 
-// Start binds an ephemeral UDP port on f.host and begins serving on a
-// background goroutine, returning the bound port. Calling Start twice
-// without an intervening Stop is an error.
+// SetPort pins the UDP port Start binds to, mirroring the Python
+// reference's VirtualSwitch(port=...) constructor argument (server.py's own
+// "self.port" -- see D-VIRT §5's shared-port-field note; SnmpFace.SetPort
+// carries the same doc comment). The default, 0, asks the OS for an
+// ephemeral port, same as before this method existed. Call before Start; a
+// call after Start has no effect until the next Start following a Stop.
+func (f *NsdpFace) SetPort(port int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.port = port
+}
+
+// Start binds f.host:f.port (an ephemeral port when f.port is 0, the
+// default) and begins serving on a background goroutine, returning the
+// bound port. Calling Start twice without an intervening Stop is an error.
 func (f *NsdpFace) Start() (port int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -116,7 +129,7 @@ func (f *NsdpFace) Start() (port int, err error) {
 		return 0, fmt.Errorf("virtual: NsdpFace.Start: already started")
 	}
 
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(f.host)})
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(f.host), Port: f.port})
 	if err != nil {
 		return 0, fmt.Errorf("virtual: NsdpFace.Start: listen udp on %s: %w", f.host, err)
 	}

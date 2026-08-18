@@ -38,13 +38,14 @@ import (
 
 // SnmpFace is an SNMPv2c command-responder agent serving a MibView. Runs its
 // receive loop on a dedicated goroutine, bound to an ephemeral UDP port on
-// host. Construct with NewSnmpFace; call Start to bind and begin serving,
-// Stop to tear down (idempotent; safe to call before Start or more than
-// once).
+// host (or a caller-pinned one, see SetPort). Construct with NewSnmpFace;
+// call Start to bind and begin serving, Stop to tear down (idempotent; safe
+// to call before Start or more than once).
 type SnmpFace struct {
 	view      *MibView
 	community string
 	host      string
+	port      int // 0 (the default) asks the OS for an ephemeral port; see SetPort.
 
 	mu   sync.Mutex
 	conn *net.UDPConn
@@ -58,9 +59,21 @@ func NewSnmpFace(view *MibView, community, host string) *SnmpFace {
 	return &SnmpFace{view: view, community: community, host: host}
 }
 
-// Start binds an ephemeral UDP port on f.host and begins serving on a
-// background goroutine, returning the bound port. Calling Start twice
-// without an intervening Stop is an error.
+// SetPort pins the UDP port Start binds to, mirroring the Python
+// reference's VirtualSwitch(port=...) constructor argument (server.py's own
+// "self.port" -- see D-VIRT §5's shared-port-field note). The default, 0,
+// asks the OS for an ephemeral port, same as before this method existed.
+// Call before Start; a call after Start has no effect until the next Start
+// following a Stop.
+func (f *SnmpFace) SetPort(port int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.port = port
+}
+
+// Start binds f.host:f.port (an ephemeral port when f.port is 0, the
+// default) and begins serving on a background goroutine, returning the
+// bound port. Calling Start twice without an intervening Stop is an error.
 func (f *SnmpFace) Start() (port int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -68,7 +81,7 @@ func (f *SnmpFace) Start() (port int, err error) {
 		return 0, fmt.Errorf("virtual: SnmpFace.Start: already started")
 	}
 
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(f.host)})
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(f.host), Port: f.port})
 	if err != nil {
 		return 0, fmt.Errorf("virtual: SnmpFace.Start: listen udp on %s: %w", f.host, err)
 	}
