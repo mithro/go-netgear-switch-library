@@ -28,13 +28,27 @@ package webui
 // "_require_path" message ("model %r has no %s page in its HTTP endpoint
 // spec (see protocols/http/endpoints.py for whether that is a measured
 // absence or an undiscovered page)") are two DIFFERENT strings for the same
-// condition -- a latent inconsistency the dossier flags as unintentional
-// and recommends NOT reproducing verbatim. This Go port standardizes on the
-// more informative write-side wording for every "no page for this op"
-// error, read or write, per CLAUDE.md principle 4 ("no fabricated device
-// limitations" -- a bare "does not expose X" reads as a measured fact,
-// while the longer wording correctly leaves open whether the gap is
-// measured or merely undiscovered).
+// condition. This Go port standardizes on the more informative write-side
+// wording for every "no page for this op" error reached via requirePath
+// (below) -- covering both the write side and the majority of reads, since
+// in http_read.py those same ops ALSO route through _require_path, which
+// (in that file) happens to just call _unsupported; picking the more
+// informative wording for the Go equivalent avoids a bare "does not expose
+// X" reading as a measured fact when the underlying gap may simply be
+// undiscovered (CLAUDE.md principle 4, "no fabricated device
+// limitations").
+//
+// Three reads -- GetSensors/GetHostname/GetMgmtIP -- are different: their
+// Python counterparts (http_read.py get_sensors/get_hostname/get_mgmt_ip)
+// bypass _require_path entirely and raise _unsupported(model_key, op)
+// directly, with op phrases ("box sensors", "a host name field",
+// "management-IP config") chosen to read naturally after "does not
+// expose". Routing those same op strings through the write-style "has no
+// %s page..." template (as this file used to) produced ungrammatical
+// prose for the hostname case specifically ("has no a host name field
+// page..."). unsupportedRead below mirrors _unsupported verbatim and is
+// used ONLY at those three call sites, matching Python's own structural
+// split rather than papering over it with one template.
 
 import (
 	"context"
@@ -63,6 +77,18 @@ func requirePath(modelKey, path, op string) (string, error) {
 		return "", unsupportedOp(modelKey, op)
 	}
 	return path, nil
+}
+
+// unsupportedRead wraps model.ErrUnsupportedCapability naming modelKey and
+// op, mirroring http_read.py's own "_unsupported" message VERBATIM
+// (http_read.py:65-68, pin b26eb1f: `f"model {model_key!r} web UI does not
+// expose {op}"`). Used only by GetSensors/GetHostname/GetMgmtIP, whose
+// Python counterparts raise _unsupported directly rather than routing
+// through _require_path -- see the package-level "Message-wording note"
+// above for why those three keep Python's own read-side prose instead of
+// unsupportedOp's write-style template.
+func unsupportedRead(modelKey, op string) error {
+	return fmt.Errorf("model %q web UI does not expose %s: %w", modelKey, op, model.ErrUnsupportedCapability)
 }
 
 // requireUnverifiedReads mirrors Python's _require_verified_reads
@@ -783,7 +809,7 @@ func (r *Reader) GetLLDP(ctx context.Context) ([]model.LLDPNeighbor, error) {
 // see its doc comment for the S3300 (gsm7228ps) exclusion.
 func (r *Reader) GetSensors(ctx context.Context) ([]model.Sensor, error) {
 	if !SupportsSensors(r.spec) {
-		return nil, unsupportedOp(r.model.Key, "box sensors")
+		return nil, unsupportedRead(r.model.Key, "box sensors")
 	}
 	html, err := r.session.GetPage(ctx, r.spec.SysinfoPath)
 	if err != nil {
@@ -823,7 +849,7 @@ func HasSysinfoHostname(spec *HTTPModelSpec) bool {
 // "this backend cannot tell you".
 func (r *Reader) GetHostname(ctx context.Context) (string, error) {
 	if !HasSysinfoHostname(r.spec) {
-		return "", unsupportedOp(r.model.Key, "a host name field")
+		return "", unsupportedRead(r.model.Key, "a host name field")
 	}
 	page, err := r.session.GetPage(ctx, r.spec.SysinfoPath)
 	if err != nil {
@@ -847,7 +873,7 @@ func (r *Reader) GetHostname(ctx context.Context) (string, error) {
 func (r *Reader) GetMgmtIP(ctx context.Context) (model.MgmtIPConfig, error) {
 	path := MgmtIPPath(r.spec)
 	if path == "" {
-		return model.MgmtIPConfig{}, unsupportedOp(r.model.Key, "management-IP config")
+		return model.MgmtIPConfig{}, unsupportedRead(r.model.Key, "management-IP config")
 	}
 	page, err := r.session.GetPage(ctx, path)
 	if err != nil {
