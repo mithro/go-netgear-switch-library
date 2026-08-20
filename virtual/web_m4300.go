@@ -136,6 +136,15 @@ func ApplyM4300PoE(state *State, form map[string]string) string {
 // pair) -- reproduced exactly as the real capture shows, even though "24"
 // does not track the actual rendered row count; this page is read-only, so
 // no writer depends on that number being accurate.
+//
+// G2C-1 (docs/hardware-findings.md): this renders only 6 of the ~16 fields
+// the real capture `webui/testdata/http/m4300_portstats.html` carries, under
+// a different xid scheme than that capture's own `1_1_*` columns. Verified
+// harmless and deliberate: webui/parse_m4300.go's ParseM4300Stats keys
+// cells by field-name comment, never by xid, and consumes only these same 6
+// fields (model.PortStats has no columns for the rest); the pinned Python
+// reference's render_port_statistics renders this identical reduced set
+// under this identical xid scheme. Not a Go-behind-Python gap.
 func RenderM4300PortStatistics(state *State) string {
 	body := ""
 	for _, port := range m4300PhysicalPorts(state) {
