@@ -559,11 +559,14 @@ type State struct {
 	VLANPortListWidth *int
 
 	// NSDP-extra fields (D-VIRT §1.3), nil-able/unseeded semantics
-	// mirroring the Python dataclass exactly. NOT consumed by anything in
-	// this slice: the NsdpTlvs()/ApplyNsdpWrite() methods that project and
-	// mutate these fields are slice-05 scope (protocols/nsdp face work) --
-	// these fields exist here now purely so State's shape is complete and
-	// later slices don't need to touch this struct's field list again.
+	// mirroring the Python dataclass exactly. Projected READ-ONLY: NsdpTlvs
+	// (below) emits QOS_ENGINE/PORT_MIRRORING/IGMP_SNOOPING/
+	// BROADCAST_FILTERING/LOOP_DETECTION TLVs from these fields when a
+	// caller's tag set asks for them and the field is non-nil, but
+	// ApplyNsdpWrite never mutates any of the seven -- faithful to the
+	// pinned Python reference, whose own to_tlvs (state.py:1552-1598)
+	// projects the same five tags and whose apply_nsdp_write likewise never
+	// writes them.
 	NsdpQosEngine            *int
 	NsdpPortMirroringDest    *int
 	NsdpPortMirroringSources map[int]bool

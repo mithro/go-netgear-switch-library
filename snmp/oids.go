@@ -18,9 +18,10 @@ import (
 //
 // SysDescr and SysObjectID are full, instance-qualified (".0") leaf OIDs,
 // fetched with a plain exact-OID GET (unlike the walk-based base-OIDs
-// below) -- see the (later-slice) system-info reader. SysObjectID is
-// matched via the (later-slice) SYSOBJECTID_MODELS table, the authoritative
-// signal tried first; SysDescr is the fallback text heuristic.
+// below) -- see ReadSystemInfo (reader.go), the system-info reader that
+// fetches both. SysObjectID is matched via the SysObjectIDModels table
+// (parse.go), the authoritative signal tried first; SysDescr is the
+// fallback text heuristic.
 const (
 	// SysDescr is sysDescr: text including the model name.
 	SysDescr = "1.3.6.1.2.1.1.1.0"
@@ -261,8 +262,8 @@ const (
 	// DHCP-vs-static management-IP mode.
 	//
 	// This is an unconfirmed guess used only so the mock and the reader
-	// agree under test; it MUST be confirmed against real hardware via the
-	// capture utility (Slice 7) before it is trusted. Until then reading
+	// agree under test; it remains unverified pending a future SNMP capture
+	// against real hardware before it is trusted. Until then reading
 	// the management IP mode reports IPModeUnknown when this OID is absent.
 	// The ONE symbol every call site uses for this OID is
 	// VendorOids.DHCPModeUnverified -- no call site may hard-code a
@@ -343,7 +344,7 @@ type VendorOids struct {
 	//
 	// MgmtWriteAddrUnverified/MgmtWriteNetmaskUnverified/
 	// MgmtWriteGatewayUnverified are UNVERIFIED writable management-IP
-	// OIDs -- placeholders pending Slice 7 hardware capture. They are
+	// OIDs -- placeholders pending a future SNMP hardware capture. They are
 	// NEVER trusted on real hardware (writing the management IP is
 	// force-gated and documented UNVERIFIED); they exist so the mutable
 	// mock and the writer agree under test, mirroring the

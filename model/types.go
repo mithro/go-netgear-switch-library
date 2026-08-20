@@ -530,10 +530,12 @@ type SyslogConfig struct {
 // known-OID map (the preferred, authoritative signal -- an unambiguous
 // manufacturer product identifier, tried first) or, failing that, SysDescr
 // confidently matches exactly one registered model's name (the fallback
-// text heuristic); nil is never a fabricated guess. The Go port's
-// DetectModel arrives in a later slice and MUST port the Python reference's
-// SYSOBJECTID_MODELS map (protocols/snmp/parse.py) to preserve this
-// preference order.
+// text heuristic); nil is never a fabricated guess. The root package's
+// DetectModel (detect.go) implements this via snmp.ReadSystemInfo, which
+// tries snmp.DetectModelFromSysObjectID (matched against snmp.
+// SysObjectIDModels) first and falls back to snmp.DetectModelFromSysDescr
+// only when that misses -- preserving this exact preference order; also
+// wired into Switch.Identify (switch.go).
 type DetectedModel struct {
 	Key         *string `json:"key"`
 	SysDescr    *string `json:"sys_descr"`

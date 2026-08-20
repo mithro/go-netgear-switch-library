@@ -11,10 +11,13 @@ package webui
 // have to either fabricate the missing pages (exactly the mislabelling the
 // wrong-VLAN guard exists to catch) or fail. Python's own test suite
 // defers that full round trip to tests/test_http_vlan_membership.py's
-// VirtualHttpFace mock (a later task's territory here). This file instead
-// exercises the real composition directly, restricted to the VLANs real
-// captures exist for -- same fixtures, no fabrication, in-package so it
-// can reach Reader's unexported fields/methods.
+// VirtualHttpFace mock; this Go port's equivalent fake lives in
+// virtual/httpface.go, but webui deliberately does not import virtual (a
+// leaf-vs-consumer layering this repo keeps one-directional), so that same
+// full round trip is out of reach here too. This file instead exercises
+// the real composition directly, restricted to the VLANs real captures
+// exist for -- same fixtures, no fabrication, in-package so it can reach
+// Reader's unexported fields/methods.
 
 import (
 	"context"
