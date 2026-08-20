@@ -498,7 +498,7 @@ func (f *CliFace) renderLLDP() string {
 		if n.Chassis != "" {
 			chassis = cliMacHex([]byte(n.Chassis))
 		}
-		rows = append(rows, []string{f.iface(n.LocalPort), strconv.Itoa(n.RemIdx), chassis, n.PortID, n.SysName})
+		rows = append(rows, []string{f.iface(n.LocalPort), strconv.Itoa(n.RemIdx), chassis, lldpPortIDText(n.PortID), n.SysName})
 	}
 	title := []string{"LLDP Remote Device Summary", "", "Local"}
 	return strings.Join(title, "\n") + "\n" + cliTable(headers, widths, rows)

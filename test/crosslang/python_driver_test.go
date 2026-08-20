@@ -38,12 +38,13 @@ package crosslang
 // is still fully exercised for every FASTPATH model here -- only the
 // transport differs, and that is recorded, not hidden.
 //
-// Six of the 183 triples this suite compares are NOT a plain Go-fake-vs-
+// Ten of the 183 triples this suite compares are NOT a plain Go-fake-vs-
 // Python-fake differential: TestPythonLibVsGoFake_AllBackends' own doc
 // comment, referenceUnavailableInPythonFake's doc comment, and
-// cc3_read_diff.py's _KNOWN_LLDP_PORT_ID_DIVERGENCE explain exactly which
-// six, why, and how each substitution stays self-verifying rather than a
-// silent, permanent exception.
+// cc3_read_diff.py's _KNOWN_LLDP_PORT_ID_DIVERGENCE/
+// _KNOWN_LLDP_SYSNAME_DIVERGENCE/_KNOWN_STATS_PACKETS_DIVERGENCE explain
+// exactly which ten, why, and how each substitution stays self-verifying
+// rather than a silent, permanent exception.
 
 import (
 	"bytes"
@@ -358,9 +359,13 @@ const wantCC3TripleCount = 183
 // HTTP + CLI-over-telnet; never SSH -- see cc3ServedBackends), and asserts
 // Python's library reads the SAME thing from the Go fake as it does from its
 // own in-process Python reference fake for every one of them -- except the
-// two documented, self-verifying substitutions below, applied to exactly
-// six triples out of 183 (all six discovered, root-caused and reported by
-// this suite's own first run; see this slice's delivery reports):
+// four documented, self-verifying substitutions below, applied to exactly
+// ten triples out of 183 (the first four discovered, root-caused and
+// reported by this suite's own first run; the LLDP triples grown from two to
+// three, joined by the sys-name substitution, and joined by the three
+// get_stats substitutions, during gate-2 hardware verification (2026-08-20)
+// once real captures let Go's fake be fixed to match hardware -- see this
+// slice's delivery reports):
 //
 //   - referenceUnavailableInPythonFake (4 triples): the Python reference
 //     fake genuinely cannot serve get_users/get_services over telnet on
@@ -368,19 +373,46 @@ const wantCC3TripleCount = 183
 //     virtual/faces/cli.py citation) -- these run a READER-PARITY check
 //     (Go-lib(Go-fake) == Python-lib(Go-fake), both reading the SAME live
 //     fake instance) instead of dropping the coverage entirely.
-//   - _KNOWN_LLDP_PORT_ID_DIVERGENCE (2 triples, defined in
-//     cc3_read_diff.py): get_lldp on m4300-24x/http and m4300-16x/telnet
-//     excludes ONLY the remote_port_id field of the specific rows whose Port
-//     ID is a raw binary MAC-subtype value the two fakes' HTTP/CLI text
-//     layers round-trip differently (pending a hardware LLDP Port ID
-//     capture) -- every other field, and every other row of the same
-//     table, stays fully compared.
+//   - _KNOWN_LLDP_PORT_ID_DIVERGENCE (3 triples, defined in
+//     cc3_read_diff.py): get_lldp on m4300-24x/http, m4300-24x/telnet and
+//     m4300-16x/telnet excludes ONLY the remote_port_id field of the
+//     specific rows whose Port ID is a raw MAC-subtype value. Two committed
+//     real captures (webui/testdata/http/m4300_lldpRemoteInventory.html,
+//     fastpath/testdata/cli/m4300_24x_show_lldp_remote_device_all.txt) prove
+//     real hardware renders this as uppercase colon-hex; Go's fake was
+//     fixed during gate-2 to match, and this is now a DOCUMENTED
+//     Go-fake-ahead-of-Python-fake gap (the read-only pinned Python
+//     reference fake still emits raw, unfixed bytes for these rows), not an
+//     unresolved ambiguity -- every other field, and every other row of the
+//     same table, stays fully compared.
+//   - _KNOWN_LLDP_SYSNAME_DIVERGENCE (0 additional triples -- same 1 triple
+//     as one of the three above, m4300-16x/telnet/get_lldp, with a second,
+//     independent field-level exclusion layered on the same row):
+//     local_port 16's raw Port ID bytes happen to embed a literal ASCII LF,
+//     which used to corrupt BOTH fakes' fixed-width CLI table row
+//     identically (masking the divergence); Go's gate-2 fix removed the
+//     embedded control byte from its own rendering, so only the still-
+//     unfixed Python reference fake's row remains corrupted -- another
+//     documented Go-ahead gap, not a Go regression.
+//   - _KNOWN_STATS_PACKETS_DIVERGENCE (3 triples, defined in
+//     cc3_read_diff.py): get_stats on m4300-24x/snmp, m4300-24x/http and
+//     m4300-24x/telnet excludes ONLY rx_packets/tx_packets, for every port
+//     row. Gate-2 fixed virtual/seed.go's SeedM4300_24X to serve real
+//     captured unicast-packet counters (already present in
+//     virtual/testdata/captures/m4300-24x.json's own "stats" section --
+//     simply never wired into the seed before) instead of leaving them
+//     nil, matching real hardware (gate-2 live-verified, port 1:
+//     rx_packets~=20455434750, tx_packets~=18675057818). The pinned Python
+//     reference fake's own seed_m4300_24x carries the identical omission,
+//     unfixed -- another documented Go-ahead gap, not a Go regression --
+//     every other stats field (port, rx_bytes, tx_bytes, rx_errors,
+//     tx_errors) stays fully compared.
 //
-// Neither substitution is a bare allowlist: both are self-verifying (a
-// per-triple check that FAILS this suite loudly the moment the substitution
-// stops being necessary) and both are scoped as narrowly as the evidence
-// supports, so a regression anywhere else -- a different model, a different
-// field, a different row -- still fails normally.
+// No substitution here is a bare allowlist: every one is self-verifying (a
+// per-row, per-field check that FAILS this suite loudly the moment the
+// substitution stops being necessary) and scoped as narrowly as the
+// evidence supports, so a regression anywhere else -- a different model, a
+// different field, a different row -- still fails normally.
 func TestPythonLibVsGoFake_AllBackends(t *testing.T) {
 	provider := &virtual.GoFakeProvider{}
 	t.Cleanup(func() { _ = provider.CloseAll() })

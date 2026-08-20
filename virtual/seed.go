@@ -337,7 +337,18 @@ func SeedGSM7252PS() *State {
 
 	s.SysDescr = "NETGEAR GSM7252PS Managed Switch, firmware 8.0.6.6"
 
-	s.SysObjectID = "1.3.6.1.4.1.4526.10.100.14"
+	// REAL MEASURED value: live SNMP GET of sysObjectID against the actual
+	// gsm7252ps @10.1.5.22 (firmware 10.0.0.53), captured 2026-08-20. This
+	// replaces a previous unverified placeholder
+	// ("1.3.6.1.4.1.4526.10.100.14", still carried unfixed by the Python
+	// pin's seed_gsm7252ps -- see seed.py:1276-1281's own "UNVERIFIED
+	// virtual/test placeholder ... no capture of the real value exists"
+	// comment) now that a live capture exists. Not added to
+	// snmp.SysObjectIDModels: that map is reserved for OIDs actually proven
+	// to identify a model (see its own doc comment); this switch's
+	// sysDescr already contains "GSM7252PS" and detects fine via
+	// DetectModelFromSysDescr.
+	s.SysObjectID = "1.3.6.1.4.1.4526.100.1.10"
 
 	// Real fixed Q-BRIDGE PortList width, measured LIVE (read-only) on this
 	// switch @10.1.5.22: dot1qVlanStaticEgressPorts is 79 bytes wide.
@@ -744,32 +755,48 @@ func applySwitchportSeed(s *State, table map[int]switchportSeedRow) {
 // identity-mapped bridge-port -> ifIndex (see SeedGSM7252PS for the
 // non-identity-mapping case). LLDP neighbours mix MAC-shaped
 // (raw-bytes) and plain-text port-id subtypes on purpose.
+//
+// RxUcast/TxUcast (gate-2 hardware-fidelity fix, 2026-08-20): every
+// physical port's unicast packet counters, transcribed from the SAME
+// already-committed testdata/captures/m4300-24x.json "stats" section this
+// function's RxOctets/TxOctets/RxErrors/TxErrors already came from --
+// simply never wired up here before. Real hardware always answers
+// RxPackets/TxPackets (live-verified: port 1 read live off 10.1.5.13
+// during gate-2 read RxPackets~=20455434750/TxPackets~=18675057818, a
+// larger-but-consistent count than this older capture's snapshot, exactly
+// what a live incrementing counter looks like weeks later), so a fake
+// that leaves them nil was diverging from every real switch's own
+// behaviour -- see docs/hardware-findings.md. Using this capture's own
+// packet counts (rather than the fresher live-session numbers, which
+// exist only for port 1) keeps every port's RxOctets/TxOctets/RxUcast/
+// TxUcast internally consistent as one real snapshot moment, matching
+// SeedGSM7252PS's own shape.
 func SeedM4300_24X() *State {
 	ports := map[int]*PortSim{
-		1:   {Name: "1/0/1", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(14778916968081)), TxOctets: model.Ptr(uint64(11768639639224)), RxErrors: model.Ptr(uint64(5)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("trunk.sw-cisco-shed")},
-		2:   {Name: "1/0/2", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(22592906553)), TxOctets: model.Ptr(uint64(72917119482)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("trunk.gsm7252ps-s1")},
-		3:   {Name: "1/0/3", Admin: true, Link: true, Speed: 1000, RxOctets: model.Ptr(uint64(2762192715)), TxOctets: model.Ptr(uint64(3069701383)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("bmc.big-storage")},
-		4:   {Name: "1/0/4", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("bmc.gpu")},
-		5:   {Name: "1/0/5", Admin: true, Link: true, Speed: 100, RxOctets: model.Ptr(uint64(9928397370)), TxOctets: model.Ptr(uint64(103562789705)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("openmesh.wifi")},
-		6:   {Name: "1/0/6", Admin: true, Link: true, Speed: 1000, RxOctets: model.Ptr(uint64(2936543951)), TxOctets: model.Ptr(uint64(6369912656)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("eth0.rpi4-ups")},
-		7:   {Name: "1/0/7", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("empty")},
-		8:   {Name: "1/0/8", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("empty")},
-		9:   {Name: "1/0/9", Admin: true, Link: true, Speed: 1000, RxOctets: model.Ptr(uint64(241280077)), TxOctets: model.Ptr(uint64(1045875073)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("oob1.sw-bb-25g")},
-		10:  {Name: "1/0/10", Admin: true, Link: true, Speed: 1000, RxOctets: model.Ptr(uint64(79644425)), TxOctets: model.Ptr(uint64(1532447568)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("oob2.sw-bb-25g")},
-		11:  {Name: "1/0/11", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("oob1.sw-bb-100g")},
-		12:  {Name: "1/0/12", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("oob2.sw-bb-100g")},
-		13:  {Name: "1/0/13", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(4321)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("bmc1.nvmeof")},
-		14:  {Name: "1/0/14", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(4385)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("bmc2.nvmeof")},
-		15:  {Name: "1/0/15", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("empty")},
-		16:  {Name: "1/0/16", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("empty")},
-		17:  {Name: "1/0/17", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("10g1.gpu")},
-		18:  {Name: "1/0/18", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("10g2.gpu")},
-		19:  {Name: "1/0/19", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(10574049492450)), TxOctets: model.Ptr(uint64(7436979985884)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("10g1.big-storage")},
-		20:  {Name: "1/0/20", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(906023695499)), TxOctets: model.Ptr(uint64(3169248684569)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("10g2.big-storage")},
-		21:  {Name: "1/0/21", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(46742037001)), TxOctets: model.Ptr(uint64(214440657859)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("lag.sw-bb-25g")},
-		22:  {Name: "1/0/22", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(62196040279)), TxOctets: model.Ptr(uint64(2295667872290)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("lag.sw-bb-25g")},
-		23:  {Name: "1/0/23", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(53538213549)), TxOctets: model.Ptr(uint64(4490316365)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("lag.sw-bb-25g")},
-		24:  {Name: "1/0/24", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(60910004579)), TxOctets: model.Ptr(uint64(1478343156644)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("lag.sw-bb-25g")},
+		1:   {Name: "1/0/1", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(14778916968081)), TxOctets: model.Ptr(uint64(11768639639224)), RxUcast: model.Ptr(uint64(16955746954)), TxUcast: model.Ptr(uint64(16303505628)), RxErrors: model.Ptr(uint64(5)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("trunk.sw-cisco-shed")},
+		2:   {Name: "1/0/2", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(22592906553)), TxOctets: model.Ptr(uint64(72917119482)), RxUcast: model.Ptr(uint64(170576506)), TxUcast: model.Ptr(uint64(219867630)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("trunk.gsm7252ps-s1")},
+		3:   {Name: "1/0/3", Admin: true, Link: true, Speed: 1000, RxOctets: model.Ptr(uint64(2762192715)), TxOctets: model.Ptr(uint64(3069701383)), RxUcast: model.Ptr(uint64(23103453)), TxUcast: model.Ptr(uint64(22997030)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("bmc.big-storage")},
+		4:   {Name: "1/0/4", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxUcast: model.Ptr(uint64(0)), TxUcast: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("bmc.gpu")},
+		5:   {Name: "1/0/5", Admin: true, Link: true, Speed: 100, RxOctets: model.Ptr(uint64(9928397370)), TxOctets: model.Ptr(uint64(103562789705)), RxUcast: model.Ptr(uint64(51903548)), TxUcast: model.Ptr(uint64(129293895)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("openmesh.wifi")},
+		6:   {Name: "1/0/6", Admin: true, Link: true, Speed: 1000, RxOctets: model.Ptr(uint64(2936543951)), TxOctets: model.Ptr(uint64(6369912656)), RxUcast: model.Ptr(uint64(35405237)), TxUcast: model.Ptr(uint64(37990824)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("eth0.rpi4-ups")},
+		7:   {Name: "1/0/7", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxUcast: model.Ptr(uint64(0)), TxUcast: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("empty")},
+		8:   {Name: "1/0/8", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxUcast: model.Ptr(uint64(0)), TxUcast: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("empty")},
+		9:   {Name: "1/0/9", Admin: true, Link: true, Speed: 1000, RxOctets: model.Ptr(uint64(241280077)), TxOctets: model.Ptr(uint64(1045875073)), RxUcast: model.Ptr(uint64(646620)), TxUcast: model.Ptr(uint64(707212)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("oob1.sw-bb-25g")},
+		10:  {Name: "1/0/10", Admin: true, Link: true, Speed: 1000, RxOctets: model.Ptr(uint64(79644425)), TxOctets: model.Ptr(uint64(1532447568)), RxUcast: model.Ptr(uint64(319651)), TxUcast: model.Ptr(uint64(797143)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("oob2.sw-bb-25g")},
+		11:  {Name: "1/0/11", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxUcast: model.Ptr(uint64(0)), TxUcast: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("oob1.sw-bb-100g")},
+		12:  {Name: "1/0/12", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxUcast: model.Ptr(uint64(0)), TxUcast: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("oob2.sw-bb-100g")},
+		13:  {Name: "1/0/13", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(4321)), RxUcast: model.Ptr(uint64(0)), TxUcast: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("bmc1.nvmeof")},
+		14:  {Name: "1/0/14", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(4385)), RxUcast: model.Ptr(uint64(0)), TxUcast: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("bmc2.nvmeof")},
+		15:  {Name: "1/0/15", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxUcast: model.Ptr(uint64(0)), TxUcast: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("empty")},
+		16:  {Name: "1/0/16", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxUcast: model.Ptr(uint64(0)), TxUcast: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("empty")},
+		17:  {Name: "1/0/17", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxUcast: model.Ptr(uint64(0)), TxUcast: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("10g1.gpu")},
+		18:  {Name: "1/0/18", Admin: true, Link: false, Speed: 0, RxOctets: model.Ptr(uint64(0)), TxOctets: model.Ptr(uint64(0)), RxUcast: model.Ptr(uint64(0)), TxUcast: model.Ptr(uint64(0)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("10g2.gpu")},
+		19:  {Name: "1/0/19", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(10574049492450)), TxOctets: model.Ptr(uint64(7436979985884)), RxUcast: model.Ptr(uint64(13764704450)), TxUcast: model.Ptr(uint64(11508819525)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("10g1.big-storage")},
+		20:  {Name: "1/0/20", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(906023695499)), TxOctets: model.Ptr(uint64(3169248684569)), RxUcast: model.Ptr(uint64(1372651952)), TxUcast: model.Ptr(uint64(2293251296)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("10g2.big-storage")},
+		21:  {Name: "1/0/21", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(46742037001)), TxOctets: model.Ptr(uint64(214440657859)), RxUcast: model.Ptr(uint64(229512234)), TxUcast: model.Ptr(uint64(180273816)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("lag.sw-bb-25g")},
+		22:  {Name: "1/0/22", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(62196040279)), TxOctets: model.Ptr(uint64(2295667872290)), RxUcast: model.Ptr(uint64(219772992)), TxUcast: model.Ptr(uint64(1533979024)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("lag.sw-bb-25g")},
+		23:  {Name: "1/0/23", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(53538213549)), TxOctets: model.Ptr(uint64(4490316365)), RxUcast: model.Ptr(uint64(203092688)), TxUcast: model.Ptr(uint64(2077915)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("lag.sw-bb-25g")},
+		24:  {Name: "1/0/24", Admin: true, Link: true, Speed: 10000, RxOctets: model.Ptr(uint64(60910004579)), TxOctets: model.Ptr(uint64(1478343156644)), RxUcast: model.Ptr(uint64(243159913)), TxUcast: model.Ptr(uint64(1039120183)), RxErrors: model.Ptr(uint64(0)), TxErrors: model.Ptr(uint64(0)), Description: model.Ptr("lag.sw-bb-25g")},
 		769: {Name: "CPU Interface:  0/15/1", Admin: true, Link: true, Speed: 0, IfType: 1},
 		770: {Name: "lag 1", Admin: true, Link: true, Speed: 40000, IfType: 161, Description: model.Ptr("lag.sw-bb-25g")},
 		771: {Name: "lag 2", Admin: true, Link: false, Speed: 0, IfType: 161},
@@ -893,7 +920,17 @@ func SeedM4300_24X() *State {
 
 	s.SysDescr = "NETGEAR M4300-24X (XSM4324CS) Managed Switch"
 
-	s.SysObjectID = "1.3.6.1.4.1.4526.10.100.24"
+	// REAL MEASURED value: live SNMP GET of sysObjectID against the actual
+	// m4300-24x @10.1.5.13 (firmware 12.0.13.8), captured 2026-08-20. This
+	// replaces a previous unverified placeholder
+	// ("1.3.6.1.4.1.4526.10.100.24", still carried unfixed by the Python
+	// pin's seed_m4300_24x -- see seed.py:2518-2521's own "sysObjectID has
+	// no known real value ... this is a placeholder" comment) now that a
+	// live capture exists. Not added to snmp.SysObjectIDModels: that map is
+	// reserved for OIDs actually proven to identify a model (see its own
+	// doc comment); this switch's sysDescr already contains "M4300-24X"
+	// and detects fine via DetectModelFromSysDescr.
+	s.SysObjectID = "1.3.6.1.4.1.4526.100.1.34"
 
 	// Real fixed Q-BRIDGE PortList width, measured LIVE (read-only) on the
 	// M4300 @10.1.5.13: dot1qVlanStaticEgressPorts is 131 bytes wide.

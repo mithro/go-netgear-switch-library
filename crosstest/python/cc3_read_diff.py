@@ -86,22 +86,86 @@ from typing import Any, Callable
 # "[] == []" pass this driver's non-vacuity guard exists to catch.
 _NEVER_EMPTY_OPS = frozenset({"get_ports", "get_vlans"})
 
+# (model_key, backend) pairs whose get_stats `rx_packets`/`tx_packets`
+# fields are EXCLUDED from the equality check, for EVERY port row -- gate-2
+# hardware verification finding (2026-08-20).
+#
+# Root cause: Go's fake (virtual/seed.go's SeedM4300_24X) was fixed during
+# gate-2 to serve real captured RxUcast/TxUcast (unicast packet counters)
+# for every m4300-24x port. The data was not invented: it came from the
+# SAME already-committed virtual/testdata/captures/m4300-24x.json this
+# seed's rx_bytes/tx_bytes/rx_errors/tx_errors already transcribe -- that
+# capture's own "stats" section already carried rx_packets/tx_packets for
+# every port, simply never wired into the seed before. Real hardware
+# always answers these counters (gate-2 live-verified, port 1:
+# rx_packets~=20455434750, tx_packets~=18675057818 -- a larger, later
+# snapshot than the committed capture's, exactly what a live incrementing
+# counter looks like weeks on), matching every other read op this model
+# already served real, non-nil data for (PoE, LLDP, etc). The pinned
+# Python reference fake's own seed_m4300_24x is READ-ONLY from this repo
+# and carries the IDENTICAL omission Go's fake is now fixed away from, so
+# it still answers None (SNMP/HTTP) or 0 (CLI, where the parser's own
+# honest-zero-vs-absent convention differs) for rx_packets/tx_packets on
+# every port and every backend -- a DOCUMENTED
+# Go-fake-ahead-of-Python-fake gap, not a Go regression.
+#
+# EVERY OTHER FIELD of every row (port, rx_bytes, tx_bytes, rx_errors,
+# tx_errors) stays fully compared -- a regression there still fails
+# normally. Self-verifying: process_triple checks (before stripping)
+# whether the whole table already matches WITHOUT the exclusion, and fails
+# loudly if so.
+_KNOWN_STATS_PACKETS_DIVERGENCE: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("m4300-24x", "snmp"),
+        ("m4300-24x", "http"),
+        ("m4300-24x", "telnet"),
+    }
+)
+
+
+def _strip_stats_packet_fields(rows: Any) -> Any:
+    """Drop `rx_packets`/`tx_packets` from every row in `rows` (a
+    normalized get_stats list of dicts) -- see
+    _KNOWN_STATS_PACKETS_DIVERGENCE's own doc comment. Unlike the LLDP
+    exclusions above, this applies to EVERY row unconditionally (no
+    per-port allowlist): the divergence affects every port on an affected
+    (model_key, backend) pair, not a handful of specific ones."""
+    if not isinstance(rows, list):
+        return rows
+    out = []
+    for row in rows:
+        if isinstance(row, dict):
+            row = {k: v for k, v in row.items() if k not in ("rx_packets", "tx_packets")}
+        out.append(row)
+    return out
+
+
 # (model_key, backend) -> the exact set of LLDP `local_port` rows whose
-# `remote_port_id` is EXCLUDED from the get_lldp equality check -- controller
-# triage decision on the CC3 delivery report's finding #1 (2026-08-18). Root
-# cause (unchanged from that report, re-verified against a live
-# GoFakeProvider instance): these specific neighbours advertise a raw,
-# non-ASCII/binary MAC-address-subtype LLDP Port ID (e.g. the 6 bytes
-# 88:A2:9E:80:87:01), and the two fakes' HTTP text layers round-trip that raw
-# byte string differently -- Go's virtual/web_gsm7252ps.go xeCell writes the
-# Go byte-string verbatim onto the wire, while the pinned Python fake's
-# LldpSim.port_id is stored latin-1-decoded and re-encoded UTF-8 on serve
-# (faces/http.py Handler._send: `text.encode()`); httpx's unforced "utf-8"
-# guess then decodes the two wire encodings to different strings. Neither
-# fake's own behaviour is provably what real hardware sends for a binary
-# Port ID (a real device might hex-format it, the way BOTH fakes already do
-# for remote_chassis_id) -- this is flagged pending a hardware LLDP Port ID
-# capture, not attributed to either fake.
+# `remote_port_id` is EXCLUDED from the get_lldp equality check -- ORIGINALLY
+# a controller triage decision on the CC3 delivery report's finding #1
+# (2026-08-18), RE-TRIAGED during gate-2 hardware verification (2026-08-20)
+# now that real ground truth exists.
+#
+# Root cause, UPDATED: two committed real captures --
+# webui/testdata/http/m4300_lldpRemoteInventory.html (row 1.2.11, PortId
+# "E4:5F:01:8D:F4:FD") and
+# fastpath/testdata/cli/m4300_24x_show_lldp_remote_device_all.txt (port
+# 1/0/9, Port ID "1C:34:DA:42:E8:8D") -- prove real hardware renders a
+# MAC-address-subtype LLDP Port ID as UPPERCASE COLON-HEX, the same as
+# Chassis ID, never as raw bytes. Go's fake (virtual/web_gsm7252ps.go's
+# lldpPortIDText/isMACShapedLLDPID, virtual/cliface_render.go's renderLLDP)
+# was fixed to match during gate-2 and now does this correctly on every
+# backend, including telnet/CLI (not just HTTP -- see the m4300-24x/telnet
+# entry added below, alongside the pre-existing m4300-24x/http one). The
+# PINNED PYTHON REFERENCE FAKE this driver diffs against is READ-ONLY from
+# this repo and has NOT been fixed to match: its LldpSim.port_id for these
+# rows still round-trips as raw, non-ASCII/binary bytes (e.g. the 6 bytes
+# 88:A2:9E:80:87:01, mangled further by an unrelated UTF-8 re-encode on
+# faces/http.py's `Handler._send`). This is therefore now a DOCUMENTED
+# Go-fake-ahead-of-Python-fake fidelity gap, not an ambiguity pending a
+# hardware capture (the prior comment here, before that capture existed)
+# -- Go's fake is the one grounded in real hardware; the pinned Python
+# fake is the one that has drifted from it.
 #
 # EVERY OTHER FIELD of these same rows (local_port, remote_sys_name,
 # remote_port_desc, remote_chassis_id), and EVERY OTHER ROW of the same
@@ -115,23 +179,87 @@ _NEVER_EMPTY_OPS = frozenset({"get_ports", "get_vlans"})
 # forever.
 _KNOWN_LLDP_PORT_ID_DIVERGENCE: dict[tuple[str, str], frozenset[int]] = {
     ("m4300-24x", "http"): frozenset({1, 6}),
+    ("m4300-24x", "telnet"): frozenset({1, 6}),
+    ("m4300-16x", "telnet"): frozenset({16}),
+}
+
+# (model_key, backend) -> the exact set of LLDP `local_port` rows whose
+# `remote_sys_name` is ALSO excluded from the get_lldp equality check, ON
+# TOP OF remote_port_id (already excluded for the same rows by
+# _KNOWN_LLDP_PORT_ID_DIVERGENCE above) -- gate-2 hardware verification
+# finding (2026-08-20), discovered as a side effect of fixing Go's LLDP
+# Port ID rendering (see that map's own doc comment for the base fix).
+#
+# Root cause: m4300-16x's own seed data for local_port 16's raw MAC-shaped
+# LLDP ids (virtual/seed.go's SeedM4300_16X, and the pinned Python fake's
+# matching seed_m4300_16x) happens to carry the raw byte 0x0A (ASCII LF)
+# as the SECOND octet of its Port ID (00:0A:FA:24:28:1F). BEFORE the gate-2
+# fix, Go's own FASTPATH CLI renderer (cliface_render.go's renderLLDP) also
+# wrote that raw byte sequence verbatim into a fixed-width text table cell
+# -- so the embedded LF split THAT row across two physical lines on the
+# wire on BOTH fakes identically, and both readers derived the same
+# (accidentally-corrupted) remote_sys_name, which is why this divergence
+# was invisible before the fix (this exact row's `equal` check passed on
+# remote_sys_name purely by both sides being equally broken). Go's fake
+# now renders this value as clean printable hex ("00:0A:FA:24:28:1F", no
+# embedded control byte -- see _KNOWN_LLDP_PORT_ID_DIVERGENCE), so its own
+# row never breaks and remote_sys_name reads correctly. The pinned Python
+# reference fake's telnet CLI renderer is unfixed and still emits the raw,
+# LF-embedding bytes, so ITS row still splits and its own reader still
+# recovers no system name (empty/None) for this row. A genuine
+# Go-fake-ahead-of-Python-fake fidelity gap, not a Go regression: the two
+# fakes now genuinely disagree on this field, for a well-understood reason,
+# and Go's answer is the one a real device's clean text rendering would
+# produce.
+#
+# EVERY OTHER FIELD of this row, and every other row of the same table, is
+# UNCHANGED by this exclusion. Self-verifying exactly like
+# _KNOWN_LLDP_PORT_ID_DIVERGENCE: process_triple checks (before stripping)
+# whether remote_sys_name has, in the meantime, come to match WITHOUT this
+# exclusion too, and fails loudly if so.
+_KNOWN_LLDP_SYSNAME_DIVERGENCE: dict[tuple[str, str], frozenset[int]] = {
     ("m4300-16x", "telnet"): frozenset({16}),
 }
 
 
-def _strip_excluded_lldp_port_ids(rows: Any, affected_ports: frozenset[int]) -> Any:
-    """Drop the `remote_port_id` key from every row in `rows` (a normalized
-    get_lldp list of dicts) whose `local_port` is in `affected_ports`. Every
-    other row, and every other field of an affected row, passes through
-    unchanged -- see _KNOWN_LLDP_PORT_ID_DIVERGENCE's own doc comment."""
+def _strip_excluded_lldp_field(rows: Any, affected_ports: frozenset[int], field: str) -> Any:
+    """Drop `field` from every row in `rows` (a normalized get_lldp list of
+    dicts) whose `local_port` is in `affected_ports`. Every other row, and
+    every other field of an affected row, passes through unchanged -- the
+    shared mechanism behind both _KNOWN_LLDP_PORT_ID_DIVERGENCE (field=
+    "remote_port_id") and _KNOWN_LLDP_SYSNAME_DIVERGENCE (field=
+    "remote_sys_name"); see each map's own doc comment."""
     if not isinstance(rows, list):
         return rows
     out = []
     for row in rows:
         if isinstance(row, dict) and row.get("local_port") in affected_ports:
-            row = {k: v for k, v in row.items() if k != "remote_port_id"}
+            row = {k: v for k, v in row.items() if k != field}
         out.append(row)
     return out
+
+
+# Unique sentinel for _row_field: a field that is genuinely absent from a
+# row must never compare equal to one that is present but happens to be
+# None/empty -- see _row_field's own docstring.
+_MISSING = object()
+
+
+def _row_field(rows: Any, local_port: int, field: str) -> Any:
+    """Return `field` off the (normalized get_lldp) row whose local_port
+    matches, or the _MISSING sentinel if no such row or field exists.
+    Powers the PER-FIELD staleness checks in process_triple: comparing one
+    named field of one named row in isolation, rather than the whole
+    table, so one exclusion's staleness check cannot be masked by an
+    unrelated, still-genuinely-excluded field on the SAME row (exactly the
+    m4300-16x/telnet local_port 16 situation, where both
+    _KNOWN_LLDP_PORT_ID_DIVERGENCE and _KNOWN_LLDP_SYSNAME_DIVERGENCE
+    apply to the same row for two independent reasons)."""
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict) and row.get("local_port") == local_port:
+                return row.get(field, _MISSING)
+    return _MISSING
 
 
 def _normalize(value: Any) -> Any:
@@ -393,7 +521,11 @@ def process_triple(go_sw: Any, ref_sw: Any, backend_str: str, op_name: str, mode
     known to always carry data, even if both sides happen to agree on empty
     -- see _NEVER_EMPTY_OPS's own doc comment for why that is never a
     legitimate pass. get_lldp additionally strips remote_port_id from the
-    documented, narrowly-scoped rows in _KNOWN_LLDP_PORT_ID_DIVERGENCE.
+    documented, narrowly-scoped rows in _KNOWN_LLDP_PORT_ID_DIVERGENCE, and
+    remote_sys_name from the (smaller, overlapping) set of rows in
+    _KNOWN_LLDP_SYSNAME_DIVERGENCE. get_stats additionally strips
+    rx_packets/tx_packets (every row) for the (model_key, backend) pairs in
+    _KNOWN_STATS_PACKETS_DIVERGENCE.
     """
     from netgear_switch.registry import Backend
 
@@ -421,23 +553,56 @@ def process_triple(go_sw: Any, ref_sw: Any, backend_str: str, op_name: str, mode
     go_norm = _normalize(go_val)
     py_norm = _normalize(py_val)
 
-    lldp_stale_error: str | None = None
+    lldp_stale_errors: list[str] = []
     if op_name == "get_lldp":
-        affected = _KNOWN_LLDP_PORT_ID_DIVERGENCE.get((model_key, backend_str))
-        if affected:
-            # Self-verifying, both directions: compare WITH remote_port_id
-            # included first (the un-excluded truth) so a table that now
-            # matches in full flags the exclusion as stale, THEN strip it
-            # for the comparison that actually decides `equal` below.
-            if repr(go_norm) == repr(py_norm):
-                lldp_stale_error = (
-                    f"STALE EXCLUSION: ({model_key!r}, {backend_str!r}) is listed in "
-                    "_KNOWN_LLDP_PORT_ID_DIVERGENCE, but remote_port_id now matches "
-                    "WITHOUT the exclusion too -- remove this entry and let get_lldp "
-                    "run the normal, full differential for it"
-                )
-            go_norm = _strip_excluded_lldp_port_ids(go_norm, affected)
-            py_norm = _strip_excluded_lldp_port_ids(py_norm, affected)
+        # Applied independently, each with its OWN per-field, per-row
+        # staleness check (via _row_field) so one exclusion's continued
+        # need can never mask the other one having become stale -- see
+        # _row_field's own docstring for why a whole-table comparison
+        # would not be precise enough once a single row can carry both
+        # exclusions at once (m4300-16x/telnet local_port 16 does).
+        port_id_affected = _KNOWN_LLDP_PORT_ID_DIVERGENCE.get((model_key, backend_str))
+        if port_id_affected:
+            for port in sorted(port_id_affected):
+                if _row_field(go_norm, port, "remote_port_id") == _row_field(py_norm, port, "remote_port_id"):
+                    lldp_stale_errors.append(
+                        f"STALE EXCLUSION: ({model_key!r}, {backend_str!r}) local_port {port} is "
+                        "listed in _KNOWN_LLDP_PORT_ID_DIVERGENCE, but remote_port_id now matches "
+                        "WITHOUT the exclusion too -- remove this row and let get_lldp run the "
+                        "normal, full differential for it"
+                    )
+            go_norm = _strip_excluded_lldp_field(go_norm, port_id_affected, "remote_port_id")
+            py_norm = _strip_excluded_lldp_field(py_norm, port_id_affected, "remote_port_id")
+
+        sysname_affected = _KNOWN_LLDP_SYSNAME_DIVERGENCE.get((model_key, backend_str))
+        if sysname_affected:
+            for port in sorted(sysname_affected):
+                if _row_field(go_norm, port, "remote_sys_name") == _row_field(py_norm, port, "remote_sys_name"):
+                    lldp_stale_errors.append(
+                        f"STALE EXCLUSION: ({model_key!r}, {backend_str!r}) local_port {port} is "
+                        "listed in _KNOWN_LLDP_SYSNAME_DIVERGENCE, but remote_sys_name now matches "
+                        "WITHOUT the exclusion too -- remove this row and let get_lldp run the "
+                        "normal, full differential for it"
+                    )
+            go_norm = _strip_excluded_lldp_field(go_norm, sysname_affected, "remote_sys_name")
+            py_norm = _strip_excluded_lldp_field(py_norm, sysname_affected, "remote_sys_name")
+
+    stats_stale_error: str | None = None
+    if op_name == "get_stats" and (model_key, backend_str) in _KNOWN_STATS_PACKETS_DIVERGENCE:
+        # Self-verifying, same shape as the LLDP checks above: compare the
+        # WHOLE table before stripping (a simple whole-table compare is
+        # precise enough here, unlike get_lldp's per-row check, because no
+        # OTHER exclusion ever overlaps get_stats) so a table that now
+        # matches in full flags this exclusion as stale.
+        if repr(go_norm) == repr(py_norm):
+            stats_stale_error = (
+                f"STALE EXCLUSION: ({model_key!r}, {backend_str!r}) is listed in "
+                "_KNOWN_STATS_PACKETS_DIVERGENCE, but rx_packets/tx_packets now match "
+                "WITHOUT the exclusion too -- remove this entry and let get_stats run "
+                "the normal, full differential for it"
+            )
+        go_norm = _strip_stats_packet_fields(go_norm)
+        py_norm = _strip_stats_packet_fields(py_norm)
 
     # Compared by repr, not `==`: a Sensor.value of float('nan') (this repo's
     # own honest encoding for an inventory-only sensor reading with no
@@ -459,9 +624,12 @@ def process_triple(go_sw: Any, ref_sw: Any, backend_str: str, op_name: str, mode
             f"py_empty={not py_val}) -- every seeded model must have "
             "non-empty data for this op on both fakes"
         )
-    elif lldp_stale_error is not None:
+    elif lldp_stale_errors:
         equal = False
-        error = lldp_stale_error
+        error = "; ".join(lldp_stale_errors)
+    elif stats_stale_error is not None:
+        equal = False
+        error = stats_stale_error
 
     result["equal"] = equal
     result["go"] = go_repr
