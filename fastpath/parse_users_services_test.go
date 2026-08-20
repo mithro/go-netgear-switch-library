@@ -211,6 +211,23 @@ func TestParseServices_SSHLabelColonQuirk(t *testing.T) {
 	}
 }
 
+// TestParseServices_SSHLabelDoubledColonStrippedFully is the regression test
+// for A4: the SSH-label colon strip must remove ALL trailing colons, not
+// just one, mirroring the pin's `k.rstrip(":")` exactly (parse.py:742, pin
+// b26eb1f) -- Python's rstrip strips every trailing match, while Go's
+// strings.TrimSuffix used to strip at most one, leaving a stray ":" that
+// would make the lookup miss and SSH read as disabled. This never happens
+// on any measured real-hardware transcript (only one colon ever appears),
+// but the parser must not depend on that.
+func TestParseServices_SSHLabelDoubledColonStrippedFully(t *testing.T) {
+	sshText := "Administrative Mode:: .......................... Enabled\n"
+	got := parseServices("", "", sshText)
+	ssh := got[3]
+	if ssh.Name != "ssh" || !ssh.Enabled {
+		t.Errorf("parseServices(...)[ssh] = %+v, want enabled=true (ALL trailing colons must strip, not just one)", ssh)
+	}
+}
+
 // TestParseServices_EmptyTextAllDisabledNoPorts covers every input command
 // answering something this parser cannot read at all (e.g. an
 // unprovisioned/unreachable command): every field must degrade to

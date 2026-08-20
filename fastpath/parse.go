@@ -276,13 +276,35 @@ func headerColumns(text string, after string) []string {
 
 // parseInt is the integer value of text with surrounding whitespace
 // trimmed, or ok=false for empty/non-numeric text, mirroring Python _int
-// (parse.py:185-189): never a fabricated zero for absent/unparseable text.
+// (parse.py:193-197: plain `int(text.strip())`, which -- like
+// strconv.Atoi -- accepts a leading "+"/"-"): never a fabricated zero for
+// absent/unparseable text.
 func parseInt(text string) (int, bool) {
 	v, err := strconv.Atoi(strings.TrimSpace(text))
 	if err != nil {
 		return 0, false
 	}
 	return v, true
+}
+
+// digitsOnly reports whether s is non-empty and every rune is an ASCII
+// digit ('0'-'9') -- no sign, no whitespace, no decimal point -- mirroring
+// Python str.isdigit() for the plain-ASCII case that is all FASTPATH CLI
+// output ever contains. Unlike parseInt/strconv.Atoi (which accept a
+// leading "+"/"-", same as Python's own `int(...)` used elsewhere in this
+// file), parse_syslog's host-table row filter and Port-cell parse gate on
+// isdigit() specifically (parse.py:881,887, pin b26eb1f) -- a signed cell
+// must be treated as absent/non-numeric, not parsed as a negative number.
+func digitsOnly(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // physPort is the physical port number encoded in a FASTPATH ifName, or
@@ -1135,8 +1157,12 @@ func parseSyslog(loggingText, hostsText string) (model.SyslogConfig, error) {
 	for _, line := range splitLines(hostsText) {
 		cells := strings.Fields(line)
 		// A data row starts with the integer index; the header and the
-		// dashed rule under it do not, which is what filters them out.
-		if len(cells) < 5 {
+		// dashed rule under it do not, which is what filters them out. Gated
+		// on digitsOnly (not parseInt) to mirror the pin's `not
+		// cells[0].isdigit()` exactly (parse.py:881, pin b26eb1f): a SIGNED
+		// first cell ("-1", "+1") is not a real index and must skip the row,
+		// not parse as a negative one.
+		if len(cells) < 5 || !digitsOnly(cells[0]) {
 			continue
 		}
 		index, ok := parseInt(cells[0])
@@ -1144,7 +1170,13 @@ func parseSyslog(loggingText, hostsText string) (model.SyslogConfig, error) {
 			continue
 		}
 		host, severityWord, portCellText, statusText := cells[1], cells[2], cells[3], cells[4]
-		port, _ := parseInt(portCellText) // non-numeric -> 0, never fabricated otherwise
+		// digitsOnly-gated (not a bare parseInt fallback) to mirror the
+		// pin's `int(port) if port.isdigit() else 0` exactly (parse.py:887):
+		// a signed Port cell must zero out, not parse as a negative port.
+		var port int
+		if digitsOnly(portCellText) {
+			port, _ = parseInt(portCellText)
+		}
 		severity, err := model.SyslogSeverity(severityWord)
 		if err != nil {
 			return model.SyslogConfig{}, err
@@ -1358,7 +1390,11 @@ func parseServices(httpText, telnetText, sshText string) []model.ServiceStatus {
 	sshRaw := labelledValues(sshText)
 	sshFields := make(map[string]string, len(sshRaw))
 	for k, v := range sshRaw {
-		sshFields[strings.TrimSpace(strings.TrimSuffix(k, ":"))] = v
+		// TrimRight (not TrimSuffix) strips ALL trailing colons, mirroring
+		// the pin's `k.rstrip(":")` exactly (parse.py:742, pin b26eb1f) --
+		// TrimSuffix would strip only ONE, leaving a stray ":" behind for
+		// a (currently unseen but not impossible) doubled-colon label.
+		sshFields[strings.TrimSpace(strings.TrimRight(k, ":"))] = v
 	}
 	return []model.ServiceStatus{
 		{Name: "http", Enabled: enabledText(httpFields["HTTP Mode (Unsecure)"]), Port: parseIntPtr(httpFields["HTTP Port"])},
