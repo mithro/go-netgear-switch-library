@@ -97,14 +97,26 @@ type BackendReader interface {
 type BackendBuilder func(sw *Switch) (BackendReader, error)
 
 // backendPreference is the fixed backend RESOLUTION order, mirroring
-// Python's _BACKEND_PREFERENCE exactly: when a caller does not name a
-// backend, the first member of this list the model declares is THE ONE
-// chosen -- nothing else is ever tried. This order is NEVER derived from a
-// model's own Backends slice (model/registry.go's own doc comment says that
-// order carries no meaning) and must not change without a deliberate,
-// separately-flagged decision (D-REC A.2's "preference" parameter mirrors
-// this exactly).
-var backendPreference = []model.Backend{model.BackendSNMP, model.BackendNSDP, model.BackendHTTP, model.BackendSSH}
+// Python's _BACKEND_PREFERENCE exactly (sync_api.py:54-61, pin b26eb1f):
+// when a caller does not name a backend, the first member of this list the
+// model declares is THE ONE chosen -- nothing else is ever tried. All three
+// CLI backends are listed last so a CLI-only model still resolves; every
+// currently registered CLI model also has SNMP or NSDP, which therefore
+// wins by default for them (verified: none of the 10 registered models in
+// model/registry.go depend on Telnet/Console's presence here -- each
+// already declares SNMP or NSDP, both of which sort earlier). This order is
+// NEVER derived from a model's own Backends slice (model/registry.go's own
+// doc comment says that order carries no meaning) and must not change
+// without a deliberate, separately-flagged decision (D-REC A.2's
+// "preference" parameter mirrors this exactly).
+var backendPreference = []model.Backend{
+	model.BackendSNMP,
+	model.BackendNSDP,
+	model.BackendHTTP,
+	model.BackendSSH,
+	model.BackendTelnet,
+	model.BackendConsole,
+}
 
 // backendRegistryMu guards backendRegistry so RegisterBackend is safe to
 // call from multiple packages' init() functions -- Go gives no ordering
