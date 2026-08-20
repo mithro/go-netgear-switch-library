@@ -392,7 +392,12 @@ func TestReadVia_CancelledContextFailsFast(t *testing.T) {
 
 func TestReadVia_NoApplicableBackendRaisesFreshError(t *testing.T) {
 	clearBackendRegistry(t)
-	m := fakeModel("fake", model.BackendConsole) // not in backendPreference at all
+	// backendPreference (dispatch.go) now lists all six model.Backend values
+	// (A1: Telnet and Console were added to match Python's
+	// _BACKEND_PREFERENCE, sync_api.py:54-61), so a made-up backend value
+	// outside that enum is the only way left to exercise "the model declares
+	// something backendPreference doesn't list at all".
+	m := fakeModel("fake", model.Backend("carrier-pigeon")) // not in backendPreference at all
 	sw, err := New(m, "10.0.0.1")
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -623,6 +628,44 @@ func TestResolveBackend_DeterministicPerModel(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("%s: ResolveBackend() = %v, want %v", tc.modelKey, got, tc.want)
 		}
+	}
+}
+
+// TestResolveBackend_TelnetAndConsoleAreLastPreference is the regression
+// test for A1: dispatch.go's backendPreference used to stop at
+// {SNMP,NSDP,HTTP,SSH}, silently omitting the two CLI-only transports
+// Python's _BACKEND_PREFERENCE lists last (sync_api.py:54-61, pin
+// b26eb1f: SNMP, NSDP, HTTP, SSH, TELNET, CONSOLE). A model whose ONLY
+// declared backend is Telnet, or whose only declared backend is Console,
+// must still resolve on a nil-requested-backend read/write -- proving both
+// entries are really present and in the right (last two) slots, not just
+// mentioned in a comment.
+func TestResolveBackend_TelnetAndConsoleAreLastPreference(t *testing.T) {
+	cases := []struct {
+		name string
+		m    *model.SwitchModel
+		want model.Backend
+	}{
+		{"telnet-only", fakeModel("fake-telnet-only", model.BackendTelnet), model.BackendTelnet},
+		{"console-only", fakeModel("fake-console-only", model.BackendConsole), model.BackendConsole},
+		// A model declaring both must still prefer Telnet (it sorts before
+		// Console in backendPreference), matching Python's tuple order.
+		{"telnet-and-console", fakeModel("fake-both", model.BackendConsole, model.BackendTelnet), model.BackendTelnet},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sw, err := New(tc.m, "10.0.0.1")
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			got, err := sw.ResolveBackend()
+			if err != nil {
+				t.Fatalf("ResolveBackend() error = %v, want nil", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ResolveBackend() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

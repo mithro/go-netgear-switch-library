@@ -472,9 +472,17 @@ func (c *UDPClient) buildAuthWrite(ctx context.Context, tlvs []TLVEntry, passwor
 		if err != nil {
 			return Packet{}, err
 		}
+		// nil (not just empty) distinguishes an ABSENT AUTH_V2_SALT TLV from
+		// one present with a zero-length value: firstTLVValue returns nil
+		// only when no TLV with this tag appears in the response at all
+		// (DecodeTLV always allocates a non-nil, possibly-empty Value for a
+		// TLV that IS present). Mirrors the pin's `salt is None` check
+		// exactly (nsdp_udp.py:135-141, transport/sync/nsdp_udp.py, pin
+		// b26eb1f) -- including naming the host in the error, which Python's
+		// f-string does via self.host.
 		salt := firstTLVValue(*saltResp, TagAuthV2Salt)
-		if len(salt) == 0 {
-			return Packet{}, errNSDP("switch selected NSDP v2 write auth but returned no AUTH_V2_SALT (0x0017)")
+		if salt == nil {
+			return Packet{}, errNSDP("%s advertised v2 auth but returned no AUTH_V2_SALT (0x0017)", c.Host)
 		}
 		token, err := AuthV2Password(password, saltResp.ServerMAC, salt)
 		if err != nil {

@@ -480,7 +480,12 @@ func TestWriteVia_CancelledContextFailsFast(t *testing.T) {
 
 func TestWriteVia_NoApplicableBackendRaisesFreshError(t *testing.T) {
 	clearWriteBackendRegistry(t)
-	m := fakeModel("fake", model.BackendConsole) // not in backendPreference at all
+	// backendPreference (dispatch.go) now lists all six model.Backend values
+	// (A1: Telnet and Console were added to match Python's
+	// _BACKEND_PREFERENCE, sync_api.py:54-61), so a made-up backend value
+	// outside that enum is the only way left to exercise "the model declares
+	// something backendPreference doesn't list at all".
+	m := fakeModel("fake", model.Backend("carrier-pigeon")) // not in backendPreference at all
 	sw := newTestSwitch(t, m)
 
 	err := sw.writeVia(context.Background(), nil, func(w BackendWriter) error {

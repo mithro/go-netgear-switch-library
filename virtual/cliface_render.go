@@ -666,6 +666,15 @@ func (f *CliFace) renderEnvironment() string {
 // present zero, not nil -- a genuine (ported, not invented) CLI-protocol
 // behavior, different from every other backend's "never fabricate a 0"
 // convention.
+//
+// G2C-2 (docs/hardware-findings.md): this renders only 7 lines against the
+// real capture `fastpath/testdata/cli/m4300_24x_show_interface_ethernet_
+// 1_0_1.txt`'s ~80. Verified harmless and deliberate: fastpath/parse.go's
+// parseInterfaceCounters is label-keyed and reads only these same 6 counter
+// labels (model.PortStats has no fields for the rest -- octet-size
+// histograms, STP/GVRP/GMRP/EAPOL counters, per-second rates, etc.); the
+// pinned Python reference's render_interface_counters renders this
+// identical 7-line set, same labels, same order. Not a Go-behind-Python gap.
 func (f *CliFace) renderInterfaceCounters(port int) string {
 	sim := f.state.Ports[port]
 	u64 := func(p *uint64) string {

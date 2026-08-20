@@ -134,6 +134,46 @@ func TestParseSyslog_NonDigitPortDefaultsToZero(t *testing.T) {
 	}
 }
 
+// TestParseSyslog_SignedIndexCellRowSkipped is the regression test for A5:
+// a SIGNED Index cell ("-1") must be treated as non-numeric and skip the
+// row entirely, mirroring the pin's `not cells[0].isdigit()` row filter
+// exactly (parse.py:881, pin b26eb1f) -- Python's isdigit() rejects a sign,
+// unlike Go's strconv.Atoi/parseInt, which would otherwise happily parse
+// "-1" as a real (negative) index.
+func TestParseSyslog_SignedIndexCellRowSkipped(t *testing.T) {
+	hosts := "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----\n" +
+		"-1    10.1.5.1                 info       514    Active    udp\n" +
+		"1     10.1.5.9                 info       514    Active    udp"
+	cfg, err := parseSyslog(syslogLoggingText, hosts)
+	if err != nil {
+		t.Fatalf("parseSyslog: %v", err)
+	}
+	if len(cfg.Servers) != 1 || cfg.Servers[0].Host != "10.1.5.9" {
+		t.Errorf("Servers = %+v, want ONLY the well-formed row (10.1.5.9); the -1 row must be skipped, not parsed as index -1", cfg.Servers)
+	}
+}
+
+// TestParseSyslog_SignedPortCellDefaultsToZero is A5's sibling for the Port
+// cell: a SIGNED Port ("-514") must degrade to 0, mirroring the pin's
+// `int(port) if port.isdigit() else 0` exactly (parse.py:887, pin
+// b26eb1f) -- isdigit() rejects the sign, so a signed port is treated the
+// same as any other non-numeric Port cell (see
+// TestParseSyslog_NonDigitPortDefaultsToZero above), never parsed as a
+// negative port number.
+func TestParseSyslog_SignedPortCellDefaultsToZero(t *testing.T) {
+	hosts := "Index   IP Address/Hostname     Severity    Port   Status  Mode  Auth  Cert#\n" +
+		"----- ------------------------ ---------- ------ --------- ----- ----- -----\n" +
+		"1     10.1.5.1                 info       -514   Active    udp"
+	cfg, err := parseSyslog(syslogLoggingText, hosts)
+	if err != nil {
+		t.Fatalf("parseSyslog: %v", err)
+	}
+	if len(cfg.Servers) != 1 || cfg.Servers[0].Port != 0 {
+		t.Errorf("Servers = %+v, want one row with Port=0 (signed port must not parse as negative)", cfg.Servers)
+	}
+}
+
 // TestParseSyslog_UnknownSeverityWordRaises proves an unrecognised
 // severity word propagates model.SyslogSeverity's own error rather than
 // being silently swallowed.

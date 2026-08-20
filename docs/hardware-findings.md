@@ -110,6 +110,79 @@ rationale. `make crosslang` is green across all four suites.
   single-threaded (one in-flight NSDP request at a time) against real
   hardware.
 
+## G2C (2026-08-20): fake page-rendering completeness -- verified shared scope boundary, not a gap
+
+Final-confirm-audit flagged two virtual-fake renderers that visibly render
+FEWER fields/lines than a real device's own committed capture, and asked
+whether this is a Go-behind-Python gap or a deliberate, shared scope
+boundary. Both were verified against the pinned Python reference's own
+`virtual` fake; both are the SECOND case -- no fix made, documented here per
+principle 5.
+
+### G2C-1 -- `virtual/web_m4300.go` `RenderM4300PortStatistics`
+
+The real captured fixture `webui/testdata/http/m4300_portstats.html`
+carries 13 per-port data columns under `xid=1_1_*` (packets/errors/
+collisions/link-flap/link-down counters plus four *rate* columns) and a
+DIFFERENT, unrelated pair of `1_2_1`/`1_2_2` cells (a hidden unit-index/
+"Physical" filter row, not per-port data at all). The Go fake instead
+projects exactly 6 fields per port under `xid=1_2_1`/`1_2_2`/`1_3_1..4`
+(`baseinterfaceListing_Interfaces`, `baseport_ifIndex`,
+`basePortStats_TotalFramesRx/Tx`, `basePortStats_TotalErrorFramesRx/Tx`) --
+a real xid-numbering mismatch against the fixture, and roughly 10 fewer
+columns.
+
+This is harmless: `webui/parse_m4300.go`'s `ParseM4300Stats` keys every cell
+by its trailing HTML-comment FIELD NAME (`r["basePortStats_TotalFramesRx"]`
+etc.), never by the numeric `xid`, and consumes only those same 6 field
+names -- `model.PortStats` has no fields for the other ~10 real columns
+(rate/collision/link-flap counters) at all, so there is nowhere for them to
+land even if rendered.
+
+Checked against the pin: `virtual/web_m4300.py`'s `render_port_statistics`
+(pin b26eb1f) emits the IDENTICAL 6 fields under the IDENTICAL non-hardware
+`1_2_1`/`1_2_2`/`1_3_1..4` xid scheme -- byte-for-byte the same field
+selection as the Go port, including its own docstring calling out that this
+page has "no octets" (frames only). This is a deliberate, shared,
+reader-relevant SUBSET both fakes have always rendered, not a Go regression
+introduced by the port. No fix made; a brief in-code comment was added to
+`RenderM4300PortStatistics` recording this citation.
+
+### G2C-2 -- `virtual/cliface_render.go` `renderInterfaceCounters`
+
+The real captured fixture
+`fastpath/testdata/cli/m4300_24x_show_interface_ethernet_1_0_1.txt`
+(`show interface ethernet 1/0/1`) carries ~80 labelled counter lines. The Go
+fake renders exactly 7: the 6 counters `fastpath/parse.go`'s
+`parseInterfaceCounters` actually reads
+(`Total/Unicast Packets Received/Transmitted (Octets)`, `Total Packets
+Received with MAC Errors`, `Total Transmit Errors`) plus a fixed "Time
+Since Counters Last Cleared" line for CLI-shape fidelity. `model.PortStats`
+has exactly 6 counter fields (`RxBytes`/`TxBytes`/`RxPackets`/`TxPackets`/
+`RxErrors`/`TxErrors`) -- there is no field to hold any of the other ~73
+real lines (per-octet-size histograms, multicast/broadcast counts, STP/
+GVRP/GMRP/EAPOL counters, rate-per-second columns, etc.), so rendering them
+would be behaviorally dead data.
+
+Checked against the pin: `virtual/cli_fastpath.py`'s
+`render_interface_counters` (pin b26eb1f) emits the IDENTICAL 7 lines, in
+the same order, with the same labels -- byte-for-byte the same reduced set
+the Go port already matches. Not a Go regression; a shared scope boundary.
+No fix made; a brief in-code comment was added to `renderInterfaceCounters`
+recording this citation.
+
+### Verdict
+
+Both G2C-1 and G2C-2 are deliberate, SHARED, behaviorally-faithful
+fake-rendering scope boundaries: each fake serves exactly the fields its
+own reader keys on, real hardware's extra columns/lines are library-ignored
+(no `model` field exists to receive them), and the Python reference
+implementation's fake has always rendered the identical reduced set. The
+real-hardware captures already committed under `webui/testdata/http/` and
+`fastpath/testdata/cli/` remain available if full byte-fidelity rendering
+is ever wanted for a future slice; nothing here blocks it, and nothing here
+manufactures fields no reader consumes.
+
 ## HW-1 (2026-07-31): gs110emx HTTP get_vlans fails on live firmware
 - **Host/firmware:** gs110emx @ 10.1.5.25, br-net; web login via GAMBIT with a
   gdoc2netcfg-resolved password.
