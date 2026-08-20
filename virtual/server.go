@@ -9,21 +9,19 @@ package virtual
 // VirtualSwitch is a mock switch server: a seeded State plus whichever
 // protocol faces the model's registry entry supports, bound on Start. This
 // package implements the SNMP face (snmpface.go), the NSDP face
-// (nsdpface.go, slice 05), the HTTP face (httpface.go, slice 06), and, as of
-// slice 07 Task 12, real loopback SSH/Telnet CLI faces (sshface.go,
-// telnetface.go) wrapping Task 11's in-process CliFace dispatcher.
+// (nsdpface.go), the HTTP face (httpface.go), and real loopback SSH/Telnet
+// CLI faces (sshface.go, telnetface.go) wrapping CliFace's in-process
+// dispatcher -- all five bound the same way, independently, by Start.
 //
 // Matches the Python reference exactly (D-HTTP-F §6.1): VirtualSwitch.
 // start() independently binds each backend the model supports, so a
 // {NSDP, HTTP} model ends up with BOTH its NSDP face (NsdpPort) and its
 // HTTP face (HTTPPort) live at once. This Go port keeps SnmpPort/NsdpPort/
-// HTTPPort as separate fields (see NsdpPort's own doc comment), so Start's
-// "at least one face bound" check is "does this model have BackendSNMP,
-// BackendNSDP or BackendHTTP" as of this slice; the moment slice 07 lands,
-// Start's body gains the same independent per-backend `if` blocks for SSH/
-// Telnet, and the "no face bindable" branch becomes reachable only for a
-// model with none of the five backends -- see the per-field TODOs below for
-// exactly which slice wires which remaining field.
+// HTTPPort/SSHPort/TelnetPort as separate fields (see NsdpPort's own doc
+// comment), so Start's "at least one face bound" check is "does this model
+// have BackendSNMP, BackendNSDP, BackendHTTP, BackendSSH or BackendTelnet";
+// the "no face bindable" branch is reachable only for a model with none of
+// those five.
 
 import (
 	"context"

@@ -10,10 +10,10 @@ package crosslang
 // concrete fake implementation, so the SAME harness (triples.go's
 // enumerator, opmap.go's op->method map, suite.go's runReadSuite/
 // runSetPortDescriptionRoundTrip) can be driven against a completely
-// different Provider implementation -- this slice's virtual.GoFakeProvider
-// (real Go loopback listeners), and, in a later slice, a PythonFakeProvider
-// that shells out to `ngsw serve` -- without a single change to any of
-// those three files.
+// different Provider implementation -- virtual.GoFakeProvider (real Go
+// loopback listeners) and PythonFakeProvider (python_provider.go, which
+// shells out to `ngsw serve`) both plug in today -- without a single change
+// to any of those three files.
 
 import (
 	"github.com/mithro/go-netgear-switch-library/model"
@@ -23,8 +23,8 @@ import (
 // Provider is virtual.EndpointProvider itself, not a locally-redeclared
 // lookalike: virtual.GoFakeProvider already satisfies it with zero adapter
 // code, and its StartModel(ctx, modelKey) (virtual.Endpoints, error)
-// signature is exactly the shape a future PythonFakeProvider needs to
-// implement to plug into this same suite.
+// signature is exactly the shape PythonFakeProvider (python_provider.go)
+// also implements to plug into this same suite.
 type Provider = virtual.EndpointProvider
 
 // servedBackends returns the backends ep actually serves, mapped to the

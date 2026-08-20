@@ -6,15 +6,21 @@ package nsdp
 var V1Key = []byte("NtgrSmartSwitchRock")
 
 // AuthV2Unsupported is the hint appended to a ResultBadPassword (0x0700)
-// write-rejection error: the v2 salted-token TRANSFORM is now implemented and
-// known-answer-verified (AuthV2Password, below), but the default NSDP Writer
-// still sends a v1 PASSWORD TLV, which a v2-only switch (e.g. GS110EMX fw
-// 1.0.2.8) rejects with 0x0700. Auto-negotiating v2 (read AUTH_V2_ENCPASS to
-// pick the scheme, read AUTH_V2_SALT for salt+MAC, then send the
-// token-FIRST write) is a separate Writer wiring step; until it lands, a
-// caller hitting a v2 switch sees this message.
-const AuthV2Unsupported = "the switch requires NSDP v2 salted write auth; the v2 token " +
-	"transform is implemented (AuthV2Password) but this writer still sends v1 -- v2 write-flow negotiation pending"
+// write-rejection error whose blamed attribute is TagPassword: the switch
+// refused a v1 XOR password. This is NOT a missing-feature message -- v2
+// salted-token auth is fully implemented (AuthV2Password, below) and this
+// package auto-negotiates it by DEFAULT: resolveScheme/buildAuthWrite
+// (client.go) detect v1-vs-v2 via an AUTH_V2_ENCPASS read whenever authScheme
+// is "auto" (UDPClient's default, which backend_nsdp.go never overrides), so
+// an ordinary write against a v2-only switch (e.g. GS110EMX fw 1.0.2.8)
+// already negotiates v2 and never reaches this branch. This message fires
+// ONLY when a caller has explicitly FORCED v1 (WithAuthScheme("v1")) against
+// a switch that only accepts v2 -- so the remediation is actionable: stop
+// forcing v1. Mirrors Python client.py's check_result remediation text
+// exactly (client.py:86-93, pin b26eb1f).
+const AuthV2Unsupported = "this firmware refuses the v1 XOR password and requires the v2 salted " +
+	"challenge-response, which this library implements; let the client auto-detect the scheme " +
+	"(WithAuthScheme(\"auto\")) or force \"v2\" rather than \"v1\""
 
 // EncodePasswordV1 repeating-XORs password's raw bytes against V1Key.
 // XOR is its own inverse, so this single function both encodes an outgoing
