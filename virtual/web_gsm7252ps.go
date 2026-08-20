@@ -485,7 +485,7 @@ func RenderXELLDP(state *State) string {
 		body += xeCell(inst, "1_1_1", xeIface(nb.LocalPort))
 		body += xeCell(inst, "1_1_7", chassis)
 		body += xeCell(inst, "1_1_8", nb.SysName)
-		body += xeCell(inst, "1_1_9", nb.PortID)
+		body += xeCell(inst, "1_1_9", lldpPortIDText(nb.PortID))
 	}
 	return xePage(body)
 }
@@ -496,6 +496,82 @@ func formatChassisHex(chassis string) string {
 		parts = append(parts, fmt.Sprintf("%02X", c))
 	}
 	return strings.Join(parts, ":")
+}
+
+// isMACShapedLLDPID reports whether raw (an LldpSim.Chassis/PortID value)
+// holds a MAC-address-subtype LLDP id as its 6 raw bytes, rather than
+// literal interface-name text -- the shared decision behind every LLDP-id
+// renderer in this package: lldpPortIDText below (uppercase colon-hex, the
+// M4300/GSM72xx XE pages and the FASTPATH CLI) and
+// web_gs728tpp.go's goAheadLLDPIDText (lowercase colon-hex, the GS728TPP
+// GoAhead page -- see that page's own real capture,
+// webui/testdata/http/gs728tpp_lldp.xml, e.g. deviceID
+// "2c:cf:67:bb:49:a1"). Each caller keeps its own hardware-observed hex
+// casing; only the "is this raw MAC bytes or text" predicate is shared.
+//
+// A bare len(raw)==6 check is NOT enough: a genuinely textual
+// interface-name port-id (e.g. "1/xg51", "1/0/48") is common and is often
+// *also* exactly 6 bytes long, so hex-encoding on length alone would
+// mangle it. Only treat it as MAC bytes when those 6 bytes are ALSO not
+// printable-ASCII text.
+//
+// Deliberately the STRICT 0x20-0x7E ASCII range (isPrintableASCIIBytes
+// below), NOT the wider printable-Latin-1 definition snmp/parse.go's
+// formatPortID/isPrintableLatin1 uses (parse.go:840-874) for this exact
+// same ambiguity: that function only reaches its printability check for a
+// value the SNMP transport itself already decided was text (a Go
+// `string`, never `[]byte`) via ITS OWN, stricter isPrintableOctets
+// heuristic (snmp/gosnmp.go:430-440, also 0x20-0x7E) -- a raw MAC's 6
+// bytes only reach formatPortID as already-known-binary []byte there, so
+// formatPortID's own isPrintableLatin1 check never actually has to
+// distinguish a raw MAC from text on its own. This package has no such
+// upstream transport decision to lean on: LldpSim.Chassis/PortID is a
+// bare Go string regardless of which the seed means, so this predicate
+// alone carries the full weight of that decision -- and the wider
+// Latin-1 definition is unsafe for that job (verified against this
+// package's own gs728tpp seed: chassis bytes
+// {0x2c,0xcf,0x67,0xbb,0x49,0xa1} are ALL individually "printable" as
+// Latin-1 code points -- 0xCF/0xBB/0xA1 are accented-letter/symbol
+// characters, not garbage -- so the wide check would wrongly pass a
+// genuine raw MAC through as text). A real MAC's bytes landing entirely
+// within the narrower 0x20-0x7E ASCII range on all 6 bytes is rare
+// (roughly (95/256)^6 =~ 0.25% by chance) rather than merely uncommon,
+// which is what makes this predicate safe to use with no upstream type
+// signal at all.
+func isMACShapedLLDPID(raw string) bool {
+	return len(raw) == 6 && !isPrintableASCIIBytes(raw)
+}
+
+// isPrintableASCIIBytes reports whether every byte of s is in the
+// printable-ASCII range 0x20-0x7E -- mirrors snmp/gosnmp.go's
+// isPrintableOctets (gosnmp.go:430-440) exactly, duplicated here rather
+// than exported/shared across packages since that function is unexported
+// (and package virtual rendering its own LLDP pages has no business
+// reaching into snmp's private transport-normalization internals just to
+// borrow one predicate).
+func isPrintableASCIIBytes(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7E {
+			return false
+		}
+	}
+	return true
+}
+
+// lldpPortIDText renders an lldpRemPortId value (LldpSim.PortID) for the
+// XE pages (RenderXELLDP) and the FASTPATH CLI (CliFace.renderLLDP in
+// cliface_render.go). GROUND TRUTH: two committed real captures --
+// webui/testdata/http/m4300_lldpRemoteInventory.html (row 1.2.11, PortId
+// "E4:5F:01:8D:F4:FD") and
+// fastpath/testdata/cli/m4300_24x_show_lldp_remote_device_all.txt (port
+// 1/0/9, Port ID "1C:34:DA:42:E8:8D") -- show real hardware renders a
+// MAC-address-subtype lldpRemPortId as UPPERCASE COLON-HEX, the same as
+// Chassis ID, not as raw bytes.
+func lldpPortIDText(portID string) string {
+	if isMACShapedLLDPID(portID) {
+		return formatChassisHex(portID)
+	}
+	return portID
 }
 
 func xeStatusTable(title string, rows []xeStatusRow) string {

@@ -227,10 +227,23 @@ func RenderGS728TPPMacs(state *State) string {
 // goAheadLLDPIDText renders an LLDP chassis/port-id for the wcd page. A
 // MAC-address subtype id is stored in the shared LldpSim field as the 6 raw
 // latin-1 bytes; the real GS728TPP web page renders that as lowercase
-// colon-hex. A non-MAC id (a plain interface-name string) is rendered
-// unchanged. Mirrors Python web_gs728tpp._lldp_id_text.
+// colon-hex (webui/testdata/http/gs728tpp_lldp.xml, e.g. deviceID
+// "2c:cf:67:bb:49:a1"). A non-MAC id (a plain interface-name string) is
+// rendered unchanged.
+//
+// Shares its "is this raw MAC bytes or text" decision with
+// web_gsm7252ps.go's isMACShapedLLDPID/lldpPortIDText rather than a bare
+// len(raw)==6 check (what Python web_gs728tpp._lldp_id_text and this
+// function both originally used): a length-6 check alone would also
+// hex-encode a genuinely textual 6-character interface-name id, corrupting
+// it. No such id happens to appear in this model's own captured seed
+// today, but the check is still wrong in general -- see
+// isMACShapedLLDPID's doc comment for the full rationale (grounded in
+// snmp/parse.go's formatPortID, which solves the identical ambiguity for
+// live SNMP-sourced LLDP values). This is a deliberate, hardware-grounded
+// improvement over the Python source it otherwise mirrors.
 func goAheadLLDPIDText(raw string) string {
-	if len(raw) == 6 {
+	if isMACShapedLLDPID(raw) {
 		parts := make([]string, 6)
 		for i, c := range []byte(raw) {
 			parts[i] = fmt.Sprintf("%02x", c)
