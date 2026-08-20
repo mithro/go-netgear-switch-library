@@ -514,6 +514,14 @@ func TestOIDMapSyslogBlock(t *testing.T) {
 	if got := m[fmt.Sprintf("%s.1", vo.SyslogHostStatus)]; got != (OIDEntry{"INTEGER", "1"}) {
 		t.Errorf("syslog host status[1] = %+v, want 1", got)
 	}
+	// Column 2 (<base>.14.1.4.5.1.2.<index>) is a RowStatus-shaped column a
+	// real walk of this table surfaces too -- A7's regression coverage,
+	// mirroring the pin's mock exactly (state.py:906, pin b26eb1f): fixed
+	// "1", present alongside 3/4/5/7 even though nothing in this codebase
+	// reads it back (GetSyslog only walks Addr/Port/Severity/Status).
+	if got := m[fmt.Sprintf("%s.14.1.4.5.1.2.1", vo.Base)]; got != (OIDEntry{"INTEGER", "1"}) {
+		t.Errorf("syslog host row-status[1] = %+v, want INTEGER 1", got)
+	}
 	// Row 3 -- SPARSE: nothing at index 2, and row 3's own fields must not
 	// have shifted onto index 1 (the position-for-index bug this guards).
 	if got := m[fmt.Sprintf("%s.3", vo.SyslogHostAddr)]; got != (OIDEntry{"OCTETSTR", "10.1.5.3"}) {
@@ -522,8 +530,14 @@ func TestOIDMapSyslogBlock(t *testing.T) {
 	if got := m[fmt.Sprintf("%s.3", vo.SyslogHostPort)]; got != (OIDEntry{"Gauge32", "601"}) {
 		t.Errorf("syslog host port[3] = %+v, want 601", got)
 	}
+	if got := m[fmt.Sprintf("%s.14.1.4.5.1.2.3", vo.Base)]; got != (OIDEntry{"INTEGER", "1"}) {
+		t.Errorf("syslog host row-status[3] = %+v, want INTEGER 1", got)
+	}
 	if _, ok := m[fmt.Sprintf("%s.2", vo.SyslogHostAddr)]; ok {
 		t.Errorf("syslog host addr[2] present, want no row at the missing index")
+	}
+	if _, ok := m[fmt.Sprintf("%s.14.1.4.5.1.2.2", vo.Base)]; ok {
+		t.Errorf("syslog host row-status[2] present, want no row at the missing index")
 	}
 }
 

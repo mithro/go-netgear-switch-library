@@ -325,6 +325,17 @@ func (s *State) OIDMap() map[string]OIDEntry {
 		// SPARSE (Index 1 and 3 with nothing at 2, measured on m4300-24x
 		// 10.1.5.13) and the OID instance IS that index.
 		for _, col := range s.Syslog.Collectors {
+			// Column 2 (<base>.14.1.4.5.1.2.<index>) is a RowStatus-shaped
+			// column a real walk of this table surfaces alongside 3/4/5/7 --
+			// mirroring the pin's mock exactly (state.py:906, pin b26eb1f):
+			// a fixed "1" (active), never derived from col, never read by
+			// GetSyslog (snmp/reader.go only walks
+			// SyslogHostAddr/Port/Severity/Status, columns 3/4/5/7) or
+			// written by any writer. No named VendorOids field exists for
+			// it -- like the pin, which has no syslog_host_row_status
+			// constant either -- because nothing but this walk-completeness
+			// projection ever needs it.
+			out[fmt.Sprintf("%s.14.1.4.5.1.2.%d", v.Base, col.Index)] = entry("INTEGER", "1")
 			out[colKey(v.SyslogHostAddr, col.Index)] = entry("OCTETSTR", col.Host)
 			out[colKey(v.SyslogHostPort, col.Index)] = entry("Gauge32", strconv.Itoa(col.Port))
 			out[colKey(v.SyslogHostSeverity, col.Index)] = entry("INTEGER", strconv.Itoa(col.Severity))
