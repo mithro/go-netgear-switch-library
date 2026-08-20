@@ -376,12 +376,18 @@ func TestFacadeIntegration_M4300_24XSnapshotDegradesPoEWhileGetPoEErrors(t *test
 // NSDP backend (backend_nsdp.go), so that premise is now HALF false: gs110emx
 // is genuinely {NSDP, HTTP}-only (no SNMP backend at all -- see
 // model/registry.go), and NSDP now serves ports/stats/vlans/pvids/mgmt-ip for
-// real, while HTTP remains unimplemented until slice 06. This test proves
+// real. The HTTP backend is fully implemented too (webui/backend_http.go),
+// but MACs/LLDP/Sensors/PoE still fail/degrade on THIS model regardless: its
+// own web UI genuinely has no page for any of the four (capabilities.Matrix
+// marks all four Unsupported on HTTP, not just NSDP -- an exhaustive-tag-
+// sweep-confirmed hardware gap on this specific SKU, the same standard
+// NSDP's own Unsupported verdicts here already carry). This test proves
 // BOTH halves of that updated contract against a REAL live gs110emx
 // VirtualSwitch: NSDP-servable reads succeed and Snapshot populates their
-// fields, while HTTP-only reads (MACs/LLDP/Sensors/PoE) still fail/degrade
-// exactly as before -- Snapshot's per-field degrade behavior (D-FAC §2.12)
-// is honest in BOTH directions, not just the "everything fails" one.
+// fields, while the four reads with no page on either backend still
+// fail/degrade exactly as before -- Snapshot's per-field degrade behavior
+// (D-FAC §2.12) is honest in BOTH directions, not just the "everything
+// fails" one.
 // See facade_nsdp_integration_test.go for the full per-field capstone this
 // test deliberately does not re-derive in detail.
 func TestFacadeIntegration_GS110EMXNSDPServesReadsHTTPStillDegrades(t *testing.T) {
@@ -404,8 +410,12 @@ func TestFacadeIntegration_GS110EMXNSDPServesReadsHTTPStillDegrades(t *testing.T
 	// resolve to NSDP (gs110emx's default backend: NSDP+HTTP, NSDP wins) and
 	// NSDP itself raises ErrUnsupportedCapability for each -- under
 	// single-backend dispatch (D-REC Topic A) this is a hard stop, never a
-	// fall-through attempt at HTTP (still unregistered in this slice
-	// regardless): an honest ErrUnsupportedCapability naming NSDP.
+	// fall-through attempt at HTTP: an honest ErrUnsupportedCapability naming
+	// NSDP. HTTP is fully implemented and registered, but that fall-through
+	// would not have helped here anyway -- gs110emx's web UI has no page for
+	// any of these three ops either (capabilities.Matrix marks all three
+	// Unsupported on HTTP too, the same hardware gap NSDP's own verdict
+	// reflects).
 	if _, err := sw.GetMACs(ctx); !errors.Is(err, netgearswitch.ErrUnsupportedCapability) {
 		t.Errorf("GetMACs() on gs110emx error = %v, want wrapping ErrUnsupportedCapability", err)
 	}
@@ -433,18 +443,21 @@ func TestFacadeIntegration_GS110EMXNSDPServesReadsHTTPStillDegrades(t *testing.T
 	if data.MgmtIP == nil {
 		t.Error("Snapshot().MgmtIP is nil, want populated (NSDP)")
 	}
-	// HTTP-only fields: still degrade to empty until slice 06.
+	// These fields degrade to empty under Snapshot's default (NSDP) dispatch
+	// AND would still degrade even given an explicit HTTP request: gs110emx's
+	// web UI genuinely has no page for any of them (capabilities.Matrix marks
+	// all three Unsupported on HTTP too, not just NSDP).
 	if len(data.Lldp) != 0 {
-		t.Errorf("Snapshot().Lldp = %v, want empty (no Go HTTP backend yet)", data.Lldp)
+		t.Errorf("Snapshot().Lldp = %v, want empty (no HTTP page for get_lldp on gs110emx)", data.Lldp)
 	}
 	if len(data.Macs) != 0 {
 		t.Errorf("Snapshot().Macs = %v, want empty (gs110emx has no MAC table on any backend)", data.Macs)
 	}
 	if len(data.PoE) != 0 {
-		t.Errorf("Snapshot().PoE = %v, want empty (NSDP has no PoE tag; no Go HTTP backend yet)", data.PoE)
+		t.Errorf("Snapshot().PoE = %v, want empty (NSDP has no PoE tag; no HTTP page for get_poe on gs110emx either)", data.PoE)
 	}
 	if len(data.Sensors) != 0 {
-		t.Errorf("Snapshot().Sensors = %v, want empty (no Go HTTP backend yet)", data.Sensors)
+		t.Errorf("Snapshot().Sensors = %v, want empty (no HTTP page for get_sensors on gs110emx)", data.Sensors)
 	}
 	if data.Model != "gs110emx" {
 		t.Errorf("Snapshot().Model = %q, want \"gs110emx\"", data.Model)

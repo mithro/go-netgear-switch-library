@@ -140,7 +140,7 @@ func ForKey(modelKey string, backend model.Backend, opName string) (Capability, 
 
 // Matrix returns every verdict for modelKeys x their backends x operations.
 // modelKeys == nil defaults to every registered model (model.Models()'s
-// canonical order); operations == nil defaults to Operations (all 21). Only
+// canonical order); operations == nil defaults to Operations (all 32). Only
 // backends a model actually has are included (via BackendsFor), so the
 // result never carries a SupportNoBackend row. Mirrors Python's matrix().
 func Matrix(modelKeys []string, operations []Operation) ([]Capability, error) {

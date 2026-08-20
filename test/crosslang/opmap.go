@@ -530,6 +530,93 @@ var usersKnownEmpty = map[string]bool{
 	"gsm7228ps": true,
 }
 
+// expectedUser is one local login account this suite pins EXACTLY, both
+// spellings of its access-mode text plus the SNMPv3 columns only the CLI
+// face ever populates -- see usersExpected's own doc comment for why a
+// single "access" string is not enough here.
+type expectedUser struct {
+	name       string
+	httpAccess string
+	cliAccess  string
+	privileged bool
+	// snmpv3Access/snmpv3Auth/snmpv3Encryption are asserted ONLY over CLI
+	// backends (SSH/Telnet/Console); "" means unmeasured -- rendered/parsed
+	// as a blank cell, i.e. a nil *string on model.SwitchUser.
+	snmpv3Access     string
+	snmpv3Auth       string
+	snmpv3Encryption string
+}
+
+// usersExpected is the exact, complete set of local login accounts every
+// suite1Models entry with a seeded State.Users carries (virtual/seed.go's
+// own `s.Users = []UserSim{...}` literal in SeedGSM7252PS and
+// SeedM4300_24X -- the only two Seed* functions that populate it; the other
+// two suite1Models entries with a get_users-capable backend never do -- see
+// usersKnownEmpty), read directly off that source and cross-checked against
+// a live GoFakeProvider round trip over every get_users-capable backend
+// (HTTP, SSH, Telnet) each model serves.
+//
+// AccessMode is genuinely backend-dependent, not one seeded string:
+// UserSim's own doc comment records that the SAME account reads DIFFERENT
+// text depending on which face answers -- the web UI says "Super User"/
+// "Read Only" on BOTH switches (SeedGSM7252PS/SeedM4300_24X's own
+// `HTTPAccessMode` literals agree), where the CLI's wording splits by
+// firmware family: SeedGSM7252PS's own `CLIAccessMode` literals are
+// "Read/Write"/"Read Only", SeedM4300_24X's are "Privilege-15"/
+// "Privilege-1". httpAccess/cliAccess below carry BOTH seeded spellings;
+// checkGetUsers picks the one the backend under test actually reads
+// (webui's ParseXUIUsers for HTTP, fastpath's parseUsers -- reading this
+// fake's own renderUsers -- for SSH/Telnet).
+//
+// privileged is hardcoded here rather than recomputed via
+// model.PrivilegedAccess, so this check cannot pass merely because the
+// production normalisation table agrees with itself: both switches' admin
+// accounts are privileged and both guest accounts are not, under every
+// vocabulary measured (model.PrivilegedAccessModes/UnprivilegedAccessModes).
+//
+// snmpv3Access/snmpv3Auth/snmpv3Encryption are set only where UserSim's own
+// literal sets them: SeedM4300_24X's admin row ("Read Only"/"MD5"/"None")
+// is the ONE measured SNMPv3 row anywhere in the pinned Python source
+// (parse_users' own docstring transcript, protocols/cli/parse.py:779-782,
+// pin b26eb1f) -- every other row's SNMPv3 columns stay "" (unmeasured).
+// They are asserted ONLY over CLI backends: webui's ParseXUIUsers never
+// populates SwitchUser.SNMPv3* at all (userManagement.html carries no such
+// columns), so those three fields are always nil over HTTP regardless of
+// what the CLI-side seed carries.
+var usersExpected = map[string][]expectedUser{
+	"gsm7252ps": {
+		{name: "admin", httpAccess: "Super User", cliAccess: "Read/Write", privileged: true},
+		{name: "guest", httpAccess: "Read Only", cliAccess: "Read Only", privileged: false},
+	},
+	"m4300-24x": {
+		{
+			name: "admin", httpAccess: "Super User", cliAccess: "Privilege-15", privileged: true,
+			snmpv3Access: "Read Only", snmpv3Auth: "MD5", snmpv3Encryption: "None",
+		},
+		{name: "guest", httpAccess: "Read Only", cliAccess: "Privilege-1", privileged: false},
+	},
+}
+
+// userRowKey canonicalises one user row (either an expectedUser's seeded
+// values or a live model.SwitchUser) into a single sortable/comparable
+// string, so checkGetUsers can compare the two sets order-independently
+// with slices.Equal, the same way macExpected/vlanIDsExpected do for their
+// own multi-field or unordered results. "?" separates fields (never legal
+// in any access-mode/name text seen so far) and privileged/each SNMPv3
+// column is rendered as an explicit "true"/"false"/"nil" or "" token rather
+// than folded into a plain bool/blank, so a nil *bool or nil *string on the
+// live side can never silently collide with a seeded "false"/"" value.
+func userRowKey(name, access string, privileged, hasPrivileged bool, snmpAccess, snmpAuth, snmpEncryption string) string {
+	privStr := "nil"
+	if hasPrivileged {
+		privStr = "false"
+		if privileged {
+			privStr = "true"
+		}
+	}
+	return strings.Join([]string{name, access, privStr, snmpAccess, snmpAuth, snmpEncryption}, "?")
+}
+
 func checkGetUsers(ctx context.Context, t *testing.T, sw *netgearswitch.Switch, backend model.Backend, m *model.SwitchModel) {
 	t.Helper()
 	users, err := sw.GetUsers(ctx, netgearswitch.WithReadBackend(backend))
@@ -540,8 +627,39 @@ func checkGetUsers(ctx context.Context, t *testing.T, sw *netgearswitch.Switch, 
 	if usersKnownEmpty[m.Key] {
 		return // documented gap -- see usersKnownEmpty.
 	}
-	if len(users) == 0 {
-		t.Errorf("GetUsers() over %s returned no users, want > 0", backend)
+	want, ok := usersExpected[m.Key]
+	if !ok {
+		t.Fatalf("usersExpected has no entry for model %q -- opmap.go needs updating for this newly-included model", m.Key)
+		return
+	}
+	httpFace := backend == model.BackendHTTP
+	wantRows := make([]string, len(want))
+	for i, u := range want {
+		access, snmpAccess, snmpAuth, snmpEnc := u.cliAccess, u.snmpv3Access, u.snmpv3Auth, u.snmpv3Encryption
+		if httpFace {
+			access, snmpAccess, snmpAuth, snmpEnc = u.httpAccess, "", "", ""
+		}
+		wantRows[i] = userRowKey(u.name, access, u.privileged, true, snmpAccess, snmpAuth, snmpEnc)
+	}
+	gotRows := make([]string, len(users))
+	for i, uu := range users {
+		privileged, hasPrivileged := false, false
+		if uu.Privileged != nil {
+			privileged, hasPrivileged = *uu.Privileged, true
+		}
+		strOrEmpty := func(p *string) string {
+			if p == nil {
+				return ""
+			}
+			return *p
+		}
+		gotRows[i] = userRowKey(uu.Name, uu.AccessMode, privileged, hasPrivileged,
+			strOrEmpty(uu.SNMPv3Access), strOrEmpty(uu.SNMPv3Auth), strOrEmpty(uu.SNMPv3Encryption))
+	}
+	slices.Sort(gotRows)
+	slices.Sort(wantRows)
+	if !slices.Equal(gotRows, wantRows) {
+		t.Errorf("GetUsers() over %s = %v, want %v", backend, gotRows, wantRows)
 	}
 }
 

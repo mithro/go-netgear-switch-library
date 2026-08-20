@@ -248,9 +248,13 @@ func TestFacadeNSDPIntegration_GS110EMXUnsupportedReadsRaise(t *testing.T) {
 	// only backendPreference member); NSDP itself raises
 	// ErrUnsupportedCapability for each (no LLDP/sensor/PoE tags exist).
 	// Under single-backend dispatch (D-REC Topic A) that is the end of it --
-	// HTTP (no Go backend yet in this slice regardless) is never attempted --
-	// still ErrUnsupportedCapability, still naming the model (and NSDP as
-	// the backend that failed).
+	// HTTP IS implemented, but resolveBackend (dispatch.go) never falls
+	// through to it here: these calls pass no explicit backend, so
+	// resolution stops at NSDP, the first (and only) backendPreference
+	// member this model declares -- HTTP is simply never attempted unless
+	// the caller passes WithReadBackend(model.BackendHTTP) explicitly (see
+	// snapshot.go's matching note) -- still ErrUnsupportedCapability, still
+	// naming the model (and NSDP as the backend that failed).
 	if _, err := sw.GetLLDP(ctx); !errors.Is(err, netgearswitch.ErrUnsupportedCapability) {
 		t.Errorf("GetLLDP() error = %v, want wrapping ErrUnsupportedCapability", err)
 	}
@@ -529,8 +533,10 @@ func TestFacadeNSDPIntegration_GS305EPEveryReadNonVacuousVsSeed(t *testing.T) {
 	}
 }
 
-// --- gs305ep: unsupported reads raise (PoE included: NSDP has no PoE tag,
-// HTTP unimplemented in this slice, even though this model HAS PoE ports) --
+// --- gs305ep: unsupported reads raise (PoE included: NSDP has no PoE tag;
+// HTTP IS implemented and DOES serve PoE for this model, but single-backend
+// dispatch never falls through to it without an explicit backend= override
+// -- see resolveBackend, dispatch.go) --
 
 func TestFacadeNSDPIntegration_GS305EPUnsupportedReadsRaise(t *testing.T) {
 	vsw := startVirtualSwitch(t, "gs305ep")
@@ -584,9 +590,12 @@ func TestFacadeNSDPIntegration_GS305EPSnapshotPopulatesNSDPFields(t *testing.T) 
 	if data.MgmtIP == nil {
 		t.Error("Snapshot().MgmtIP is nil, want populated (served by NSDP)")
 	}
-	// HTTP-only surfaces (no Go HTTP backend until slice 06): every one of
-	// these degrades to empty, even though gs305ep DOES have real PoE ports
-	// at the hardware level -- NSDP just can't serve that field.
+	// HTTP-only surfaces: every one of these degrades to empty under
+	// Snapshot's default (NSDP) dispatch, even though gs305ep DOES have real
+	// PoE ports at the hardware level and HTTP genuinely serves this field --
+	// single-backend dispatch never falls through to it here (see
+	// snapshot.go's own note); GetPoE(ctx, WithReadBackend(model.BackendHTTP))
+	// would answer it explicitly.
 	if len(data.Lldp) != 0 {
 		t.Errorf("Snapshot().Lldp = %v, want empty", data.Lldp)
 	}

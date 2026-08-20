@@ -6,9 +6,11 @@ package webui_test
 // mechanism, ported scenario-for-scenario from tests/test_http_xui_writes.py
 // and tests/test_http_vlan_membership.py at pin b26eb1f in
 // python-netgear-switch-library. Those Python tests drive against a live
-// virtual HTTP face (VirtualHttpFace); this Go port has no such face yet
-// (a later slice-06 task), so xuiFakeSession below reproduces the same
-// verify-after-write property directly against real captured fixtures: GET
+// virtual HTTP face (VirtualHttpFace); this Go port has its own equivalent
+// (virtual/httpface.go), but webui deliberately does not import virtual (a
+// leaf-vs-consumer layering this repo keeps one-directional), so
+// xuiFakeSession below instead reproduces the same verify-after-write
+// property directly against real captured fixtures: GET
 // returns the CURRENT stored html for a path, POST records the call and (if
 // honourWrites) mutates the underlying page's own NAME=.../VALUE="..."
 // fields in place -- so a subsequent GET reflects exactly what was written,

@@ -36,9 +36,9 @@
 // # Errors
 //
 // errors.go defines the sentinel errors this library's failures wrap
-// (ErrUnsupportedCapability, ErrProtectedPort, ErrCredential, ErrConfig,
-// ErrUnknownModel, ErrSNMP, ErrNSDP, ErrHTTP and its ErrHTTPAuth/
-// ErrHTTPUnexpectedPage specializations) -- match them with errors.Is --
-// plus WriteVerificationError, the structured before/after mismatch a
-// write's own verify-after-write check returns.
+// (ErrUnsupportedCapability, ErrProtectedPort, ErrKnownUnimplemented,
+// ErrCredential, ErrConfig, ErrUnknownModel, ErrSNMP, ErrNSDP, ErrHTTP and
+// its ErrHTTPAuth/ErrHTTPUnexpectedPage specializations) -- match them with
+// errors.Is -- plus WriteVerificationError, the structured before/after
+// mismatch a write's own verify-after-write check returns.
 package model
