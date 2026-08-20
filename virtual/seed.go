@@ -337,7 +337,18 @@ func SeedGSM7252PS() *State {
 
 	s.SysDescr = "NETGEAR GSM7252PS Managed Switch, firmware 8.0.6.6"
 
-	s.SysObjectID = "1.3.6.1.4.1.4526.10.100.14"
+	// REAL MEASURED value: live SNMP GET of sysObjectID against the actual
+	// gsm7252ps @10.1.5.22 (firmware 10.0.0.53), captured 2026-08-20. This
+	// replaces a previous unverified placeholder
+	// ("1.3.6.1.4.1.4526.10.100.14", still carried unfixed by the Python
+	// pin's seed_gsm7252ps -- see seed.py:1276-1281's own "UNVERIFIED
+	// virtual/test placeholder ... no capture of the real value exists"
+	// comment) now that a live capture exists. Not added to
+	// snmp.SysObjectIDModels: that map is reserved for OIDs actually proven
+	// to identify a model (see its own doc comment); this switch's
+	// sysDescr already contains "GSM7252PS" and detects fine via
+	// DetectModelFromSysDescr.
+	s.SysObjectID = "1.3.6.1.4.1.4526.100.1.10"
 
 	// Real fixed Q-BRIDGE PortList width, measured LIVE (read-only) on this
 	// switch @10.1.5.22: dot1qVlanStaticEgressPorts is 79 bytes wide.
@@ -893,7 +904,17 @@ func SeedM4300_24X() *State {
 
 	s.SysDescr = "NETGEAR M4300-24X (XSM4324CS) Managed Switch"
 
-	s.SysObjectID = "1.3.6.1.4.1.4526.10.100.24"
+	// REAL MEASURED value: live SNMP GET of sysObjectID against the actual
+	// m4300-24x @10.1.5.13 (firmware 12.0.13.8), captured 2026-08-20. This
+	// replaces a previous unverified placeholder
+	// ("1.3.6.1.4.1.4526.10.100.24", still carried unfixed by the Python
+	// pin's seed_m4300_24x -- see seed.py:2518-2521's own "sysObjectID has
+	// no known real value ... this is a placeholder" comment) now that a
+	// live capture exists. Not added to snmp.SysObjectIDModels: that map is
+	// reserved for OIDs actually proven to identify a model (see its own
+	// doc comment); this switch's sysDescr already contains "M4300-24X"
+	// and detects fine via DetectModelFromSysDescr.
+	s.SysObjectID = "1.3.6.1.4.1.4526.100.1.34"
 
 	// Real fixed Q-BRIDGE PortList width, measured LIVE (read-only) on the
 	// M4300 @10.1.5.13: dot1qVlanStaticEgressPorts is 131 bytes wide.
