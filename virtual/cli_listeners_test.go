@@ -12,8 +12,10 @@ package virtual
 
 import (
 	"context"
+	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -521,25 +523,37 @@ func TestSSHFaceStopBeforeStartIsNoOp(t *testing.T) {
 
 // --- 3b. bounded Stop() under a concurrent-connect race (regression) ------
 //
-// TestSSHFaceStopBoundedUnderConcurrentConnectRace and its Telnet analogue
-// below reproduce an intermittent `go test ./...` hang (no -race needed;
-// timing-sensitive, so -race's own slowdown tends to mask it) root-caused
-// to a genuine goroutine dump: `f.wg.Wait()` in Stop blocking forever on a
-// listener/handler goroutine that never returns, because Stop raced the
-// background Serve/acceptLoop goroutine Start spawns and won -- see
-// sshface.go's Stop doc comment (gap 1: the listener itself, closed only
-// via gliderlabs' own trackListener-gated bookkeeping) and
-// telnetface.go's acceptLoop doc comment (the per-connection analogue) for
-// the exact mechanism each fix below closes. Firing MANY concurrent real
-// SSH/Telnet dials at Start's freshly-returned port, with Stop launched
-// concurrently rather than after any of them complete, maximizes the odds
-// of a dial landing in the exact "accepted, not yet registered" window each
-// race depends on -- reliably hitting it well within a handful of cycles
-// pre-fix (see this task's own mutation-verification, not committed: with
-// SSHFace.Stop's direct ln.Close()/conns force-close reverted to the old
-// srv.Close()-only body, cycle 0 already hangs and dumps goroutine 9
-// blocked in net.(*TCPListener).Accept inside gliderlabs'
-// (*Server).Serve).
+// TestSSHFaceStopBoundedUnderConcurrentConnectRace below reproduces an
+// intermittent `go test ./...` hang (no -race needed; timing-sensitive, so
+// -race's own slowdown tends to mask it) root-caused to a genuine goroutine
+// dump: `f.wg.Wait()` in Stop blocking forever on the background Serve
+// goroutine Start spawns, because Stop raced it and won -- see sshface.go's
+// Stop doc comment (gap 1: the listener itself, closed only via gliderlabs'
+// own trackListener-gated bookkeeping) for the exact mechanism the fix
+// closes. Firing MANY concurrent real SSH dials at Start's freshly-returned
+// port, with Stop launched concurrently rather than after any of them
+// complete, maximizes the odds of a dial landing in the exact "accepted,
+// not yet registered" window the race depends on -- reliably hitting it
+// well within a handful of cycles pre-fix (see this task's own
+// mutation-verification, not committed: with SSHFace.Stop's direct
+// ln.Close()/conns force-close reverted to the old srv.Close()-only body,
+// cycle 0 already hangs and dumps goroutine 9 blocked in
+// net.(*TCPListener).Accept inside gliderlabs' (*Server).Serve).
+//
+// TelnetFace's own analogous race (acceptLoop/trackConn, telnetface.go's own
+// doc comment) is NARROWER -- a handful of uninterrupted Go instructions
+// with no intervening syscall to hand scheduling to another goroutine,
+// unlike SSHFace's whole-goroutine-spinup window above -- and
+// TestTelnetFaceStopBoundedUnderConcurrentConnectRace below, despite firing
+// the same concurrent-dial shape (now with a RAW, uncooperative client; see
+// its own doc comment for why a cooperative one cannot even self-heal this
+// particular race), essentially never lands in that window by pure timing
+// in practice (measured over 6000+ attempts, zero failures pre-fix). It is
+// still worth keeping as a broad load/leak smoke test, but the ACTUAL
+// mutation-verified regression coverage for TelnetFace's race is
+// TestTelnetFaceStopAcceptTrackRaceDeterministic further below, which forces
+// the exact interleaving by construction via telnetAcceptTrackHook rather
+// than hoping for it.
 func TestSSHFaceStopBoundedUnderConcurrentConnectRace(t *testing.T) {
 	m, err := model.GetModel("gsm7252ps")
 	if err != nil {
@@ -610,6 +624,31 @@ func TestSSHFaceStopBoundedUnderConcurrentConnectRace(t *testing.T) {
 // and race-free; only the PER-CONNECTION acceptLoop/trackConn race applied,
 // see telnetface.go's acceptLoop doc comment), but the reproduction shape
 // and the bound this proves are identical.
+//
+// Deliberately dials with a RAW, UNCOOPERATIVE net.Conn (connect, then never
+// write and never close it until this cycle's own cleanup below) rather than
+// the real fastpath Telnet client (fastpath.NewTelnetTransport +
+// ShellDriver): a COOPERATIVE client's own Close unblocks the server's stuck
+// login Read on its own, well within this test's bound, even when a
+// connection lands in the race window on pre-fix code -- self-healing the
+// very bug this test exists to catch and so never actually failing against
+// it (measured against pre-fix code with a cooperative dialer: 61 runs,
+// >1200 race-window attempts, zero failures). Stop's bound must hold
+// independent of whether the client ever cooperates -- a real client that
+// hangs is exactly the scenario TestTelnetFaceStopWithoutClientDisconnectingIsStillBounded
+// above already proves for a SINGLE already-established connection; this
+// test proves the same thing for a connection Stop races against mid-accept,
+// which needs an uncooperative client to actually exercise (a cooperative
+// one can rescue Stop even when the race-closing logic under test is
+// broken). Note this raw client alone is NOT sufficient to reliably land
+// the exact accept/track window by pure timing (see the section-level doc
+// comment above -- TestTelnetFaceStopAcceptTrackRaceDeterministic further
+// below is what actually mutation-verifies TelnetFace's fix); it removes
+// the cooperative client's self-healing so THIS test does not pass for the
+// wrong reason, and doubles as a broad concurrent-load/leak smoke test.
+// Every dialed conn is force-closed by this test itself at the end of each
+// cycle (not left to Stop, whose own force-close is exactly what is under
+// test) so the test does not leak.
 func TestTelnetFaceStopBoundedUnderConcurrentConnectRace(t *testing.T) {
 	m, err := model.GetModel("gsm7228ps")
 	if err != nil {
@@ -627,26 +666,31 @@ func TestTelnetFaceStopBoundedUnderConcurrentConnectRace(t *testing.T) {
 		if err != nil {
 			t.Fatalf("cycle %d: Start() error = %v", i, err)
 		}
+		addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 
+		var mu sync.Mutex
+		var rawConns []net.Conn
 		var dialWG sync.WaitGroup
 		for j := 0; j < dialers; j++ {
 			dialWG.Add(1)
 			go func() {
 				defer dialWG.Done()
-				transport, err := fastpath.NewTelnetTransport(fastpath.TelnetConfig{
-					Host: "127.0.0.1", Port: port,
-					Username: "admin", Password: "s3cret",
-					Timeout: 2 * time.Second,
-				})
+				conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 				if err != nil {
-					return // Stop won the race against this dial -- expected.
+					return // Stop (or the listener already closing) won the race -- expected.
 				}
-				driver := fastpath.NewShellDriver(transport, fastpath.ShellDriverConfig{})
-				_ = driver.Setup(context.Background())
-				_ = driver.Close()
+				// Deliberately silent: no write, no close here -- see this
+				// test's own doc comment for why a cooperative client cannot
+				// exercise the race this test targets.
+				mu.Lock()
+				rawConns = append(rawConns, conn)
+				mu.Unlock()
 			}()
 		}
 
+		// Launched concurrently with the dialers above, deliberately not
+		// synchronized against them, to maximize overlap with each one's
+		// own accept/tracking window.
 		done := make(chan error, 1)
 		go func() { done <- face.Stop() }()
 
@@ -661,6 +705,105 @@ func TestTelnetFaceStopBoundedUnderConcurrentConnectRace(t *testing.T) {
 			t.Fatalf("cycle %d: Stop() did not return within 5s (not bounded) -- goroutine dump:\n%s", i, buf[:n])
 		}
 		dialWG.Wait()
+
+		mu.Lock()
+		for _, c := range rawConns {
+			_ = c.Close()
+		}
+		mu.Unlock()
+	}
+}
+
+// TestTelnetFaceStopAcceptTrackRaceDeterministic forces, by construction,
+// the EXACT interleaving TestTelnetFaceStopBoundedUnderConcurrentConnectRace
+// above can only hope to hit by luck (measured: it essentially never does --
+// see that test's own doc comment and telnetAcceptTrackHook's, telnetface.go
+// -- because the accept-then-track transition it targets is a handful of
+// uninterrupted Go instructions with no intervening syscall to hand
+// scheduling to another goroutine, unlike SSHFace's analogous race, which a
+// whole background-goroutine-spinup delay makes reliably hittable by pure
+// timing). Uses telnetAcceptTrackHook (telnetface.go, a TEST-ONLY
+// no-op-by-default seam, same idiom as net/http's own testHookServerServe)
+// to pause acceptLoop's own goroutine, holding a just-accepted connection,
+// strictly BEFORE trackConn runs -- then runs Stop to completion while it
+// stays paused there, and only then releases it. trackConn(conn, true) is
+// thus GUARANTEED to run against an f.conns Stop has already cleared to
+// nil, exactly the race window sshface.go's Stop doc comment and
+// telnetface.go's acceptLoop doc comment describe -- proving the same
+// "Stop bounded regardless of client cooperation" property as the stress
+// test above, but deterministically rather than by chance.
+func TestTelnetFaceStopAcceptTrackRaceDeterministic(t *testing.T) {
+	m, err := model.GetModel("gsm7228ps")
+	if err != nil {
+		t.Fatalf("model.GetModel() error = %v", err)
+	}
+	spec, err := fastpath.CLISpec(m)
+	if err != nil {
+		t.Fatalf("fastpath.CLISpec() error = %v", err)
+	}
+	face := NewTelnetFace(SeedGSM7228PS(), spec, "admin", "s3cret", "127.0.0.1")
+
+	// Assigned BEFORE Start (rather than after, as it might read more
+	// naturally): Start's own `go f.acceptLoop(ln)` statement is a Go
+	// memory-model synchronization point, so a write sequenced before it is
+	// guaranteed visible to acceptLoop's own goroutine without any
+	// additional synchronization -- a write sequenced AFTER Start returns
+	// has no such guarantee (a plain package-level var, not an atomic), and
+	// -race correctly flags that ordering as a data race even though it
+	// happens to work in practice (confirmed: an earlier draft of this test
+	// assigned the hook after Start and -race caught it immediately).
+	hookEntered := make(chan struct{})
+	releaseHook := make(chan struct{})
+	telnetAcceptTrackHook = func() {
+		close(hookEntered)
+		<-releaseHook
+	}
+	defer func() { telnetAcceptTrackHook = nil }()
+
+	port, err := face.Start()
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+
+	// A raw, uncooperative client -- see the sibling stress test's own doc
+	// comment for why a cooperative one (which closes itself) cannot
+	// exercise this race: connect, then never write and never close until
+	// this test's own cleanup below.
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial error = %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	select {
+	case <-hookEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("acceptLoop never reached telnetAcceptTrackHook -- Accept() did not fire")
+	}
+
+	// acceptLoop is now paused inside the hook, holding the just-accepted
+	// (but not yet tracked) connection, strictly before trackConn runs.
+	done := make(chan error, 1)
+	go func() { done <- face.Stop() }()
+
+	// Stop's own critical section (mu.Lock/snapshot/clear/mu.Unlock) is a
+	// handful of instructions; unlike the race itself, this margin does not
+	// need to be precise, only generous enough for it to have definitely
+	// already run -- 200ms is that, on any reasonable machine, without
+	// making this test itself flaky.
+	time.Sleep(200 * time.Millisecond)
+	close(releaseHook)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Stop() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		buf := make([]byte, 4<<20)
+		n := runtime.Stack(buf, true)
+		t.Fatalf("Stop() did not return within 5s after the accept/track race was forced deterministically -- goroutine dump:\n%s", buf[:n])
 	}
 }
 

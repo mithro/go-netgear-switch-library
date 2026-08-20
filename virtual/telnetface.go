@@ -194,6 +194,22 @@ func (t *telnetServerConn) Write(p []byte) (int, error) {
 
 // --- TelnetFace -------------------------------------------------------
 
+// telnetAcceptTrackHook, when non-nil, runs synchronously on acceptLoop's
+// own goroutine immediately after Accept succeeds and before trackConn is
+// called. A TEST-ONLY seam: nil (a complete no-op) in every real Start;
+// only cli_listeners_test.go (same package) ever assigns it, to
+// deterministically land Stop's own critical section inside this exact
+// window for TestTelnetFaceStopAcceptTrackRaceDeterministic -- pure
+// wall-clock racing cannot reliably hit this window (the accept-then-track
+// transition is a handful of uninterrupted Go instructions with no
+// intervening syscall to hand scheduling to another goroutine; measured
+// empirically via TestTelnetFaceStopBoundedUnderConcurrentConnectRace: over
+// 6000 concurrent-dial attempts against the pre-fix code, zero landed in
+// it). Mirrors net/http's own testHookServerServe (net/http/server.go) --
+// the identical idiom, precedented in the standard library for the same
+// reason: a shutdown race too narrow to hit by timing alone.
+var telnetAcceptTrackHook func()
+
 // TelnetFace is a real loopback Telnet server serving the FASTPATH shell
 // over a *State, mirroring SSHFace's shape (bind-on-Start/deterministic-
 // idempotent-Stop) with a hand-rolled accept loop standing in for
@@ -278,6 +294,9 @@ func (f *TelnetFace) acceptLoop(ln net.Listener) {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
+		}
+		if telnetAcceptTrackHook != nil {
+			telnetAcceptTrackHook()
 		}
 		if !f.trackConn(conn, true) {
 			_ = conn.Close()
