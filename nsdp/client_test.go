@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -603,6 +604,105 @@ func TestUDPClient_V2NegotiationDrivesTokenFirstWrite(t *testing.T) {
 	if len(sawWrite.TLVs) < 2 || sawWrite.TLVs[1].Tag != TagPortPVID {
 		t.Fatalf("config TLV (PVID) must follow the token: %+v", sawWrite.TLVs)
 	}
+}
+
+// TestUDPClient_V2WriteAbsentSaltTLVNamesHostInError is the regression test
+// for A3: buildAuthWrite must treat an ABSENT AUTH_V2_SALT TLV (no TLV with
+// that tag at all in the read response) as the "switch lied about
+// supporting v2" error, and name the host in the message -- mirroring the
+// pin's `if salt is None` check and its f"{self.host} advertised v2 auth..."
+// message exactly (transport/sync/nsdp_udp.py:135-141, pin b26eb1f). The Go
+// code used to test `len(salt) == 0`, which also fired on a PRESENT TLV
+// with a zero-length value -- a different case the pin does NOT special-
+// case here (see the sibling present-but-empty test below).
+func TestUDPClient_V2WriteAbsentSaltTLVNamesHostInError(t *testing.T) {
+	serverMAC := []byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc}
+	mustEnc := func(p Packet) []byte {
+		b, err := p.Encode()
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		return b
+	}
+	tr := func(_ context.Context, payload []byte, _ string, _, _ int, _ string) ([]byte, error) {
+		req, err := DecodePacket(payload)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case req.Op == OpReadRequest && len(req.TLVs) > 0 && req.TLVs[0].Tag == TagAuthV2Encpass:
+			r := Packet{Op: OpReadResponse, ServerMAC: serverMAC}
+			r.AddTLV(TagAuthV2Encpass, []byte{0x00, 0x00, 0x00, 0x10}) // v2
+			return mustEnc(r), nil
+		case req.Op == OpReadRequest && len(req.TLVs) > 0 && req.TLVs[0].Tag == TagAuthV2Salt:
+			// No AUTH_V2_SALT TLV in the response at all (unlike the
+			// present-but-empty case below).
+			return mustEnc(Packet{Op: OpReadResponse, ServerMAC: serverMAC}), nil
+		}
+		return nil, fmt.Errorf("unexpected request op=%v tlvs=%+v", req.Op, req.TLVs)
+	}
+	c, err := NewUDPClient("10.9.9.9", WithClientMAC(clientTestMAC), withTransceiver(tr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pvid, _ := PvidTLV(1, 90)
+	_, err = c.Write(context.Background(), []TLVEntry{pvid}, "password")
+	if err == nil {
+		t.Fatal("Write() error = nil, want the absent-salt error")
+	}
+	if !errors.Is(err, model.ErrNSDP) {
+		t.Fatalf("Write() error = %v, want wrapping model.ErrNSDP", err)
+	}
+	wantSubstr(t, err, "10.9.9.9 advertised v2 auth but returned no AUTH_V2_SALT (0x0017)")
+}
+
+// TestUDPClient_V2WriteEmptySaltValueIsNotTreatedAsAbsent is the sibling of
+// the test above: a PRESENT AUTH_V2_SALT TLV with a zero-length value is
+// NOT "None" in the pin (`first_tlv_value` returns b"", not None, for a
+// present-but-empty TLV -- see protocols/nsdp/client.py's first_tlv_value),
+// so buildAuthWrite must not raise the absent-TLV error here. It still ends
+// up failing (AuthV2Password/auth_v2_password both require exactly 4 salt
+// bytes), but via that function's OWN "must be 4 bytes" error, never the
+// host-named absent-TLV message.
+func TestUDPClient_V2WriteEmptySaltValueIsNotTreatedAsAbsent(t *testing.T) {
+	serverMAC := []byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc}
+	mustEnc := func(p Packet) []byte {
+		b, err := p.Encode()
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		return b
+	}
+	tr := func(_ context.Context, payload []byte, _ string, _, _ int, _ string) ([]byte, error) {
+		req, err := DecodePacket(payload)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case req.Op == OpReadRequest && len(req.TLVs) > 0 && req.TLVs[0].Tag == TagAuthV2Encpass:
+			r := Packet{Op: OpReadResponse, ServerMAC: serverMAC}
+			r.AddTLV(TagAuthV2Encpass, []byte{0x00, 0x00, 0x00, 0x10}) // v2
+			return mustEnc(r), nil
+		case req.Op == OpReadRequest && len(req.TLVs) > 0 && req.TLVs[0].Tag == TagAuthV2Salt:
+			r := Packet{Op: OpReadResponse, ServerMAC: serverMAC}
+			r.AddTLV(TagAuthV2Salt, []byte{}) // present, zero-length -- NOT absent
+			return mustEnc(r), nil
+		}
+		return nil, fmt.Errorf("unexpected request op=%v tlvs=%+v", req.Op, req.TLVs)
+	}
+	c, err := NewUDPClient("10.9.9.9", WithClientMAC(clientTestMAC), withTransceiver(tr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pvid, _ := PvidTLV(1, 90)
+	_, err = c.Write(context.Background(), []TLVEntry{pvid}, "password")
+	if err == nil {
+		t.Fatal("Write() error = nil, want AuthV2Password's salt-length error")
+	}
+	if strings.Contains(err.Error(), "advertised v2 auth but returned no AUTH_V2_SALT") {
+		t.Fatalf("Write() error = %q, must NOT be the absent-TLV message for a present-but-empty salt", err.Error())
+	}
+	wantSubstr(t, err, "NSDP v2 salt must be 4 bytes, got 0")
 }
 
 func TestCheckResult_AllBranches(t *testing.T) {
